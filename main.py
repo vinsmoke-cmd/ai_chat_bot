@@ -29,7 +29,37 @@ app = Flask('')
 
 dialog_history = {}
 MAX_HISTORY_LENGTH = 100
-FIXED_MODEL = 'llama-3.1-8b-instant'
+
+# Автоматический перебор активов Groq (защита от 404 ошибок)
+GROQ_MODELS = [
+    'llama-3.3-70b-versatile',
+    'llama3-8b-8192',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it'
+]
+
+def query_groq(messages, temperature=0.7):
+    if not groq_client:
+        raise Exception("Groq API ключ не найден!")
+    
+    last_err = None
+    for model_name in GROQ_MODELS:
+        try:
+            chat = groq_client.chat.completions.create(
+                messages=messages,
+                model=model_name,
+                temperature=temperature,
+            )
+            answer = chat.choices[0].message.content
+            if '</think>' in answer:
+                answer = answer.split('</think>')[-1].strip()
+            return answer
+        except Exception as e:
+            last_err = e
+            continue
+            
+    raise last_err
 
 SYSTEM_INSTRUCTION = (
     'Ты русскоязычный помощник. Отвечай строго на русском языке. '
@@ -128,22 +158,14 @@ def handle_image_generation(message):
         english_prompt = prompt
         if groq_client:
             try:
-                chat = groq_client.chat.completions.create(
-                    messages=[{
-                        'role': 'system', 
-                        'content': 'You are a professional image prompt engineer. Translate user prompt to detailed English for FLUX AI generator. Add quality, visual style and lighting keywords. Output ONLY the final English prompt.'
-                    }, {
-                        'role': 'user', 
-                        'content': prompt
-                    }],
-                    model=FIXED_MODEL,
-                    temperature=0.7,
-                )
-                translated = chat.choices[0].message.content.strip()
-                if translated:
-                    if '</think>' in translated:
-                        translated = translated.split('</think>')[-1].strip()
-                    english_prompt = translated
+                messages = [{
+                    'role': 'system', 
+                    'content': 'You are a professional image prompt engineer. Translate user prompt to detailed English for FLUX AI generator. Add quality, visual style and lighting keywords. Output ONLY the final English prompt.'
+                }, {
+                    'role': 'user', 
+                    'content': prompt
+                }]
+                english_prompt = query_groq(messages, temperature=0.7)
             except Exception as ge:
                 print(f"Groq translation error: {ge}")
 
@@ -233,15 +255,8 @@ def handle_search(message):
 
         search_text = "\n\n".join(search_snippets)
         prompt = f"Запрос: '{query}'. Данные из интернета:\n\n{search_text}\n\nДай связный и понятный ответ."
-        
-        chat = groq_client.chat.completions.create(
-            messages=[{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}],
-            model=FIXED_MODEL,
-            temperature=0.3,
-        )
-        data = chat.choices[0].message.content
-        if '</think>' in data:
-            data = data.split('</think>')[-1].strip()
+        messages = [{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}]
+        data = query_groq(messages, temperature=0.3)
         bot.reply_to(message, data)
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска: {e}")
@@ -282,14 +297,8 @@ def handle_special_commands(message):
     }
     specific_instruction = f"{SYSTEM_INSTRUCTION} Задача: {instructions.get(command, '')}"
     try:
-        chat = groq_client.chat.completions.create(
-            messages=[{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}],
-            model=FIXED_MODEL,
-            temperature=0.3,
-        )
-        answer = chat.choices[0].message.content
-        if '</think>' in answer:
-            answer = answer.split('</think>')[-1].strip()
+        messages = [{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}]
+        answer = query_groq(messages, temperature=0.3)
         bot.reply_to(message, answer)
     except Exception as e:
         bot.reply_to(message, f'Ошибка: {e}')
@@ -312,14 +321,7 @@ def handle_text_message(message):
         messages_payload.append(msg)
     messages_payload.append({'role': 'user', 'content': user_text})
     try:
-        chat_response = groq_client.chat.completions.create(
-            messages=messages_payload,
-            model=FIXED_MODEL,
-            temperature=0.7,
-        )
-        answer = chat_response.choices[0].message.content
-        if '</think>' in answer: 
-            answer = answer.split('</think>')[-1].strip()
+        answer = query_groq(messages_payload, temperature=0.7)
         history.append({'role': 'user', 'content': user_text})
         history.append({'role': 'assistant', 'content': answer})
         
