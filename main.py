@@ -24,59 +24,42 @@ client = OpenAI(
     api_key=OPENROUTER_KEY,
 ) if OPENROUTER_KEY else None
 
-def get_free_models():
-    """Динамически запрашивает актуальные бесплатные модели у OpenRouter"""
-    try:
-        res = requests.get("https://openrouter.ai/api/v1/models", timeout=5).json()
-        free_models = [m['id'] for m in res.get('data', []) if m['id'].endswith(':free')]
-        if free_models:
-            return free_models
-    except Exception as e:
-        print(f"Ошибка получения списка моделей: {e}")
-    
-    return [
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "google/gemini-2.0-flash-lite-preview-02-05:free",
-        "deepseek/deepseek-r1:free"
-    ]
+SYSTEM_INSTRUCTION = (
+    'Ты обычный парень-собеседник в телеграме. Общайся легко, весело, непринужденно, '
+    'иногда можешь остроумно подшутить или сострить над вопросом. '
+    'Никогда не упоминай, что ты искусственный интеллект, бот, языковая модель, '
+    'и не говори о своих разработках или создателях. '
+    'Отвечай строго на русском языке. '
+    'Запрещено использовать любые символы форматирования текста, такие как звездочки, решетки, подчеркивания и другие знаки разметки.'
+)
 
-def query_ai(messages, temperature=0.7):
+def query_ai(messages, temperature=0.9):
     if not client:
         raise Exception("API ключ OpenRouter не задан!")
     
-    available_models = get_free_models()
-    last_err = None
+    model_name = "google/gemini-2.0-flash-lite-preview-02-05:free"
     
-    for model_name in available_models:
-        try:
-            chat = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=temperature,
-                extra_headers={
-                    "HTTP-Referer": "https://telegram.org",
-                    "X-Title": "TelegramBot",
-                }
-            )
-            answer = chat.choices[0].message.content
-            if answer and '</think>' in answer:
-                answer = answer.split('</think>')[-1].strip()
-            return answer
-        except Exception as e:
-            last_err = e
-            continue
-            
-    raise last_err
+    try:
+        chat = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            extra_headers={
+                "HTTP-Referer": "https://telegram.org",
+                "X-Title": "TelegramBot",
+            }
+        )
+        answer = chat.choices[0].message.content
+        if answer and '</think>' in answer:
+            answer = answer.split('</think>')[-1].strip()
+        return answer
+    except Exception as e:
+        raise Exception(f"Ошибка запроса к нейросети: {e}")
 
 app = Flask('')
 
 dialog_history = {}
 MAX_HISTORY_LENGTH = 100
-
-SYSTEM_INSTRUCTION = (
-    'Ты русскоязычный помощник. Отвечай строго на русском языке. '
-    'Запрещено использовать любые символы форматирования текста, такие как звездочки, решетки, подчеркивания и другие знаки разметки.'
-)
 
 @app.route('/')
 def home():
@@ -270,7 +253,7 @@ def handle_search(message):
         search_text = "\n\n".join(search_snippets)
         prompt = f"Запрос: '{query}'. Данные из интернета:\n\n{search_text}\n\nДай связный и понятный ответ."
         messages = [{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}]
-        data = query_ai(messages, temperature=0.3)
+        data = query_ai(messages, temperature=0.5)
         bot.reply_to(message, data)
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска: {e}")
@@ -314,7 +297,7 @@ def handle_special_commands(message):
     specific_instruction = f"{SYSTEM_INSTRUCTION} Задача: {instructions.get(command, '')}"
     try:
         messages = [{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}]
-        answer = query_ai(messages, temperature=0.3)
+        answer = query_ai(messages, temperature=0.5)
         bot.reply_to(message, answer)
     except Exception as e:
         bot.reply_to(message, f'Ошибка: {e}')
@@ -337,7 +320,7 @@ def handle_text_message(message):
         messages_payload.append(msg)
     messages_payload.append({'role': 'user', 'content': user_text})
     try:
-        answer = query_ai(messages_payload, temperature=0.7)
+        answer = query_ai(messages_payload, temperature=0.9)
         history.append({'role': 'user', 'content': user_text})
         history.append({'role': 'assistant', 'content': answer})
         
