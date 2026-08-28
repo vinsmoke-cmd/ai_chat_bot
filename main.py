@@ -7,12 +7,22 @@ from groq import Groq
 import telebot
 from telebot.types import BotCommand
 from duckduckgo_search import DDGS
+import google.generativeai as genai
+import requests
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
+GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+
+# Инициализация Gemini
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash')
+    gemini_text_model = genai.GenerativeModel('gemini-1.5-flash')
+
 app = Flask('')
 
 dialog_history = {}
@@ -28,30 +38,26 @@ def run_web():
 
 bot.set_my_commands([
     BotCommand("help", "📋 Список всех команд"),
-    BotCommand("code", "💻 Написать или разобрать код"),
-    BotCommand("sum", "📝 Краткая выжимка текста"),
-    BotCommand("tr", "🌐 Быстрый перевод"),
-    BotCommand("fix", "✏️ Исправить ошибки в тексте"),
-    BotCommand("tts", "🔊 Озвучить текст"),
+    BotCommand("image", "🎨 Сгенерировать картинку"),
+    BotCommand("gemini", "✨ Спросить у Gemini"),
     BotCommand("search", "🔎 Поиск в интернете"),
+    BotCommand("code", "💻 Написать или разобрать код"),
+    BotCommand("sum", "📝 Краткая выжимка"),
+    BotCommand("tr", "🌐 Перевод"),
+    BotCommand("fix", "✏️ Исправить ошибки"),
+    BotCommand("tts", "🔊 Озвучить текст"),
     BotCommand("clear", "🧹 Сбросить контекст")
 ])
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Я твой ИИ-помощник на базе OpenAI GPT-OSS 120B.\n\n"
-        "✨ Возможности:\n"
-        "• Помню контекст разговора и свайпы.\n"
-        "• Умею искать актуальную информацию в интернете.\n\n"
-        "📌 Команды:\n"
-        "/search [запрос] — найти информацию в сети\n"
-        "/code [задача] — написать/разобрать код\n"
-        "/sum [текст] — сделать краткую выжимку\n"
-        "/tr [текст] — быстрый перевод\n"
-        "/fix [текст] — исправить ошибки\n"
-        "/tts [текст] — озвучить текст голосом\n"
-        "/clear — сбросить контекст"
+        "Привет! Твой мультимодальный ИИ-помощник.\n\n"
+        "✨ **Возможности:**\n"
+        "• Распознаю отправленные картинки через Gemini.\n"
+        "• Команда /gemini — текстовый запрос к Gemini.\n"
+        "• Команда /image — генерация изображений.\n"
+        "• Поиск в сети и текстовый чат через GPT-OSS 120B."
     )
     bot.reply_to(message, text)
 
@@ -60,13 +66,44 @@ def clear_history(message):
     chat_id = message.chat.id
     if chat_id in dialog_history:
         dialog_history[chat_id] = []
-    bot.reply_to(message, "🧹 Контекст и память диалога сброшены!")
+    bot.reply_to(message, "🧹 Контекст сброшен!")
+
+@bot.message_handler(commands=['image'])
+def handle_image_generation(message):
+    prompt = message.text.replace('/image', '').strip()
+    if not prompt:
+        bot.reply_to(message, "Напиши, что нарисовать. Пример: /image кот в космосе")
+        return
+
+    bot.send_chat_action(message.chat.id, 'upload_photo')
+    try:
+        encoded_prompt = requests.utils.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+        bot.send_photo(message.chat.id, image_url, caption=f"🎨 Запрос: {prompt}")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка генерации: {e}")
+
+@bot.message_handler(commands=['gemini'])
+def handle_gemini(message):
+    if not GEMINI_KEY:
+        bot.reply_to(message, "Ошибка: GEMINI_API_KEY не задан в переменнных окружения!")
+        return
+    query = message.text.replace('/gemini', '').strip()
+    if not query:
+        bot.reply_to(message, "Напиши запрос для Gemini.")
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        response = gemini_text_model.generate_content(query)
+        bot.reply_to(message, response.text)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка Gemini: {e}")
 
 @bot.message_handler(commands=['tts'])
 def handle_tts(message):
     text = message.text.replace('/tts', '').strip()
     if not text:
-        bot.reply_to(message, 'Напиши текст для озвучки. Пример: /tts Привет!')
+        bot.reply_to(message, 'Напиши текст для озвучки.')
         return
     bot.send_chat_action(message.chat.id, 'record_voice')
     try:
@@ -83,66 +120,70 @@ def handle_tts(message):
 def handle_search(message):
     query = message.text.replace('/search', '').strip()
     if not query:
-        bot.reply_to(message, "Напиши, что нужно найти. Пример: /search погода Москва")
+        bot.reply_to(message, "Напиши запрос для поиска.")
         return
-
     bot.send_chat_action(message.chat.id, 'typing')
-    
     try:
         with DDGS() as ddgs:
             results = [r for r in ddgs.text(query, max_results=3)]
-            
         if not results:
-            data = "Ничего не найдено по вашему запросу."
+            data = "Ничего не найдено."
         else:
-            search_text = "\n\n".join([f"Название: {r.get('title')}\nСсылка: {r.get('href')}\nОписание: {r.get('body')}" for r in results])
-            
-            prompt = f"Пользователь ищет: '{query}'. Вот результаты поиска в интернете:\n\n{search_text}\n\nСделай краткий и понятный ответ на основе этих данных без использования символов Markdown, звездочек и решеток."
-            
+            search_text = "\n\n".join([f"{r.get('title')}: {r.get('body')}" for r in results])
+            prompt = f"Запрос: '{query}'. Данные из сети:\n\n{search_text}\n\nДай ответ простым текстом."
             chat = groq_client.chat.completions.create(
-                messages=[
-                    {'role': 'system', 'content': 'Ты помощник, который кратко отвечает на основе результатов поиска. Не используй Markdown, звездочки, решетки и знаки подчеркивания.'},
-                    {'role': 'user', 'content': prompt}
-                ],
+                messages=[{'role': 'system', 'content': 'Отвечай только простым текстом.'}, {'role': 'user', 'content': prompt}],
                 model=FIXED_MODEL,
                 temperature=0.3,
             )
             data = chat.choices[0].message.content
             if '</think>' in data:
                 data = data.split('</think>')[-1].strip()
-
         bot.reply_to(message, data)
     except Exception as e:
-        bot.reply_to(message, f"Ошибка при поиске: {e}")
+        bot.reply_to(message, f"Ошибка поиска: {e}")
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    if not GEMINI_KEY:
+        bot.reply_to(message, "Ошибка: GEMINI_API_KEY не задан!")
+        return
+    bot.send_chat_action(message.chat.id, 'typing')
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        image_part = {
+            'mime_type': 'image/jpeg',
+            'data': downloaded_file
+        }
+        user_caption = message.caption or "Опиши, что изображено на картинке."
+        
+        response = gemini_vision_model.generate_content([user_caption, image_part])
+        bot.reply_to(message, response.text)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка обработки фото через Gemini: {e}")
 
 @bot.message_handler(commands=['code', 'sum', 'tr', 'fix'])
 def handle_special_commands(message):
     if not groq_client:
-        bot.reply_to(message, "Ошибка: API-ключ Groq не найден!")
+        bot.reply_to(message, "Ошибка Groq API ключа!")
         return
-
     command = message.text.split()[0].replace('@' + bot.get_me().username, '')
     user_text = message.text.replace(command, '').strip()
-
     if not user_text:
-        bot.reply_to(message, f"Напиши текст после команды. Пример: {command} текст")
+        bot.reply_to(message, f"Напиши текст после команды {command}")
         return
-
     bot.send_chat_action(message.chat.id, 'typing')
-
     instructions = {
-        '/code': 'Ты опытный программист. Напиши или разбери код четко и с минимальными пояснениями. Не используй Markdown-разметку, звездочки, решетки и знаки подчеркивания.',
-        '/sum': 'Сделай краткую и емкую выжимку из этого текста, выделив главные мысли. Не используй Markdown-разметку, звездочки, решетки и знаки подчеркивания.',
-        '/tr': 'Ты переводчик. Переведи этот текст на русский язык. Выдай только чистый перевод без знаков форматирования.',
-        '/fix': 'Исправь все ошибки в тексте. Верни исправленный вариант без знаков форматирования.'
+        '/code': 'Напиши или разбери код простым текстом.',
+        '/sum': 'Сделай краткую выжимку простым текстом.',
+        '/tr': 'Переведи текст на русский язык.',
+        '/fix': 'Исправь ошибки в тексте.'
     }
-
     try:
         chat = groq_client.chat.completions.create(
-            messages=[
-                {'role': 'system', 'content': instructions.get(command, 'Помоги пользователю.')},
-                {'role': 'user', 'content': user_text}
-            ],
+            messages=[{'role': 'system', 'content': instructions.get(command, '')}, {'role': 'user', 'content': user_text}],
             model=FIXED_MODEL,
             temperature=0.3,
         )
@@ -151,35 +192,25 @@ def handle_special_commands(message):
             answer = answer.split('</think>')[-1].strip()
         bot.reply_to(message, answer)
     except Exception as e:
-        bot.reply_to(message, f'Ошибка при обработке команды: {e}')
+        bot.reply_to(message, f'Ошибка: {e}')
 
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def handle_text_message(message):
     if not groq_client:
-        bot.reply_to(message, "Ошибка: API-ключ Groq не найден!")
+        bot.reply_to(message, "Ошибка Groq API ключа!")
         return
-
     bot.send_chat_action(message.chat.id, 'typing')
-    
     chat_id = message.chat.id
     if chat_id not in dialog_history:
         dialog_history[chat_id] = []
-        
     history = dialog_history[chat_id]
     user_text = message.text
-    
     if message.reply_to_message and message.reply_to_message.text:
-        user_text = f"[Ответ на сообщение: '{message.reply_to_message.text}']. Текст: {user_text}"
-    
-    messages_payload = [
-        {'role': 'system', 'content': 'Ты живой, адекватный и дружелюбный собеседник. Отвечай только простым текстом, никогда не используй Markdown-разметку, звездочки, решетки и знаки подчеркивания.'}
-    ]
-    
+        user_text = f"[Ответ на: '{message.reply_to_message.text}']. Текст: {user_text}"
+    messages_payload = [{'role': 'system', 'content': 'Ты живой собеседник. Отвечай только простым текстом.'}]
     for msg in history:
         messages_payload.append(msg)
-        
     messages_payload.append({'role': 'user', 'content': user_text})
-    
     try:
         chat = groq_client.chat.completions.create(
             messages=messages_payload,
@@ -187,21 +218,17 @@ def handle_text_message(message):
             temperature=0.7,
         )
         answer = chat.choices[0].message.content
-        
         if '</think>' in answer: 
             answer = answer.split('</think>')[-1].strip()
-            
         history.append({'role': 'user', 'content': user_text})
         history.append({'role': 'assistant', 'content': answer})
-        
         if len(history) > MAX_HISTORY_LENGTH * 2:
             dialog_history[chat_id] = history[-(MAX_HISTORY_LENGTH * 2):]
-            
         bot.reply_to(message, answer)
     except Exception as e:
-        bot.reply_to(message, f'Ошибка при обращении к ИИ: {e}')
+        bot.reply_to(message, f'Ошибка: {e}')
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Бот успешно запущен!')
+    print('🤖 Бот с Gemini и GPT-OSS запущен!')
     bot.infinity_polling(none_stop=True)
