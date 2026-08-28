@@ -6,9 +6,10 @@ from flask import Flask
 from groq import Groq
 import telebot
 from telebot.types import BotCommand
-from duckduckgo_search import DDGS
+from googlesearch import search
 import google.generativeai as genai
 import requests
+from bs4 import BeautifulSoup
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
@@ -19,14 +20,12 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Используем актуальную поддерживаемую модель Gemini
     gemini_vision_model = genai.GenerativeModel('gemini-2.5-flash')
     gemini_text_model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = Flask('')
 
 dialog_history = {}
-# Память диалога до 100 сообщений (50 пар вопрос-ответ)
 MAX_HISTORY_LENGTH = 100
 FIXED_MODEL = 'openai/gpt-oss-120b'
 
@@ -59,7 +58,7 @@ def send_welcome(message):
         "• Распознаю отправленные картинки через Gemini.\n"
         "• Команда /gemini — текстовый запрос к Gemini.\n"
         "• Команда /image — генерация изображений.\n"
-        "• Поиск в сети и текстовый чат."
+        "• Стабильный поиск в сети и текстовый чат."
     )
     bot.reply_to(message, text)
 
@@ -129,21 +128,43 @@ def handle_search(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=3)]
-        if not results:
-            data = "Ничего не найдено."
-        else:
-            search_text = "\n\n".join([f"{r.get('title')}: {r.get('body')}" for r in results])
-            prompt = f"Запрос: '{query}'. Данные из сети:\n\n{search_text}\n\nДай ответ простым текстом."
-            chat = groq_client.chat.completions.create(
-                messages=[{'role': 'system', 'content': 'Отвечай только простым текстом.'}, {'role': 'user', 'content': prompt}],
-                model=FIXED_MODEL,
-                temperature=0.3,
-            )
-            data = chat.choices[0].message.content
-            if '</think>' in data:
-                data = data.split('</think>')[-1].strip()
+        # Собираем ссылки из Google поиска
+        urls = list(search(query, num_results=3))
+        if not urls:
+            bot.reply_to(message, "Ничего не найдено в интернете.")
+            return
+        
+        search_snippets = []
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        
+        for url in urls:
+            try:
+                r = requests.get(url, headers=headers, timeout=4)
+                if r.status_code == 200:
+                    soup = BeautifulSoup(r.text, 'html.parser')
+                    for script in soup(["script", "style"]):
+                        script.decompose()
+                    text = soup.get_text(separator=' ', strip=True)
+                    # Берем первые 400 символов страницы в качестве контекста
+                    search_snippets.append(f"Источник ({url}):\n{text[:400]}...")
+            except:
+                continue
+
+        if not search_snippets:
+            bot.reply_to(message, "Ссылки найдены, но не удалось прочитать их содержимое.")
+            return
+
+        search_text = "\n\n".join(search_snippets)
+        prompt = f"Запрос пользователя: '{query}'. Данные из найденных сайтов:\n\n{search_text}\n\nДай связный и понятный ответ на основе этих данных."
+        
+        chat = groq_client.chat.completions.create(
+            messages=[{'role': 'system', 'content': 'Отвечай только простым текстом.'}, {'role': 'user', 'content': prompt}],
+            model=FIXED_MODEL,
+            temperature=0.3,
+        )
+        data = chat.choices[0].message.content
+        if '</think>' in data:
+            data = data.split('</think>')[-1].strip()
         bot.reply_to(message, data)
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска: {e}")
@@ -237,5 +258,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('Бот с Gemini и памятью на 100 сообщений запущен!')
+    print('Бот запущен!')
     bot.infinity_polling(none_stop=True)
