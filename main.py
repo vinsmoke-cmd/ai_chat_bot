@@ -13,33 +13,41 @@ from bs4 import BeautifulSoup
 import random
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-# Можно указывать как OPENROUTER_API_KEY, так и использовать старый GROQ_KEY
 OPENROUTER_KEY = os.getenv('OPENROUTER_API_KEY') or os.getenv('GROQ_KEY')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 HF_TOKEN = os.getenv('HF_TOKEN')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Инициализация OpenAI клиента, настроенного на сервер OpenRouter
 client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_KEY,
 ) if OPENROUTER_KEY else None
 
-# Список бесплатных моделей на OpenRouter (если одна не ответит, подхватит следующая)
-OPENROUTER_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemini-2.0-flash-lite-preview-02-05:free",
-    "deepseek/deepseek-r1:free",
-    "qwen/qwen-2.5-coder-32b-instruct:free"
-]
+def get_free_models():
+    """Динамически запрашивает актуальные бесплатные модели у OpenRouter"""
+    try:
+        res = requests.get("https://openrouter.ai/api/v1/models", timeout=5).json()
+        free_models = [m['id'] for m in res.get('data', []) if m['id'].endswith(':free')]
+        if free_models:
+            return free_models
+    except Exception as e:
+        print(f"Ошибка получения списка моделей: {e}")
+    
+    return [
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "google/gemini-2.0-flash-lite-preview-02-05:free",
+        "deepseek/deepseek-r1:free"
+    ]
 
 def query_ai(messages, temperature=0.7):
     if not client:
         raise Exception("API ключ OpenRouter не задан!")
     
+    available_models = get_free_models()
     last_err = None
-    for model_name in OPENROUTER_MODELS:
+    
+    for model_name in available_models:
         try:
             chat = client.chat.completions.create(
                 model=model_name,
