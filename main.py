@@ -19,14 +19,14 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Исправлено название модели на актуальное для обхода ошибки 404
-    gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash-002')
-    gemini_text_model = genai.GenerativeModel('gemini-1.5-flash-002')
+    gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash')
+    gemini_text_model = genai.GenerativeModel('gemini-1.5-flash')
 
 app = Flask('')
 
 dialog_history = {}
-MAX_HISTORY_LENGTH = 10
+# Увеличили длину памяти до 100 сообщений (50 пар вопрос-ответ)
+MAX_HISTORY_LENGTH = 1000
 FIXED_MODEL = 'openai/gpt-oss-120b'
 
 @app.route('/')
@@ -52,8 +52,9 @@ bot.set_my_commands([
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Твой мультимодальный ИИ-помощник.\n\n"
+        "Привет! Твой мультимодальный ИИ-помощник с огромной памятью.\n\n"
         "Возможности:\n"
+        "• Помнит до 100 сообщений нашего диалога.\n"
         "• Распознаю отправленные картинки через Gemini.\n"
         "• Команда /gemini — текстовый запрос к Gemini.\n"
         "• Команда /image — генерация изображений.\n"
@@ -66,7 +67,7 @@ def clear_history(message):
     chat_id = message.chat.id
     if chat_id in dialog_history:
         dialog_history[chat_id] = []
-    bot.reply_to(message, "Контекст сброшен!")
+    bot.reply_to(message, "Контекст и память диалога полностью сброшены!")
 
 @bot.message_handler(commands=['image'])
 def handle_image_generation(message):
@@ -77,7 +78,6 @@ def handle_image_generation(message):
 
     bot.send_chat_action(message.chat.id, 'upload_photo')
     try:
-        # Улучшенный промпт для конкретных слов вроде машины
         if prompt.lower() in ['машина', 'авто', 'автомобиль']:
             prompt = 'modern sports car driving on a scenic highway, highly detailed, photorealistic'
             
@@ -216,23 +216,25 @@ def handle_text_message(message):
         messages_payload.append(msg)
     messages_payload.append({'role': 'user', 'content': user_text})
     try:
-        chat = groq_client.chat.completions.create(
+        chat_response = groq_client.chat.completions.create(
             messages=messages_payload,
             model=FIXED_MODEL,
             temperature=0.7,
         )
-        answer = chat.choices[0].message.content
+        answer = chat_response.choices[0].message.content
         if '</think>' in answer: 
             answer = answer.split('</think>')[-1].strip()
         history.append({'role': 'user', 'content': user_text})
         history.append({'role': 'assistant', 'content': answer})
+        
         if len(history) > MAX_HISTORY_LENGTH * 2:
             dialog_history[chat_id] = history[-(MAX_HISTORY_LENGTH * 2):]
+            
         bot.reply_to(message, answer)
     except Exception as e:
         bot.reply_to(message, f'Ошибка: {e}')
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('Бот с Gemini и GPT-OSS запущен!')
+    print('Бот с огромной памятью (100 сообщений) запущен!')
     bot.infinity_polling(none_stop=True)
