@@ -6,6 +6,7 @@ from flask import Flask
 from groq import Groq
 import telebot
 from telebot.types import BotCommand
+from duckduckgo_search import DDGS
 
 # Получаем токены из окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -15,7 +16,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 app = Flask('')
 
-# Хранилище истории диалогов и фиксированная модель openai/gpt-oss-120b
+# Хранилище истории диалогов и фиксированная модель
 dialog_history = {}
 MAX_HISTORY_LENGTH = 10
 FIXED_MODEL = 'openai/gpt-oss-120b'
@@ -35,6 +36,7 @@ bot.set_my_commands([
     BotCommand("tr", "🌐 Быстрый перевод"),
     BotCommand("fix", "✏️ Исправить ошибки в тексте"),
     BotCommand("tts", "🔊 Озвучить текст"),
+    BotCommand("search", "🔎 Поиск в интернете"),
     BotCommand("clear", "🧹 Сбросить контекст")
 ])
 
@@ -43,16 +45,16 @@ def send_welcome(message):
     text = (
         "Привет! Я твой ИИ-помощник на базе OpenAI GPT-OSS 120B.\n\n"
         "✨ **Возможности:**\n"
-        "• Помню контекст нашего разговора.\n"
-        "• Понимаю, когда ты отвечаешь на сообщения (свайпы).\n"
-        "• Работаю на модели `openai/gpt-oss-120b`.\n\n"
-        "📌 **Основные команды:**\n"
+        "• Помню контекст разговора и свайпы.\n"
+        "• Умею искать актуальную информацию в интернете.\n\n"
+        "📌 **Команды:**\n"
+        "/search [запрос] — найти информацию в сети\n"
         "/code [задача] — написать/разобрать код\n"
         "/sum [текст] — сделать краткую выжимку\n"
         "/tr [текст] — быстрый перевод\n"
         "/fix [текст] — исправить ошибки\n"
         "/tts [текст] — озвучить текст голосом\n"
-        "/clear — сбросить контекст диалога"
+        "/clear — сбросить контекст"
     )
     bot.reply_to(message, text)
 
@@ -80,10 +82,48 @@ def handle_tts(message):
     except Exception as e:
         bot.reply_to(message, f'Ошибка аудио: {e}')
 
+@bot.message_handler(commands=['search'])
+def handle_search(message):
+    query = message.text.replace('/search', '').strip()
+    if not query:
+        bot.reply_to(message, "Напиши, что нужно найти. Пример: /search погода Москва")
+        return
+
+    bot.send_chat_action(message.chat.id, 'typing')
+    
+    try:
+        # Ищем через DuckDuckGo
+        with DDGS() as ddgs:
+            results = [r for r in ddgs.text(query, max_results=3)]
+            
+        if not results:
+        data = "Ничего не найдено по вашему запросу."
+        else:
+            search_text = "\n\n".join([f"Название: {r.get('title')}\nСсылка: {r.get('href')}\nОписание: {r.get('body')}" for r in results])
+            
+            # Передаем найденное нейросети, чтобы она сформировала красивый ответ
+            prompt = f"Пользователь ищет: '{query}'. Вот результаты поиска в интернете:\n\n{search_text}\n\nСделай краткий и понятный ответ на основе этих данных."
+            
+            chat = groq_client.chat.completions.create(
+                messages=[
+                    {'role': 'system', 'content': 'Ты помощник, который кратко и структурировано отвечает на основе результатов поиска.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                model=FIXED_MODEL,
+                temperature=0.3,
+            )
+            data = chat.choices[0].message.content
+            if '</think>' in data:
+                data = data.split('</think>')[-1].strip()
+
+        bot.reply_to(message, data)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка при поиске: {e}")
+
 @bot.message_handler(commands=['code', 'sum', 'tr', 'fix'])
 def handle_special_commands(message):
     if not groq_client:
-        bot.reply_to(message, "Ошибка: API-ключ Groq не найден в настройках Render!")
+        bot.reply_to(message, "Ошибка: API-ключ Groq не найден!")
         return
 
     command = message.text.split()[0].replace('@' + bot.get_me().username, '')
@@ -121,7 +161,7 @@ def handle_special_commands(message):
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def handle_text_message(message):
     if not groq_client:
-        bot.reply_to(message, "Ошибка: API-ключ Groq не найден в настройках Render!")
+        bot.reply_to(message, "Ошибка: API-ключ Groq не найден!")
         return
 
     bot.send_chat_action(message.chat.id, 'typing')
@@ -133,7 +173,6 @@ def handle_text_message(message):
     history = dialog_history[chat_id]
     user_text = message.text
     
-    # Учитываем свайп (ответ на конкретное сообщение)
     if message.reply_to_message and message.reply_to_message.text:
         user_text = f"[Ответ на сообщение: '{message.reply_to_message.text}']. Текст: {user_text}"
     
@@ -169,5 +208,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Бот с моделью openai/gpt-oss-120b успешно запущен!')
+    print('🤖 Бот с поиском и моделью openai/gpt-oss-120b запущен!')
     bot.infinity_polling(none_stop=True)
