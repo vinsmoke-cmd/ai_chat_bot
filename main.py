@@ -8,7 +8,6 @@ import telebot
 from telebot.types import BotCommand
 from duckduckgo_search import DDGS
 
-# Получаем токены из окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
 
@@ -16,7 +15,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 app = Flask('')
 
-# Хранилище истории диалогов и фиксированная модель
 dialog_history = {}
 MAX_HISTORY_LENGTH = 10
 FIXED_MODEL = 'openai/gpt-oss-120b'
@@ -28,7 +26,6 @@ def home():
 def run_web():
     app.run(host='0.0.0.0', port=8080)
 
-# Настройка меню команд в Telegram
 bot.set_my_commands([
     BotCommand("help", "📋 Список всех команд"),
     BotCommand("code", "💻 Написать или разобрать код"),
@@ -44,10 +41,10 @@ bot.set_my_commands([
 def send_welcome(message):
     text = (
         "Привет! Я твой ИИ-помощник на базе OpenAI GPT-OSS 120B.\n\n"
-        "✨ **Возможности:**\n"
+        "✨ Возможности:\n"
         "• Помню контекст разговора и свайпы.\n"
         "• Умею искать актуальную информацию в интернете.\n\n"
-        "📌 **Команды:**\n"
+        "📌 Команды:\n"
         "/search [запрос] — найти информацию в сети\n"
         "/code [задача] — написать/разобрать код\n"
         "/sum [текст] — сделать краткую выжимку\n"
@@ -100,11 +97,11 @@ def handle_search(message):
         else:
             search_text = "\n\n".join([f"Название: {r.get('title')}\nСсылка: {r.get('href')}\nОписание: {r.get('body')}" for r in results])
             
-            prompt = f"Пользователь ищет: '{query}'. Вот результаты поиска в интернете:\n\n{search_text}\n\nСделай краткий и понятный ответ на основе этих данных."
+            prompt = f"Пользователь ищет: '{query}'. Вот результаты поиска в интернете:\n\n{search_text}\n\nСделай краткий и понятный ответ на основе этих данных без использования символов Markdown, звездочек и решеток."
             
             chat = groq_client.chat.completions.create(
                 messages=[
-                    {'role': 'system', 'content': 'Ты помощник, который кратко и структурировано отвечает на основе результатов поиска.'},
+                    {'role': 'system', 'content': 'Ты помощник, который кратко отвечает на основе результатов поиска. Не используй Markdown, звездочки, решетки и знаки подчеркивания.'},
                     {'role': 'user', 'content': prompt}
                 ],
                 model=FIXED_MODEL,
@@ -134,10 +131,10 @@ def handle_special_commands(message):
     bot.send_chat_action(message.chat.id, 'typing')
 
     instructions = {
-        '/code': 'Ты опытный программист. Напиши или разбери код четко и с минимальными пояснениями.',
-        '/sum': 'Сделай краткую и емкую выжимку из этого текста, выделив главные мысли.',
-        '/tr': 'Ты переводчик. Переведи этот текст на русский язык (или на английский, если он на русском). Выдай только перевод.',
-        '/fix': 'Исправь все орфографические, пунктуационные и стилистические ошибки в тексте. Верни исправленный вариант.'
+        '/code': 'Ты опытный программист. Напиши или разбери код четко и с минимальными пояснениями. Не используй Markdown-разметку, звездочки, решетки и знаки подчеркивания.',
+        '/sum': 'Сделай краткую и емкую выжимку из этого текста, выделив главные мысли. Не используй Markdown-разметку, звездочки, решетки и знаки подчеркивания.',
+        '/tr': 'Ты переводчик. Переведи этот текст на русский язык. Выдай только чистый перевод без знаков форматирования.',
+        '/fix': 'Исправь все ошибки в тексте. Верни исправленный вариант без знаков форматирования.'
     }
 
     try:
@@ -175,7 +172,7 @@ def handle_text_message(message):
         user_text = f"[Ответ на сообщение: '{message.reply_to_message.text}']. Текст: {user_text}"
     
     messages_payload = [
-        {'role': 'system', 'content': 'Ты живой, адекватный и дружелюбный собеседник. Отвечай понятно, емко и по существу.'}
+        {'role': 'system', 'content': 'Ты живой, адекватный и дружелюбный собеседник. Отвечай только простым текстом, никогда не используй Markdown-разметку, звездочки, решетки и знаки подчеркивания.'}
     ]
     
     for msg in history:
@@ -206,5 +203,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Бот с поиском и моделью openai/gpt-oss-120b запущен!')
+    print('🤖 Бот успешно запущен!')
     bot.infinity_polling(none_stop=True)
