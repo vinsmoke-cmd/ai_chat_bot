@@ -1,8 +1,8 @@
-pyTelegramBotAPI
-openai
+pytelegrambotapi
+groq
 google-generativeai
+flask
 requests
 beautifulsoup4
 edge-tts
-flask
 googlesearch-python
