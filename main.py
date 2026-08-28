@@ -4,15 +4,16 @@ from flask import Flask
 from groq import Groq
 import telebot
 
-# Получаем ключи и токены из переменных окружения Render
+# Получаем токены из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-GROQ_KEY = os.getenv('GROQ_KEY')
+# Проверяем оба варианта названия переменной ключа Groq
+GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
 
-# Инициализируем бота и клиент Groq
 bot = telebot.TeleBot(BOT_TOKEN)
-groq_client = Groq(api_key=GROQ_KEY)
 
-# Создаем мини-веб-сервер для Render (чтобы порт был открыт и не было ошибки 409)
+# Инициализируем Groq только если ключ передан
+groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
+
 app = Flask('')
 
 
@@ -25,7 +26,6 @@ def run_web():
   app.run(host='0.0.0.0', port=8080)
 
 
-# Команда /start
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
   bot.reply_to(
@@ -34,14 +34,18 @@ def send_welcome(message):
   )
 
 
-# Обработка текстовых сообщений через Groq AI
 @bot.message_handler(func=lambda message: True)
 def handle_ai_message(message):
-  # Отправляем пользователю статус «печатает...»
   bot.send_chat_action(message.chat.id, 'typing')
 
+  if not groq_client:
+    bot.reply_to(
+        message,
+        'Ошибка: API-ключ Groq не найден в переменных окружения Render!',
+    )
+    return
+
   try:
-    # Запрос к нейросети Groq (используем быструю модель llama-3.3-70b-versatile)
     chat_completion = groq_client.chat.completions.create(
         messages=[{
             'role': 'user',
@@ -55,7 +59,6 @@ def handle_ai_message(message):
     bot.reply_to(message, f'Произошла ошибка при обращении к ИИ: {e}')
 
 
-# Запускаем веб-сервер и бота
 if __name__ == '__main__':
   threading.Thread(target=run_web).start()
   print('🤖 ИИ-бот запущен!')
