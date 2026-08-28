@@ -3,7 +3,7 @@ import threading
 import asyncio
 import edge_tts
 from flask import Flask
-from groq import Groq
+from openai import OpenAI
 import telebot
 from telebot.types import BotCommand
 from googlesearch import search
@@ -13,43 +13,45 @@ from bs4 import BeautifulSoup
 import random
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
+# Можно указывать как OPENROUTER_API_KEY, так и использовать старый GROQ_KEY
+OPENROUTER_KEY = os.getenv('OPENROUTER_API_KEY') or os.getenv('GROQ_KEY')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 HF_TOKEN = os.getenv('HF_TOKEN')
 
 bot = telebot.TeleBot(BOT_TOKEN)
-groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    gemini_vision_model = genai.GenerativeModel('gemini-3.6-flash')
-    gemini_text_model = genai.GenerativeModel('gemini-3.6-flash')
+# Инициализация OpenAI клиента, настроенного на сервер OpenRouter
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_KEY,
+) if OPENROUTER_KEY else None
 
-app = Flask('')
-
-dialog_history = {}
-MAX_HISTORY_LENGTH = 100
-
-# Только актуальные и активные модели Groq
-GROQ_MODELS = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant'
+# Список бесплатных моделей на OpenRouter (если одна не ответит, подхватит следующая)
+OPENROUTER_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "google/gemini-2.0-flash-lite-preview-02-05:free",
+    "deepseek/deepseek-r1:free",
+    "qwen/qwen-2.5-coder-32b-instruct:free"
 ]
 
-def query_groq(messages, temperature=0.7):
-    if not groq_client:
-        raise Exception("Groq API ключ не найден!")
+def query_ai(messages, temperature=0.7):
+    if not client:
+        raise Exception("API ключ OpenRouter не задан!")
     
     last_err = None
-    for model_name in GROQ_MODELS:
+    for model_name in OPENROUTER_MODELS:
         try:
-            chat = groq_client.chat.completions.create(
-                messages=messages,
+            chat = client.chat.completions.create(
                 model=model_name,
+                messages=messages,
                 temperature=temperature,
+                extra_headers={
+                    "HTTP-Referer": "https://telegram.org",
+                    "X-Title": "TelegramBot",
+                }
             )
             answer = chat.choices[0].message.content
-            if '</think>' in answer:
+            if answer and '</think>' in answer:
                 answer = answer.split('</think>')[-1].strip()
             return answer
         except Exception as e:
@@ -57,6 +59,11 @@ def query_groq(messages, temperature=0.7):
             continue
             
     raise last_err
+
+app = Flask('')
+
+dialog_history = {}
+MAX_HISTORY_LENGTH = 100
 
 SYSTEM_INSTRUCTION = (
     'Ты русскоязычный помощник. Отвечай строго на русском языке. '
@@ -153,7 +160,7 @@ def handle_image_generation(message):
     bot.send_chat_action(message.chat.id, 'upload_photo')
     try:
         english_prompt = prompt
-        if groq_client:
+        if client:
             try:
                 messages = [{
                     'role': 'system', 
@@ -162,9 +169,9 @@ def handle_image_generation(message):
                     'role': 'user', 
                     'content': prompt
                 }]
-                english_prompt = query_groq(messages, temperature=0.7)
+                english_prompt = query_ai(messages, temperature=0.7)
             except Exception as ge:
-                print(f"Groq translation error: {ge}")
+                print(f"Translation error: {ge}")
 
         if HF_TOKEN:
             try:
@@ -196,8 +203,10 @@ def handle_gemini(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
+        genai.configure(api_key=GEMINI_KEY)
+        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
         full_query = f"{SYSTEM_INSTRUCTION}\n\nЗапрос пользователя: {query}"
-        response = gemini_text_model.generate_content(full_query)
+        response = gemini_model.generate_content(full_query)
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка Gemini: {e}")
@@ -253,7 +262,7 @@ def handle_search(message):
         search_text = "\n\n".join(search_snippets)
         prompt = f"Запрос: '{query}'. Данные из интернета:\n\n{search_text}\n\nДай связный и понятный ответ."
         messages = [{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}]
-        data = query_groq(messages, temperature=0.3)
+        data = query_ai(messages, temperature=0.3)
         bot.reply_to(message, data)
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска: {e}")
@@ -265,20 +274,22 @@ def handle_photo(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
+        genai.configure(api_key=GEMINI_KEY)
+        gemini_vision = genai.GenerativeModel('gemini-2.5-flash')
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         image_part = {'mime_type': 'image/jpeg', 'data': downloaded_file}
         user_caption = message.caption or "Опиши фото."
         full_prompt = f"{SYSTEM_INSTRUCTION}\n\n{user_caption}"
-        response = gemini_vision_model.generate_content([full_prompt, image_part])
+        response = gemini_vision.generate_content([full_prompt, image_part])
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка при обработке фото: {e}")
 
 @bot.message_handler(commands=['code', 'sum', 'tr', 'fix'])
 def handle_special_commands(message):
-    if not groq_client:
-        bot.reply_to(message, "Ошибка Groq API ключа!")
+    if not client:
+        bot.reply_to(message, "Ошибка OpenRouter API ключа!")
         return
     command = message.text.split()[0].replace('@' + bot.get_me().username, '')
     user_text = message.text.replace(command, '').strip()
@@ -295,15 +306,15 @@ def handle_special_commands(message):
     specific_instruction = f"{SYSTEM_INSTRUCTION} Задача: {instructions.get(command, '')}"
     try:
         messages = [{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}]
-        answer = query_groq(messages, temperature=0.3)
+        answer = query_ai(messages, temperature=0.3)
         bot.reply_to(message, answer)
     except Exception as e:
         bot.reply_to(message, f'Ошибка: {e}')
 
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def handle_text_message(message):
-    if not groq_client:
-        bot.reply_to(message, "Ошибка Groq API ключа!")
+    if not client:
+        bot.reply_to(message, "Ошибка OpenRouter API ключа!")
         return
     bot.send_chat_action(message.chat.id, 'typing')
     chat_id = message.chat.id
@@ -318,7 +329,7 @@ def handle_text_message(message):
         messages_payload.append(msg)
     messages_payload.append({'role': 'user', 'content': user_text})
     try:
-        answer = query_groq(messages_payload, temperature=0.7)
+        answer = query_ai(messages_payload, temperature=0.7)
         history.append({'role': 'user', 'content': user_text})
         history.append({'role': 'assistant', 'content': answer})
         
