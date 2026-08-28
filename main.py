@@ -30,13 +30,10 @@ app = Flask('')
 dialog_history = {}
 MAX_HISTORY_LENGTH = 100
 
-# Автоматический перебор активов Groq (защита от 404 ошибок)
+# Только актуальные и активные модели Groq
 GROQ_MODELS = [
     'llama-3.3-70b-versatile',
-    'llama3-8b-8192',
-    'llama-3.1-8b-instant',
-    'mixtral-8x7b-32768',
-    'gemma2-9b-it'
+    'llama-3.1-8b-instant'
 ]
 
 def query_groq(messages, temperature=0.7):
