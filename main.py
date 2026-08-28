@@ -316,3 +316,4 @@ if __name__ == '__main__':
     threading.Thread(target=run_web).start()
     print('Бот успешно запущен!')
     bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=30)
+        
