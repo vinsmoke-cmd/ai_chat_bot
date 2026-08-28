@@ -3,7 +3,7 @@ import threading
 import asyncio
 import edge_tts
 from flask import Flask
-from openai import OpenAI
+from groq import Groq
 import telebot
 from telebot.types import BotCommand
 from googlesearch import search
@@ -13,53 +13,28 @@ from bs4 import BeautifulSoup
 import random
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-OPENROUTER_KEY = os.getenv('OPENROUTER_API_KEY') or os.getenv('GROQ_KEY')
+GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 HF_TOKEN = os.getenv('HF_TOKEN')
 
 bot = telebot.TeleBot(BOT_TOKEN)
+groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_KEY,
-) if OPENROUTER_KEY else None
-
-SYSTEM_INSTRUCTION = (
-    'Ты обычный парень-собеседник в телеграме. Общайся легко, весело, непринужденно, '
-    'иногда можешь остроумно подшутить или сострить над вопросом. '
-    'Никогда не упоминай, что ты искусственный интеллект, бот, языковая модель, '
-    'и не говори о своих разработках или создателях. '
-    'Отвечай строго на русском языке. '
-    'Запрещено использовать любые символы форматирования текста, такие как звездочки, решетки, подчеркивания и другие знаки разметки.'
-)
-
-def query_ai(messages, temperature=0.9):
-    if not client:
-        raise Exception("API ключ OpenRouter не задан!")
-    
-    model_name = "deepseek/deepseek-r1:free"
-    
-    try:
-        chat = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=temperature,
-            extra_headers={
-                "HTTP-Referer": "https://telegram.org",
-                "X-Title": "TelegramBot",
-            }
-        )
-        answer = chat.choices[0].message.content
-        if answer and '</think>' in answer:
-            answer = answer.split('</think>')[-1].strip()
-        return answer
-    except Exception as e:
-        raise Exception(f"Ошибка запроса к нейросети: {e}")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    gemini_vision_model = genai.GenerativeModel('gemini-3.6-flash')
+    gemini_text_model = genai.GenerativeModel('gemini-3.6-flash')
 
 app = Flask('')
 
 dialog_history = {}
 MAX_HISTORY_LENGTH = 100
+FIXED_MODEL = 'openai/gpt-oss-120b'
+
+SYSTEM_INSTRUCTION = (
+    'Ты русскоязычный помощник. Отвечай строго на русском языке. '
+    'Запрещено использовать любые символы форматирования текста, такие как звездочки, решетки, подчеркивания и другие знаки разметки.'
+)
 
 @app.route('/')
 def home():
@@ -150,35 +125,34 @@ def handle_image_generation(message):
         return
     bot.send_chat_action(message.chat.id, 'upload_photo')
     try:
-        english_prompt = prompt
-        if client:
-            try:
-                messages = [{
+        if groq_client:
+            chat = groq_client.chat.completions.create(
+                messages=[{
                     'role': 'system', 
-                    'content': 'You are a professional image prompt engineer. Translate user prompt to detailed English for FLUX AI generator. Add quality, visual style and lighting keywords. Output ONLY the final English prompt.'
+                    'content': 'Translate the user prompt to detailed English for an AI image generator. Output ONLY the English prompt, nothing else.'
                 }, {
                     'role': 'user', 
                     'content': prompt
-                }]
-                english_prompt = query_ai(messages, temperature=0.7)
-            except Exception as ge:
-                print(f"Translation error: {ge}")
+                }],
+                model=FIXED_MODEL,
+                temperature=0.7,
+            )
+            english_prompt = chat.choices[0].message.content.strip()
+            if '</think>' in english_prompt:
+                english_prompt = english_prompt.split('</think>')[-1].strip()
+        else:
+            english_prompt = prompt
 
         if HF_TOKEN:
-            try:
-                hf_url = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
-                headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-                res = requests.post(hf_url, headers=headers, json={"inputs": english_prompt}, timeout=30)
-                if res.status_code == 200 and len(res.content) > 1000:
-                    bot.send_photo(message.chat.id, res.content, caption=f"Запрос: {prompt}")
-                    return
-            except Exception as hfe:
-                print(f"HF Error: {hfe}")
+            hf_url = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+            headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+            res = requests.post(hf_url, headers=headers, json={"inputs": english_prompt}, timeout=45)
+            if res.status_code == 200:
+                bot.send_photo(message.chat.id, res.content, caption=f"Запрос: {prompt}")
+                return
 
-        seed = random.randint(1, 9999999)
         encoded_prompt = requests.utils.quote(english_prompt)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&seed={seed}&width=1024&height=1024&nologo=true"
-        
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
         bot.send_photo(message.chat.id, image_url, caption=f"Запрос: {prompt}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка генерации: {e}")
@@ -194,10 +168,8 @@ def handle_gemini(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        genai.configure(api_key=GEMINI_KEY)
-        gemini_model = genai.GenerativeModel('gemini-2.5-flash')
         full_query = f"{SYSTEM_INSTRUCTION}\n\nЗапрос пользователя: {query}"
-        response = gemini_model.generate_content(full_query)
+        response = gemini_text_model.generate_content(full_query)
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка Gemini: {e}")
@@ -252,8 +224,15 @@ def handle_search(message):
 
         search_text = "\n\n".join(search_snippets)
         prompt = f"Запрос: '{query}'. Данные из интернета:\n\n{search_text}\n\nДай связный и понятный ответ."
-        messages = [{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}]
-        data = query_ai(messages, temperature=0.5)
+        
+        chat = groq_client.chat.completions.create(
+            messages=[{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}],
+            model=FIXED_MODEL,
+            temperature=0.3,
+        )
+        data = chat.choices[0].message.content
+        if '</think>' in data:
+            data = data.split('</think>')[-1].strip()
         bot.reply_to(message, data)
     except Exception as e:
         bot.reply_to(message, f"Ошибка поиска: {e}")
@@ -265,22 +244,20 @@ def handle_photo(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        genai.configure(api_key=GEMINI_KEY)
-        gemini_vision = genai.GenerativeModel('gemini-2.5-flash')
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         image_part = {'mime_type': 'image/jpeg', 'data': downloaded_file}
         user_caption = message.caption or "Опиши фото."
         full_prompt = f"{SYSTEM_INSTRUCTION}\n\n{user_caption}"
-        response = gemini_vision.generate_content([full_prompt, image_part])
+        response = gemini_vision_model.generate_content([full_prompt, image_part])
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка при обработке фото: {e}")
 
 @bot.message_handler(commands=['code', 'sum', 'tr', 'fix'])
 def handle_special_commands(message):
-    if not client:
-        bot.reply_to(message, "Ошибка OpenRouter API ключа!")
+    if not groq_client:
+        bot.reply_to(message, "Ошибка Groq API ключа!")
         return
     command = message.text.split()[0].replace('@' + bot.get_me().username, '')
     user_text = message.text.replace(command, '').strip()
@@ -296,16 +273,22 @@ def handle_special_commands(message):
     }
     specific_instruction = f"{SYSTEM_INSTRUCTION} Задача: {instructions.get(command, '')}"
     try:
-        messages = [{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}]
-        answer = query_ai(messages, temperature=0.5)
+        chat = groq_client.chat.completions.create(
+            messages=[{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}],
+            model=FIXED_MODEL,
+            temperature=0.3,
+        )
+        answer = chat.choices[0].message.content
+        if '</think>' in answer:
+            answer = answer.split('</think>')[-1].strip()
         bot.reply_to(message, answer)
     except Exception as e:
         bot.reply_to(message, f'Ошибка: {e}')
 
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def handle_text_message(message):
-    if not client:
-        bot.reply_to(message, "Ошибка OpenRouter API ключа!")
+    if not groq_client:
+        bot.reply_to(message, "Ошибка Groq API ключа!")
         return
     bot.send_chat_action(message.chat.id, 'typing')
     chat_id = message.chat.id
@@ -320,7 +303,14 @@ def handle_text_message(message):
         messages_payload.append(msg)
     messages_payload.append({'role': 'user', 'content': user_text})
     try:
-        answer = query_ai(messages_payload, temperature=0.9)
+        chat_response = groq_client.chat.completions.create(
+            messages=messages_payload,
+            model=FIXED_MODEL,
+            temperature=0.7,
+        )
+        answer = chat_response.choices[0].message.content
+        if '</think>' in answer: 
+            answer = answer.split('</think>')[-1].strip()
         history.append({'role': 'user', 'content': user_text})
         history.append({'role': 'assistant', 'content': answer})
         
@@ -335,3 +325,4 @@ if __name__ == '__main__':
     threading.Thread(target=run_web).start()
     print('Бот успешно запущен!')
     bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=30)
+        
