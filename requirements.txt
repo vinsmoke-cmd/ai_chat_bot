@@ -7,3 +7,5 @@ duckduckgo-search
 edge-tts
 python-dotenv
 flask
+googlesearch-python
+beautifulsoup4
