@@ -37,7 +37,7 @@ def query_ai(messages, temperature=0.9):
     if not client:
         raise Exception("API ключ OpenRouter не задан!")
     
-    model_name = "meta-llama/llama-3.3-70b-instruct:free"
+    model_name = "deepseek/deepseek-r1:free"
     
     try:
         chat = client.chat.completions.create(
