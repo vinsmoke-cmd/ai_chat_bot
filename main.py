@@ -7,7 +7,6 @@ from groq import Groq
 import telebot
 from telebot.types import BotCommand
 
-# Получаем токены
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
 
@@ -15,12 +14,8 @@ bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 app = Flask('')
 
-# Хранилище истории диалогов
 dialog_history = {}
 MAX_HISTORY_LENGTH = 10
-
-# Фиксированная отличная модель, которая общается нормально и без лишних «мыслей»
-FIXED_MODEL = 'llama-3.1-8b-instant'
 
 @app.route('/')
 def home():
@@ -29,7 +24,21 @@ def home():
 def run_web():
     app.run(host='0.0.0.0', port=8080)
 
-# Установка меню команд
+def get_live_model():
+    """Динамически находит любую доступную модель на аккаунте Groq."""
+    if not groq_client: 
+        return 'llama-3.1-8b-instant'
+    try:
+        models = groq_client.models.list().data
+        # Ищем любую текстовую модель, избегая глубоких рассуждений
+        valid = [m.id for m in models if 'deepseek' not in m.id.lower() and 'r1' not in m.id.lower()]
+        if valid:
+            return valid[0]
+        return models[0].id if models else 'llama-3.1-8b-instant'
+    except Exception as e:
+        print(f"Ошибка автовыбора модели: {e}")
+        return 'llama-3.1-8b-instant'
+
 bot.set_my_commands([
     BotCommand("help", "📋 Список всех команд"),
     BotCommand("clear", "🧹 Очистить историю диалога"),
@@ -39,11 +48,11 @@ bot.set_my_commands([
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Я твой постоянный ИИ-помощник.\n\n"
+        "Привет! Я твой ИИ-помощник с автовыбором модели.\n\n"
         "✨ **Что я умею:**\n"
-        "• Помню историю нашего диалога.\n"
+        "• Помню историю диалога.\n"
         "• Понимаю твои ответы на конкретные сообщения (свайпы).\n"
-        "• Общаюсь на одной стабильной и быстрой модели без лишней воды!\n\n"
+        "• Сам нахожу живую модель на Groq, чтобы не было ошибок 404!\n\n"
         "📌 **Команды:**\n"
         "/clear — сбросить память диалога\n"
         "/tts [текст] — озвучить текст голосом"
@@ -77,6 +86,9 @@ def handle_tts(message):
 def ask_groq_with_context(chat_id, user_text, reply_text=None):
     if not groq_client: return "Ошибка: нет ключа Groq."
     
+    # Каждый раз запрашиваем актуальную рабочую модель
+    current_model = get_live_model()
+    
     if chat_id not in dialog_history:
         dialog_history[chat_id] = []
         
@@ -87,7 +99,7 @@ def ask_groq_with_context(chat_id, user_text, reply_text=None):
         current_prompt = f"[Пользователь ответил на сообщение: '{reply_text}']. Текст сообщения: {user_text}"
     
     messages_payload = [
-        {'role': 'system', 'content': 'Ты живой, веселый и дружелюбный собеседник в Telegram. Отвечай естественно, поддерживай контекст беседы, пиши понятно и без лишних робо-формулировок.'}
+        {'role': 'system', 'content': 'Ты живой, веселый и дружелюбный собеседник в Telegram. Отвечай естественно, поддерживай контекст беседы, пиши понятно и без лишней воды.'}
     ]
     
     for msg in history:
@@ -98,7 +110,7 @@ def ask_groq_with_context(chat_id, user_text, reply_text=None):
     try:
         chat = groq_client.chat.completions.create(
             messages=messages_payload,
-            model=FIXED_MODEL,
+            model=current_model,
             temperature=0.7,
         )
         ans = chat.choices[0].message.content
@@ -113,7 +125,7 @@ def ask_groq_with_context(chat_id, user_text, reply_text=None):
             
         return ans
     except Exception as e:
-        return f"Ошибка ИИ: {e}"
+        return f"Ошибка ИИ (модель {current_model}): {e}"
 
 @bot.message_handler(func=lambda message: True, content_types=['text'])
 def handle_text_message(message):
@@ -132,9 +144,9 @@ def handle_text_message(message):
 def handle_photo_message(message):
     bot.send_chat_action(message.chat.id, 'typing')
     caption = message.caption if message.caption else "без подписи"
-    bot.reply_to(message, f"Я получил твою картинку с подписью: «{caption}». Картинки храню во внимании, но эта текстовая модель общается словами!")
+    bot.reply_to(message, f"Картинку поймал (подпись: «{caption}»). Память и контекст работают!")
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Бот с фиксированной моделью запущен!')
+    print('🤖 Бот с автоподбором модели запущен!')
     bot.infinity_polling(none_stop=True)
