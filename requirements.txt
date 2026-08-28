@@ -6,3 +6,4 @@ google-generativeai
 duckduckgo-search
 edge-tts
 python-dotenv
+flask
