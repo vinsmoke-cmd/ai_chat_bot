@@ -20,12 +20,14 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    gemini_vision_model = genai.GenerativeModel('gemini-2.5-flash')
-    gemini_text_model = genai.GenerativeModel('gemini-2.5-flash')
+    # Используем актуальную модель Gemini по рекомендации API
+    gemini_vision_model = genai.GenerativeModel('gemini-3.6-flash')
+    gemini_text_model = genai.GenerativeModel('gemini-3.6-flash')
 
 app = Flask('')
 
 dialog_history = {}
+# Память диалога до 100 сообщений (50 пар вопрос-ответ)
 MAX_HISTORY_LENGTH = 100
 FIXED_MODEL = 'openai/gpt-oss-120b'
 
@@ -128,7 +130,6 @@ def handle_search(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        # Собираем ссылки из Google поиска
         urls = list(search(query, num_results=3))
         if not urls:
             bot.reply_to(message, "Ничего не найдено в интернете.")
@@ -145,7 +146,6 @@ def handle_search(message):
                     for script in soup(["script", "style"]):
                         script.decompose()
                     text = soup.get_text(separator=' ', strip=True)
-                    # Берем первые 400 символов страницы в качестве контекста
                     search_snippets.append(f"Источник ({url}):\n{text[:400]}...")
             except:
                 continue
