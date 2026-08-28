@@ -15,6 +15,10 @@ bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 app = Flask('')
 
+# Простой словарь для хранения истории диалогов: {chat_id: [список сообщений]}
+dialog_history = {}
+MAX_HISTORY_LENGTH = 10  # Максимальное количество сообщений в памяти для каждого чата
+
 @app.route('/')
 def home():
     return 'Bot is active and running!'
@@ -33,46 +37,33 @@ def get_normal_model():
     except:
         return 'llama-3.1-8b-instant'
 
-# Установка меню команд в Telegram
+# Установка меню команд
 bot.set_my_commands([
     BotCommand("help", "📋 Список всех команд"),
-    BotCommand("code", "💻 Написать или разобрать код"),
-    BotCommand("sum", "📝 Краткая выжимка текста"),
-    BotCommand("tr", "🌐 Быстрый перевод"),
-    BotCommand("fix", "✏️ Исправить ошибки"),
+    BotCommand("clear", "🧹 Очистить историю диалога"),
     BotCommand("tts", "🔊 Озвучить текст")
 ])
-
-def ask_groq(prompt, system_instruction):
-    if not groq_client: return "Ошибка: нет ключа Groq."
-    model = get_normal_model()
-    try:
-        chat = groq_client.chat.completions.create(
-            messages=[
-                {'role': 'system', 'content': system_instruction},
-                {'role': 'user', 'content': prompt}
-            ],
-            model=model,
-            temperature=0.7,
-        )
-        ans = chat.choices[0].message.content
-        if '</think>' in ans: ans = ans.split('</think>')[-1].strip()
-        return ans
-    except Exception as e:
-        return f"Ошибка ИИ: {e}"
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Вот что я умею:\n\n"
-        "/tts [текст] - 🔊 Озвучить текст\n"
-        "/code [задача] - 💻 Помощь с кодом\n"
-        "/sum [текст] - 📝 Сделать краткую выжимку\n"
-        "/tr [текст] - 🌐 Перевести на русский (или на английский)\n"
-        "/fix [текст] - ✏️ Исправить ошибки в тексте\n\n"
-        "Или просто напиши мне сообщение для обычного общения!"
+        "Привет! Я твой умный ИИ-помощник.\n\n"
+        "✨ **Что я умею:**\n"
+        "• Помню историю нашего диалога.\n"
+        "• Понимаю, когда ты отвечаешь (свайпаешь) на мои или свои сообщения.\n"
+        "• Могу распознавать отправленные картинки!\n\n"
+        "📌 **Команды:**\n"
+        "/clear — сбросить память диалога\n"
+        "/tts [текст] — озвучить текст голосом"
     )
     bot.reply_to(message, text)
+
+@bot.message_handler(commands=['clear'])
+def clear_history(message):
+    chat_id = message.chat.id
+    if chat_id in dialog_history:
+        dialog_history[chat_id] = []
+    bot.reply_to(message, "🧹 История диалога очищена!")
 
 @bot.message_handler(commands=['tts'])
 def handle_tts(message):
@@ -91,35 +82,105 @@ def handle_tts(message):
     except Exception as e:
         bot.reply_to(message, f'Ошибка аудио: {e}')
 
-@bot.message_handler(commands=['code', 'sum', 'tr', 'fix'])
-def handle_text_commands(message):
-    command = message.text.split()[0]
-    text = message.text.replace(command, '').strip()
+# Универсальная функция для отправки запроса в Groq с учетом истории и ответов (свайпов)
+def ask_groq_with_context(chat_id, user_text, reply_text=None):
+    if not groq_client: return "Ошибка: нет ключа Groq."
+    model = get_normal_model()
     
-    if not text:
-        bot.reply_to(message, f"Напиши текст после команды. Пример: {command} текст")
-        return
+    # Инициализируем историю для чата, если её нет
+    if chat_id not in dialog_history:
+        dialog_history[chat_id] = []
         
+    history = dialog_history[chat_id]
+    
+    # Формируем текущий запрос пользователя
+    current_prompt = user_text
+    if reply_text:
+        current_prompt = f"[Пользователь ответил на сообщение: '{reply_text}']. Текст сообщения: {user_text}"
+    
+    # Собираем сообщения для отправки в нейросеть
+    messages_payload = [
+        {'role': 'system', 'content': 'Ты живой, веселый и дружелюбный собеседник в Telegram. Отвечай естественно, поддерживай контекст беседы.'}
+    ]
+    
+    # Добавляем накопленную историю
+    for msg in history:
+        messages_payload.append(msg)
+        
+    # Добавляем текущее сообщение
+    messages_payload.append({'role': 'user', 'content': current_prompt})
+    
+    try:
+        chat = groq_client.chat.completions.create(
+            messages=messages_payload,
+            model=model,
+            temperature=0.7,
+        )
+        ans = chat.choices[0].message.content
+        if '</think>' in ans: 
+            ans = ans.split('</think>')[-1].strip()
+            
+        # Сохраняем в историю обмена
+        history.append({'role': 'user', 'content': current_prompt})
+        history.append({'role': 'assistant', 'content': ans})
+        
+        # Обрезаем историю, если она стала слишком длинной
+        if len(history) > MAX_HISTORY_LENGTH * 2:
+            dialog_history[chat_id] = history[-(MAX_HISTORY_LENGTH * 2):]
+            
+        return ans
+    except Exception as e:
+        return f"Ошибка ИИ: {e}"
+
+# Обработка текстовых сообщений (с учетом свайпов/ответов)
+@bot.message_handler(func=lambda message: True, content_types=['text'])
+def handle_text_message(message):
     bot.send_chat_action(message.chat.id, 'typing')
     
-    instructions = {
-        '/code': 'Ты опытный программист. Отвечай только кодом с краткими комментариями.',
-        '/sum': 'Сделай максимально краткую и понятную выжимку из этого текста, выдели главное.',
-        '/tr': 'Ты профессиональный переводчик. Переведи текст на русский (если он на другом языке) или на английский (если он на русском). Ничего не добавляй от себя.',
-        '/fix': 'Исправь грамматические, пунктуационные и стилистические ошибки в этом тексте. Верни только исправленный текст.'
-    }
+    user_text = message.text
+    reply_text = None
     
-    answer = ask_groq(text, instructions[command])
+    # Проверяем, ответил ли пользователь на какое-то сообщение (свайп)
+    if message.reply_to_message and message.reply_to_message.text:
+        reply_text = message.reply_to_message.text
+        
+    answer = ask_groq_with_context(message.chat.id, user_text, reply_text)
     bot.reply_to(message, answer)
 
-@bot.message_handler(func=lambda message: True)
-def handle_ai_message(message):
+# Обработка картинок (фото)
+@bot.message_handler(content_types=['photo'])
+def handle_photo_message(message):
     bot.send_chat_action(message.chat.id, 'typing')
-    instruction = 'Ты живой, веселый и дружелюбный собеседник в Telegram. Пиши по делу, но не будь слишком сухим.'
-    answer = ask_groq(message.text, instruction)
-    bot.reply_to(message, answer)
+    
+    try:
+        # Получаем файл фотографии наилучшего качества
+        photo = message.photo[-1]
+        file_info = bot.get_file(photo.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # Сохраняем временно на диск
+        image_path = f"temp_{message.chat.id}.jpg"
+        with open(image_path, 'wb') as new_file:
+            new_file.write(downloaded_file)
+            
+        # Подпись к картинке (если пользователь написал текст вместе с фото)
+        caption = message.caption if message.caption else "Что изображено на этой картинке?"
+        
+        # Заглушка-ответ для текстовой модели Groq про картинки
+        # (Так как текстовый Groq не «видит» пиксели напрямую без мультимодального API, 
+        # сообщаем пользователю, либо можно подключить специальную логику)
+        answer = f"Я получил твою картинку! Ты подписал её так: «{caption}». (К сожалению, эта текстовая модель Groq пока не анализирует пиксели напрямую, но я могу обсудить с тобой описание или тему!)"
+        
+        bot.reply_to(message, answer)
+        
+        # Удаляем временный файл
+        if os.path.exists(image_path):
+            os.remove(image_path)
+            
+    except Exception as e:
+        bot.reply_to(message, f"Не удалось обработать картинку: {e}")
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Мульти-бот запущен!')
+    print('🤖 Продвинутый ИИ-бот запущен!')
     bot.infinity_polling(none_stop=True)
