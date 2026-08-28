@@ -29,7 +29,7 @@ app = Flask('')
 
 dialog_history = {}
 MAX_HISTORY_LENGTH = 100
-FIXED_MODEL = 'llama-3.3-70b-versatile'
+FIXED_MODEL = 'llama-3.1-8b-instant'
 
 SYSTEM_INSTRUCTION = (
     'Ты русскоязычный помощник. Отвечай строго на русском языке. '
