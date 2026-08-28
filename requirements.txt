@@ -1,11 +1,7 @@
 pyTelegramBotAPI
-requests
-Pillow
-groq
+openai
 google-generativeai
-duckduckgo-search
-edge-tts
-python-dotenv
-flask
-googlesearch-python
+requests
 beautifulsoup4
+edge-tts
+flask
