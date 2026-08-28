@@ -92,16 +92,14 @@ def handle_search(message):
     bot.send_chat_action(message.chat.id, 'typing')
     
     try:
-        # Ищем через DuckDuckGo
         with DDGS() as ddgs:
             results = [r for r in ddgs.text(query, max_results=3)]
             
         if not results:
-        data = "Ничего не найдено по вашему запросу."
+            data = "Ничего не найдено по вашему запросу."
         else:
             search_text = "\n\n".join([f"Название: {r.get('title')}\nСсылка: {r.get('href')}\nОписание: {r.get('body')}" for r in results])
             
-            # Передаем найденное нейросети, чтобы она сформировала красивый ответ
             prompt = f"Пользователь ищет: '{query}'. Вот результаты поиска в интернете:\n\n{search_text}\n\nСделай краткий и понятный ответ на основе этих данных."
             
             chat = groq_client.chat.completions.create(
