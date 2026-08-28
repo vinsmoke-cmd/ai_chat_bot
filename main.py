@@ -17,7 +17,6 @@ GEMINI_KEY = os.getenv('GEMINI_API_KEY')
 bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
-# Инициализация Gemini
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
     gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash')
@@ -37,23 +36,23 @@ def run_web():
     app.run(host='0.0.0.0', port=8080)
 
 bot.set_my_commands([
-    BotCommand("help", "📋 Список всех команд"),
-    BotCommand("image", "🎨 Сгенерировать картинку"),
-    BotCommand("gemini", "✨ Спросить у Gemini"),
-    BotCommand("search", "🔎 Поиск в интернете"),
-    BotCommand("code", "💻 Написать или разобрать код"),
-    BotCommand("sum", "📝 Краткая выжимка"),
-    BotCommand("tr", "🌐 Перевод"),
-    BotCommand("fix", "✏️ Исправить ошибки"),
-    BotCommand("tts", "🔊 Озвучить текст"),
-    BotCommand("clear", "🧹 Сбросить контекст")
+    BotCommand("help", "Список всех команд"),
+    BotCommand("image", "Сгенерировать картинку"),
+    BotCommand("gemini", "Спросить у Gemini"),
+    BotCommand("search", "Поиск в интернете"),
+    BotCommand("code", "Написать или разобрать код"),
+    BotCommand("sum", "Краткая выжимка"),
+    BotCommand("tr", "Перевод"),
+    BotCommand("fix", "Исправить ошибки"),
+    BotCommand("tts", "Озвучить текст"),
+    BotCommand("clear", "Сбросить контекст")
 ])
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
         "Привет! Твой мультимодальный ИИ-помощник.\n\n"
-        "✨ **Возможности:**\n"
+        "Возможности:\n"
         "• Распознаю отправленные картинки через Gemini.\n"
         "• Команда /gemini — текстовый запрос к Gemini.\n"
         "• Команда /image — генерация изображений.\n"
@@ -66,27 +65,30 @@ def clear_history(message):
     chat_id = message.chat.id
     if chat_id in dialog_history:
         dialog_history[chat_id] = []
-    bot.reply_to(message, "🧹 Контекст сброшен!")
+    bot.reply_to(message, "Контекст сброшен!")
 
 @bot.message_handler(commands=['image'])
 def handle_image_generation(message):
     prompt = message.text.replace('/image', '').strip()
     if not prompt:
-        bot.reply_to(message, "Напиши, что нарисовать. Пример: /image кот в космосе")
+        bot.reply_to(message, "Напиши, что нарисовать. Пример: /image sports car")
         return
 
     bot.send_chat_action(message.chat.id, 'upload_photo')
     try:
+        if prompt.lower() in ['машина', 'авто', 'автомобиль']:
+            prompt = 'modern sports car on a highway, highly detailed'
+            
         encoded_prompt = requests.utils.quote(prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-        bot.send_photo(message.chat.id, image_url, caption=f"🎨 Запрос: {prompt}")
+        bot.send_photo(message.chat.id, image_url, caption=f"Запрос: {prompt}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка генерации: {e}")
 
 @bot.message_handler(commands=['gemini'])
 def handle_gemini(message):
     if not GEMINI_KEY:
-        bot.reply_to(message, "Ошибка: GEMINI_API_KEY не задан в переменнных окружения!")
+        bot.reply_to(message, "Ошибка: GEMINI_API_KEY не задан в переменных окружения!")
         return
     query = message.text.replace('/gemini', '').strip()
     if not query:
@@ -230,5 +232,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Бот с Gemini и GPT-OSS запущен!')
+    print('Бот с Gemini и GPT-OSS запущен!')
     bot.infinity_polling(none_stop=True)
