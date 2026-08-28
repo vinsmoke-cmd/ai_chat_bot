@@ -20,16 +20,19 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # Используем актуальную модель Gemini по рекомендации API
     gemini_vision_model = genai.GenerativeModel('gemini-3.6-flash')
     gemini_text_model = genai.GenerativeModel('gemini-3.6-flash')
 
 app = Flask('')
 
 dialog_history = {}
-# Память диалога до 100 сообщений (50 пар вопрос-ответ)
 MAX_HISTORY_LENGTH = 100
 FIXED_MODEL = 'openai/gpt-oss-120b'
+
+SYSTEM_INSTRUCTION = (
+    'Ты русскоязычный помощник. Отвечай строго на русском языке. '
+    'Запрещено использовать любые символы форматирования текста, такие как звездочки, решетки, подчеркивания и другие знаки разметки.'
+)
 
 @app.route('/')
 def home():
@@ -100,7 +103,8 @@ def handle_gemini(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     try:
-        response = gemini_text_model.generate_content(query)
+        full_query = f"{SYSTEM_INSTRUCTION}\n\nЗапрос пользователя: {query}"
+        response = gemini_text_model.generate_content(full_query)
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка Gemini: {e}")
@@ -158,7 +162,7 @@ def handle_search(message):
         prompt = f"Запрос пользователя: '{query}'. Данные из найденных сайтов:\n\n{search_text}\n\nДай связный и понятный ответ на основе этих данных."
         
         chat = groq_client.chat.completions.create(
-            messages=[{'role': 'system', 'content': 'Отвечай только простым текстом.'}, {'role': 'user', 'content': prompt}],
+            messages=[{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}],
             model=FIXED_MODEL,
             temperature=0.3,
         )
@@ -184,8 +188,9 @@ def handle_photo(message):
             'data': downloaded_file
         }
         user_caption = message.caption or "Опиши, что изображено на картинке."
+        full_prompt = f"{SYSTEM_INSTRUCTION}\n\n{user_caption}"
         
-        response = gemini_vision_model.generate_content([user_caption, image_part])
+        response = gemini_vision_model.generate_content([full_prompt, image_part])
         bot.reply_to(message, response.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка обработки фото через Gemini: {e}")
@@ -202,14 +207,15 @@ def handle_special_commands(message):
         return
     bot.send_chat_action(message.chat.id, 'typing')
     instructions = {
-        '/code': 'Напиши или разбери код простым текстом.',
-        '/sum': 'Сделай краткую выжимку простым текстом.',
+        '/code': 'Напиши или разбери код.',
+        '/sum': 'Сделай краткую выжимку.',
         '/tr': 'Переведи текст на русский язык.',
         '/fix': 'Исправь ошибки в тексте.'
     }
+    specific_instruction = f"{SYSTEM_INSTRUCTION} Дополнительная задача: {instructions.get(command, '')}"
     try:
         chat = groq_client.chat.completions.create(
-            messages=[{'role': 'system', 'content': instructions.get(command, '')}, {'role': 'user', 'content': user_text}],
+            messages=[{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}],
             model=FIXED_MODEL,
             temperature=0.3,
         )
@@ -233,7 +239,7 @@ def handle_text_message(message):
     user_text = message.text
     if message.reply_to_message and message.reply_to_message.text:
         user_text = f"[Ответ на: '{message.reply_to_message.text}']. Текст: {user_text}"
-    messages_payload = [{'role': 'system', 'content': 'Ты живой собеседник. Отвечай только простым текстом.'}]
+    messages_payload = [{'role': 'system', 'content': SYSTEM_INSTRUCTION}]
     for msg in history:
         messages_payload.append(msg)
     messages_payload.append({'role': 'user', 'content': user_text})
