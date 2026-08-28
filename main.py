@@ -15,10 +15,10 @@ bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 app = Flask('')
 
-# Хранилище истории диалогов и фиксированная рабочая модель
+# Хранилище истории диалогов и фиксированная модель openai/gpt-oss-120b
 dialog_history = {}
 MAX_HISTORY_LENGTH = 10
-FIXED_MODEL = 'llama-3.1-8b-instant'
+FIXED_MODEL = 'openai/gpt-oss-120b'
 
 @app.route('/')
 def home():
@@ -41,11 +41,11 @@ bot.set_my_commands([
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Я твой ИИ-помощник на базе Groq.\n\n"
+        "Привет! Я твой ИИ-помощник на базе OpenAI GPT-OSS 120B.\n\n"
         "✨ **Возможности:**\n"
         "• Помню контекст нашего разговора.\n"
         "• Понимаю, когда ты отвечаешь на сообщения (свайпы).\n"
-        "• Работаю на стабильной и быстрой модели.\n\n"
+        "• Работаю на модели `openai/gpt-oss-120b`.\n\n"
         "📌 **Основные команды:**\n"
         "/code [задача] — написать/разобрать код\n"
         "/sum [текст] — сделать краткую выжимку\n"
@@ -169,5 +169,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('🤖 Бот успешно запущен!')
+    print('🤖 Бот с моделью openai/gpt-oss-120b успешно запущен!')
     bot.infinity_polling(none_stop=True)
