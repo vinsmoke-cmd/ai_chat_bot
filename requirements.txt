@@ -1,2 +1,7 @@
 pyTelegramBotAPI
+requests
+Pillow
+groq
 google-generativeai
+duckduckgo_search
+edge-tts
