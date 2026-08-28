@@ -3,5 +3,6 @@ requests
 Pillow
 groq
 google-generativeai
-duckduckgo_search
+duckduckgo-search
 edge-tts
+python-dotenv
