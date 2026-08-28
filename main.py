@@ -46,12 +46,13 @@ def handle_ai_message(message):
     return
 
   try:
+    # Используем рабочую модель llama3-70b-8192
     chat_completion = groq_client.chat.completions.create(
         messages=[{
             'role': 'user',
             'content': message.text,
         }],
-        model='llama-3.3-70b-versatile',
+        model='llama3-70b-8192',
     )
     answer = chat_completion.choices[0].message.content
     bot.reply_to(message, answer)
