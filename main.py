@@ -15,7 +15,6 @@ import random
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
-HF_TOKEN = os.getenv('HF_TOKEN')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
@@ -45,7 +44,7 @@ def run_web():
 
 bot.set_my_commands([
     BotCommand("help", "Список всех команд"),
-    BotCommand("image", "Сгенерировать картинку (FLUX)"),
+    BotCommand("image", "Сгенерировать картинку"),
     BotCommand("gemini", "Спросить у Gemini"),
     BotCommand("search", "Поиск в интернете"),
     BotCommand("weather", "Узнать погоду"),
@@ -65,7 +64,7 @@ def send_welcome(message):
         "Команды:\n"
         "• /weather [город] - погода\n"
         "• /fact - случайный факт\n"
-        "• /image [описание] - генерация картинки (FLUX)\n"
+        "• /image [описание] - генерация картинки\n"
         "• /gemini [запрос] - текстовый Gemini\n"
         "• /search [запрос] - поиск в интернете\n"
         "• /tts [текст] - озвучка голосом\n"
@@ -143,16 +142,8 @@ def handle_image_generation(message):
         else:
             english_prompt = prompt
 
-        if HF_TOKEN:
-            hf_url = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
-            headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-            res = requests.post(hf_url, headers=headers, json={"inputs": english_prompt}, timeout=45)
-            if res.status_code == 200:
-                bot.send_photo(message.chat.id, res.content, caption=f"Запрос: {prompt}")
-                return
-
         encoded_prompt = requests.utils.quote(english_prompt)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
         bot.send_photo(message.chat.id, image_url, caption=f"Запрос: {prompt}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка генерации: {e}")
@@ -325,4 +316,3 @@ if __name__ == '__main__':
     threading.Thread(target=run_web).start()
     print('Бот успешно запущен!')
     bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=30)
-        
