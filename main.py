@@ -19,8 +19,9 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash')
-    gemini_text_model = genai.GenerativeModel('gemini-1.5-flash')
+    # Исправлено название модели на актуальное для обхода ошибки 404
+    gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash-002')
+    gemini_text_model = genai.GenerativeModel('gemini-1.5-flash-002')
 
 app = Flask('')
 
@@ -76,8 +77,9 @@ def handle_image_generation(message):
 
     bot.send_chat_action(message.chat.id, 'upload_photo')
     try:
+        # Улучшенный промпт для конкретных слов вроде машины
         if prompt.lower() in ['машина', 'авто', 'автомобиль']:
-            prompt = 'modern sports car on a highway, highly detailed'
+            prompt = 'modern sports car driving on a scenic highway, highly detailed, photorealistic'
             
         encoded_prompt = requests.utils.quote(prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
