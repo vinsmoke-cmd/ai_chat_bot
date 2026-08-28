@@ -19,14 +19,15 @@ groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    gemini_vision_model = genai.GenerativeModel('gemini-1.5-flash')
-    gemini_text_model = genai.GenerativeModel('gemini-1.5-flash')
+    # Используем актуальную поддерживаемую модель Gemini
+    gemini_vision_model = genai.GenerativeModel('gemini-2.5-flash')
+    gemini_text_model = genai.GenerativeModel('gemini-2.5-flash')
 
 app = Flask('')
 
 dialog_history = {}
-# Увеличили длину памяти до 100 сообщений (50 пар вопрос-ответ)
-MAX_HISTORY_LENGTH = 1000
+# Память диалога до 100 сообщений (50 пар вопрос-ответ)
+MAX_HISTORY_LENGTH = 100
 FIXED_MODEL = 'openai/gpt-oss-120b'
 
 @app.route('/')
@@ -52,13 +53,13 @@ bot.set_my_commands([
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Твой мультимодальный ИИ-помощник с огромной памятью.\n\n"
+        "Привет! Твой ИИ-помощник с Gemini и огромной памятью.\n\n"
         "Возможности:\n"
         "• Помнит до 100 сообщений нашего диалога.\n"
         "• Распознаю отправленные картинки через Gemini.\n"
         "• Команда /gemini — текстовый запрос к Gemini.\n"
         "• Команда /image — генерация изображений.\n"
-        "• Поиск в сети и текстовый чат через GPT-OSS 120B."
+        "• Поиск в сети и текстовый чат."
     )
     bot.reply_to(message, text)
 
@@ -236,5 +237,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('Бот с огромной памятью (100 сообщений) запущен!')
+    print('Бот с Gemini и памятью на 100 сообщений запущен!')
     bot.infinity_polling(none_stop=True)
