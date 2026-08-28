@@ -37,7 +37,7 @@ def query_ai(messages, temperature=0.9):
     if not client:
         raise Exception("API ключ OpenRouter не задан!")
     
-    model_name = "google/gemini-2.0-flash-lite-preview-02-05:free"
+    model_name = "meta-llama/llama-3.3-70b-instruct:free"
     
     try:
         chat = client.chat.completions.create(
