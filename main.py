@@ -10,10 +10,12 @@ from googlesearch import search
 import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
+import random
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROQ_KEY = os.getenv('GROQ_KEY') or os.getenv('GROQ_API_KEY')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY')
+HF_TOKEN = os.getenv('HF_TOKEN')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 groq_client = Groq(api_key=GROQ_KEY) if GROQ_KEY else None
@@ -27,7 +29,7 @@ app = Flask('')
 
 dialog_history = {}
 MAX_HISTORY_LENGTH = 100
-FIXED_MODEL = 'openai/gpt-oss-120b'
+FIXED_MODEL = 'llama-3.3-70b-versatile'
 
 SYSTEM_INSTRUCTION = (
     'Ты русскоязычный помощник. Отвечай строго на русском языке. '
@@ -43,9 +45,11 @@ def run_web():
 
 bot.set_my_commands([
     BotCommand("help", "Список всех команд"),
-    BotCommand("image", "Сгенерировать картинку"),
+    BotCommand("image", "Сгенерировать картинку (FLUX)"),
     BotCommand("gemini", "Спросить у Gemini"),
     BotCommand("search", "Поиск в интернете"),
+    BotCommand("weather", "Узнать погоду"),
+    BotCommand("fact", "Случайный факт"),
     BotCommand("code", "Написать или разобрать код"),
     BotCommand("sum", "Краткая выжимка"),
     BotCommand("tr", "Перевод"),
@@ -57,13 +61,15 @@ bot.set_my_commands([
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     text = (
-        "Привет! Твой ИИ-помощник с Gemini и огромной памятью.\n\n"
-        "Возможности:\n"
-        "• Помнит до 100 сообщений нашего диалога.\n"
-        "• Распознаю отправленные картинки через Gemini.\n"
-        "• Команда /gemini — текстовый запрос к Gemini.\n"
-        "• Команда /image — генерация изображений.\n"
-        "• Стабильный поиск в сети и текстовый чат."
+        "Привет! Твой ИИ-помощник.\n\n"
+        "Команды:\n"
+        "• /weather [город] - погода\n"
+        "• /fact - случайный факт\n"
+        "• /image [описание] - генерация картинки (FLUX)\n"
+        "• /gemini [запрос] - текстовый Gemini\n"
+        "• /search [запрос] - поиск в интернете\n"
+        "• /tts [текст] - озвучка голосом\n"
+        "• /clear - сбросить диалог"
     )
     bot.reply_to(message, text)
 
@@ -72,22 +78,90 @@ def clear_history(message):
     chat_id = message.chat.id
     if chat_id in dialog_history:
         dialog_history[chat_id] = []
-    bot.reply_to(message, "Контекст и память диалога полностью сброшены!")
+    bot.reply_to(message, "Память диалога полностью сброшена.")
+
+@bot.message_handler(commands=['weather'])
+def handle_weather(message):
+    city = message.text.replace('/weather', '').strip()
+    if not city:
+        bot.reply_to(message, "Укажи город. Пример: /weather Москва")
+        return
+    try:
+        geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={requests.utils.quote(city)}&count=1&language=ru"
+        geo_res = requests.get(geo_url, timeout=5).json()
+        if not geo_res.get('results'):
+            bot.reply_to(message, "Город не найден.")
+            return
+        lat = geo_res['results'][0]['latitude']
+        lon = geo_res['results'][0]['longitude']
+        name = geo_res['results'][0]['name']
+        
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        w_res = requests.get(weather_url, timeout=5).json()
+        current = w_res.get('current_weather', {})
+        temp = current.get('temperature')
+        wind = current.get('windspeed')
+        
+        bot.reply_to(message, f"Погода в городе {name}: температура {temp} градусов, ветер {wind} м/с.")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка получения погоды: {e}")
+
+@bot.message_handler(commands=['fact'])
+def handle_fact(message):
+    facts = [
+        "Мед может храниться тысячами лет и не испортиться.",
+        "У осьминогов три сердца и голубая кровь.",
+        "Шампунь изначально делали из мыла и яичного порошка.",
+        "Молния ударяет в одно и то же место более ста раз в секунду на Земле.",
+        "Бананы технически являются ягодами, а клубника — нет."
+    ]
+    bot.reply_to(message, random.choice(facts))
 
 @bot.message_handler(commands=['image'])
 def handle_image_generation(message):
     prompt = message.text.replace('/image', '').strip()
     if not prompt:
-        bot.reply_to(message, "Напиши, что нарисовать. Пример: /image sports car")
+        bot.reply_to(message, "Напиши, что нарисовать. Пример: /image космический кот")
         return
-
     bot.send_chat_action(message.chat.id, 'upload_photo')
     try:
-        if prompt.lower() in ['машина', 'авто', 'автомобиль']:
-            prompt = 'modern sports car driving on a scenic highway, highly detailed, photorealistic'
-            
-        encoded_prompt = requests.utils.quote(prompt)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+        english_prompt = prompt
+        if groq_client:
+            try:
+                chat = groq_client.chat.completions.create(
+                    messages=[{
+                        'role': 'system', 
+                        'content': 'You are a professional image prompt engineer. Translate user prompt to detailed English for FLUX AI generator. Add quality, visual style and lighting keywords. Output ONLY the final English prompt.'
+                    }, {
+                        'role': 'user', 
+                        'content': prompt
+                    }],
+                    model=FIXED_MODEL,
+                    temperature=0.7,
+                )
+                translated = chat.choices[0].message.content.strip()
+                if translated:
+                    if '</think>' in translated:
+                        translated = translated.split('</think>')[-1].strip()
+                    english_prompt = translated
+            except Exception as ge:
+                print(f"Groq translation error: {ge}")
+
+        if HF_TOKEN:
+            try:
+                hf_url = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+                headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+                res = requests.post(hf_url, headers=headers, json={"inputs": english_prompt}, timeout=30)
+                if res.status_code == 200 and len(res.content) > 1000:
+                    bot.send_photo(message.chat.id, res.content, caption=f"Запрос: {prompt}")
+                    return
+            except Exception as hfe:
+                print(f"HF Error: {hfe}")
+
+        seed = random.randint(1, 9999999)
+        encoded_prompt = requests.utils.quote(english_prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?model=flux&seed={seed}&width=1024&height=1024&nologo=true"
+        
         bot.send_photo(message.chat.id, image_url, caption=f"Запрос: {prompt}")
     except Exception as e:
         bot.reply_to(message, f"Ошибка генерации: {e}")
@@ -95,7 +169,7 @@ def handle_image_generation(message):
 @bot.message_handler(commands=['gemini'])
 def handle_gemini(message):
     if not GEMINI_KEY:
-        bot.reply_to(message, "Ошибка: GEMINI_API_KEY не задан в переменных окружения!")
+        bot.reply_to(message, "Ошибка: GEMINI_API_KEY не задан!")
         return
     query = message.text.replace('/gemini', '').strip()
     if not query:
@@ -140,11 +214,10 @@ def handle_search(message):
             return
         
         search_snippets = []
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        
+        headers = {'User-Agent': 'Mozilla/5.0'}
         for url in urls:
             try:
-                r = requests.get(url, headers=headers, timeout=4)
+                r = requests.get(url, headers=headers, timeout=5)
                 if r.status_code == 200:
                     soup = BeautifulSoup(r.text, 'html.parser')
                     for script in soup(["script", "style"]):
@@ -155,11 +228,11 @@ def handle_search(message):
                 continue
 
         if not search_snippets:
-            bot.reply_to(message, "Ссылки найдены, но не удалось прочитать их содержимое.")
+            bot.reply_to(message, "Не удалось прочитать найденные сайты.")
             return
 
         search_text = "\n\n".join(search_snippets)
-        prompt = f"Запрос пользователя: '{query}'. Данные из найденных сайтов:\n\n{search_text}\n\nДай связный и понятный ответ на основе этих данных."
+        prompt = f"Запрос: '{query}'. Данные из интернета:\n\n{search_text}\n\nДай связный и понятный ответ."
         
         chat = groq_client.chat.completions.create(
             messages=[{'role': 'system', 'content': SYSTEM_INSTRUCTION}, {'role': 'user', 'content': prompt}],
@@ -182,18 +255,13 @@ def handle_photo(message):
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        
-        image_part = {
-            'mime_type': 'image/jpeg',
-            'data': downloaded_file
-        }
-        user_caption = message.caption or "Опиши, что изображено на картинке."
+        image_part = {'mime_type': 'image/jpeg', 'data': downloaded_file}
+        user_caption = message.caption or "Опиши фото."
         full_prompt = f"{SYSTEM_INSTRUCTION}\n\n{user_caption}"
-        
         response = gemini_vision_model.generate_content([full_prompt, image_part])
         bot.reply_to(message, response.text)
     except Exception as e:
-        bot.reply_to(message, f"Ошибка обработки фото через Gemini: {e}")
+        bot.reply_to(message, f"Ошибка при обработке фото: {e}")
 
 @bot.message_handler(commands=['code', 'sum', 'tr', 'fix'])
 def handle_special_commands(message):
@@ -212,7 +280,7 @@ def handle_special_commands(message):
         '/tr': 'Переведи текст на русский язык.',
         '/fix': 'Исправь ошибки в тексте.'
     }
-    specific_instruction = f"{SYSTEM_INSTRUCTION} Дополнительная задача: {instructions.get(command, '')}"
+    specific_instruction = f"{SYSTEM_INSTRUCTION} Задача: {instructions.get(command, '')}"
     try:
         chat = groq_client.chat.completions.create(
             messages=[{'role': 'system', 'content': specific_instruction}, {'role': 'user', 'content': user_text}],
@@ -264,5 +332,5 @@ def handle_text_message(message):
 
 if __name__ == '__main__':
     threading.Thread(target=run_web).start()
-    print('Бот запущен!')
-    bot.infinity_polling(none_stop=True)
+    print('Бот успешно запущен!')
+    bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=30)
