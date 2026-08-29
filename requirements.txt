@@ -1,10 +1,9 @@
-pytelegrambotapi
-groq
-google-genai
-flask
-requests
-beautifulsoup4
+pyTelegramBotAPI
 edge-tts
+flask
+beautifulsoup4
+groq
 pypdf
-python-docx
-pandas
+google-genai
+requests
+huggingface_hub
