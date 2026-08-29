@@ -1,23 +1,40 @@
 import os
-import threading
+import time
+import random
 import asyncio
+import threading
+
+import requests
 import edge_tts
+import telebot
+
 from flask import Flask
 from openai import OpenAI
-import telebot
-from telebot.types import BotCommand
-import requests
 from bs4 import BeautifulSoup
-import random
-import time
-import re
+from googlesearch import search
 
 # ============================================================
-# НАСТРОЙКИ
+# GEMINI — НОВЫЙ GOOGLE GENAI SDK
+# ============================================================
+
+try:
+    from google import genai
+    from google.genai import types
+    GEMINI_SDK_AVAILABLE = True
+except Exception as e:
+    print(f"[Gemini] SDK import error: {e}")
+    GEMINI_SDK_AVAILABLE = False
+
+
+# ============================================================
+# ENVIRONMENT VARIABLES
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+# OpenRouter:
+# сначала ищем OPENROUTER_API_KEY,
+# затем GROQ_KEY как запасной вариант.
 OPENROUTER_KEY = (
     os.getenv("OPENROUTER_API_KEY")
     or os.getenv("GROQ_KEY")
@@ -26,83 +43,89 @@ OPENROUTER_KEY = (
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
+# Нужен только для Hugging Face /image
 HF_TOKEN = os.getenv("HF_TOKEN")
 
-MAX_HISTORY_LENGTH = 100
-TELEGRAM_MAX_LENGTH = 4000
 
 # ============================================================
-# ПРОВЕРКА GOOGLE GENAI
-# ============================================================
-
-try:
-    from google import genai
-    from google.genai import types
-
-    if GEMINI_KEY:
-        gemini_client = genai.Client(
-            api_key=GEMINI_KEY
-        )
-        print("Gemini Client initialized successfully.")
-    else:
-        gemini_client = None
-        print("WARNING: GEMINI_API_KEY is not set.")
-
-except Exception as e:
-    gemini_client = None
-    print("Gemini initialization error:", repr(e))
-
-# ============================================================
-# TELEGRAM
+# ПРОВЕРКА BOT TOKEN
 # ============================================================
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN не задан в Environment Variables.")
+    raise RuntimeError(
+        "BOT_TOKEN не найден в Environment Variables Render."
+    )
+
+
+# ============================================================
+# TELEGRAM BOT
+# ============================================================
 
 bot = telebot.TeleBot(
     BOT_TOKEN,
     parse_mode=None
 )
 
+
 # ============================================================
-# OPENROUTER
+# OPENROUTER CLIENT
 # ============================================================
 
 client = None
 
 if OPENROUTER_KEY:
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_KEY
-    )
+    try:
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=OPENROUTER_KEY,
+        )
+        print("[OpenRouter] Client создан.")
+    except Exception as e:
+        print(f"[OpenRouter] Ошибка создания клиента: {e}")
+        client = None
+else:
+    print("[OpenRouter] OPENROUTER_API_KEY/GROQ_KEY не найден.")
+
 
 # ============================================================
-# SYSTEM INSTRUCTION
+# GEMINI CLIENT
 # ============================================================
 
-SYSTEM_INSTRUCTION = """
-Ты умный, естественный и дружелюбный собеседник в Telegram.
+gemini_client = None
 
-Общайся естественно и без лишней официальности.
-Можно иногда использовать лёгкий юмор.
+if GEMINI_SDK_AVAILABLE and GEMINI_KEY:
+    try:
+        gemini_client = genai.Client(
+            api_key=GEMINI_KEY
+        )
+        print("[Gemini] Client успешно создан.")
+    except Exception as e:
+        print(f"[Gemini] Ошибка создания Client: {e}")
+        gemini_client = None
+else:
+    if not GEMINI_SDK_AVAILABLE:
+        print("[Gemini] google-genai не установлен.")
+    elif not GEMINI_KEY:
+        print("[Gemini] GEMINI_API_KEY не найден.")
 
-Отвечай на языке пользователя.
-Если пользователь просит перейти на другой язык, используй этот язык.
 
-Не выдумывай факты.
-Если не уверен, честно скажи об этом.
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
 
-Не используй Markdown без необходимости.
-Не используй звездочки для оформления.
-Не используй решетки для оформления.
-Не используй подчёркивания для оформления.
+SYSTEM_INSTRUCTION = (
+    "Ты обычный парень-собеседник в Telegram. "
+    "Общайся легко, весело и непринуждённо. "
+    "Иногда можешь остроумно подшутить или сострить над вопросом. "
+    "Не утверждай, что являешься человеком, если пользователь прямо спрашивает об этом. "
+    "Отвечай на русском языке. "
+    "Не используй Markdown-разметку: звездочки, решетки, подчёркивания и подобные символы."
+)
 
-Если пользователь просит код:
-- давай полный рабочий код;
-- сохраняй правильные отступы;
-- не пропускай важные части;
-- не выдумывай несуществующие библиотеки.
-"""
+MAX_HISTORY_LENGTH = 100
+
+dialog_history = {}
+
 
 # ============================================================
 # FLASK
@@ -116,537 +139,259 @@ def home():
     return "Bot is active and running!"
 
 
-@app.route("/health")
-def health():
-    return "OK"
-
-
 def run_web():
-    port = int(
-        os.getenv(
-            "PORT",
-            "8080"
-        )
-    )
+    port = int(os.getenv("PORT", "8080"))
 
     app.run(
         host="0.0.0.0",
         port=port,
-        threaded=True
+        debug=False,
+        use_reloader=False
     )
-
-
-# ============================================================
-# ПАМЯТЬ
-# ============================================================
-
-dialog_history = {}
-history_lock = threading.Lock()
-
-
-def get_history(chat_id):
-    with history_lock:
-        return list(
-            dialog_history.get(
-                chat_id,
-                []
-            )
-        )
-
-
-def add_history(
-    chat_id,
-    role,
-    content
-):
-    if not content:
-        return
-
-    with history_lock:
-
-        if chat_id not in dialog_history:
-            dialog_history[chat_id] = []
-
-        dialog_history[chat_id].append(
-            {
-                "role": role,
-                "content": content
-            }
-        )
-
-        if len(dialog_history[chat_id]) > MAX_HISTORY_LENGTH * 2:
-            dialog_history[chat_id] = (
-                dialog_history[chat_id]
-                [-(MAX_HISTORY_LENGTH * 2):]
-            )
-
-
-def clear_history(chat_id):
-    with history_lock:
-        dialog_history[chat_id] = []
-
-
-# ============================================================
-# ОЧИСТКА ТЕКСТА
-# ============================================================
-
-def clean_text(text):
-
-    if not text:
-        return ""
-
-    text = str(text)
-
-    text = re.sub(
-        r"<think>.*?</think>",
-        "",
-        text,
-        flags=re.DOTALL | re.IGNORECASE
-    )
-
-    text = text.replace(
-        "```",
-        ""
-    )
-
-    text = text.replace(
-        "**",
-        ""
-    )
-
-    text = text.replace(
-        "__",
-        ""
-    )
-
-    text = text.replace(
-        "~~",
-        ""
-    )
-
-    text = re.sub(
-        r"\n{3,}",
-        "\n\n",
-        text
-    )
-
-    return text.strip()
-
-
-# ============================================================
-# TELEGRAM SAFE SEND
-# ============================================================
-
-def split_message(text):
-
-    if not text:
-        return [
-            "Пустой ответ."
-        ]
-
-    if len(text) <= TELEGRAM_MAX_LENGTH:
-        return [text]
-
-    parts = []
-
-    while len(text) > TELEGRAM_MAX_LENGTH:
-
-        cut = text.rfind(
-            "\n",
-            0,
-            TELEGRAM_MAX_LENGTH
-        )
-
-        if cut < 1000:
-            cut = text.rfind(
-                " ",
-                0,
-                TELEGRAM_MAX_LENGTH
-            )
-
-        if cut < 1000:
-            cut = TELEGRAM_MAX_LENGTH
-
-        parts.append(
-            text[:cut]
-        )
-
-        text = text[cut:].lstrip()
-
-    if text:
-        parts.append(text)
-
-    return parts
-
-
-def safe_reply(
-    message,
-    text
-):
-
-    text = clean_text(text)
-
-    if not text:
-        text = "Не удалось получить ответ."
-
-    for part in split_message(text):
-
-        try:
-
-            bot.reply_to(
-                message,
-                part
-            )
-
-        except Exception as e:
-
-            print(
-                "Telegram send error:",
-                repr(e)
-            )
 
 
 # ============================================================
 # OPENROUTER AI
 # ============================================================
 
-def query_ai(
-    messages,
-    temperature=0.8
-):
-
+def query_ai(messages, temperature=0.9):
     if not client:
         raise RuntimeError(
-            "OPENROUTER_API_KEY/GROQ_KEY не задан."
+            "OpenRouter API ключ не задан."
         )
 
-    model_name = (
-        "deepseek/deepseek-r1:free"
-    )
+    model_name = "deepseek/deepseek-r1:free"
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        temperature=temperature
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=temperature,
+            extra_headers={
+                "HTTP-Referer": "https://telegram.org",
+                "X-Title": "TelegramBot",
+            }
+        )
 
-    answer = (
-        response
-        .choices[0]
-        .message
-        .content
-    )
+        if not response.choices:
+            raise RuntimeError(
+                "OpenRouter не вернул ответ."
+            )
 
-    return clean_text(
-        answer
-    )
+        answer = response.choices[0].message.content
+
+        if not answer:
+            raise RuntimeError(
+                "OpenRouter вернул пустой ответ."
+            )
+
+        # Удаляем возможный reasoning-блок DeepSeek
+        if "</think>" in answer:
+            answer = answer.split("</think>")[-1].strip()
+
+        return answer.strip()
+
+    except Exception as e:
+        raise RuntimeError(
+            f"Ошибка запроса к OpenRouter: {e}"
+        )
 
 
 # ============================================================
-# GEMINI
+# GEMINI AI
 # ============================================================
 
-GEMINI_MODEL = "gemini-2.5-flash"
+def query_gemini(prompt):
+    if not GEMINI_KEY:
+        raise RuntimeError(
+            "GEMINI_API_KEY не найден в Environment Variables Render."
+        )
 
-
-def ask_gemini(
-    prompt
-):
+    if not GEMINI_SDK_AVAILABLE:
+        raise RuntimeError(
+            "Пакет google-genai не установлен."
+        )
 
     if not gemini_client:
         raise RuntimeError(
-            "Gemini Client не инициализирован. "
-            "Проверь GEMINI_API_KEY."
+            "Gemini Client не удалось создать."
         )
-
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=0.7,
-            max_output_tokens=4096
-        )
-    )
-
-    answer = response.text
-
-    if not answer:
-        raise RuntimeError(
-            "Gemini вернул пустой ответ."
-        )
-
-    return clean_text(
-        answer
-    )
-
-
-# ============================================================
-# COMMANDS
-# ============================================================
-
-def setup_commands():
 
     try:
-
-        bot.set_my_commands(
-            [
-                BotCommand(
-                    "help",
-                    "Список команд"
-                ),
-                BotCommand(
-                    "image",
-                    "Создать изображение"
-                ),
-                BotCommand(
-                    "gemini",
-                    "Спросить Gemini"
-                ),
-                BotCommand(
-                    "search",
-                    "Поиск в интернете"
-                ),
-                BotCommand(
-                    "weather",
-                    "Погода"
-                ),
-                BotCommand(
-                    "fact",
-                    "Случайный факт"
-                ),
-                BotCommand(
-                    "code",
-                    "Работа с кодом"
-                ),
-                BotCommand(
-                    "sum",
-                    "Краткая выжимка"
-                ),
-                BotCommand(
-                    "tr",
-                    "Перевод"
-                ),
-                BotCommand(
-                    "fix",
-                    "Исправить текст"
-                ),
-                BotCommand(
-                    "tts",
-                    "Озвучить текст"
-                ),
-                BotCommand(
-                    "clear",
-                    "Очистить память"
-                )
-            ]
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.9,
+            )
         )
+
+        answer = response.text
+
+        if not answer:
+            raise RuntimeError(
+                "Gemini вернул пустой ответ."
+            )
+
+        return answer.strip()
 
     except Exception as e:
-
-        print(
-            "Command setup error:",
-            repr(e)
+        raise RuntimeError(
+            f"Gemini API error: {e}"
         )
 
 
 # ============================================================
-# START / HELP
+# TELEGRAM COMMANDS
 # ============================================================
 
-@bot.message_handler(
-    commands=[
-        "start",
-        "help"
-    ]
-)
+try:
+    bot.set_my_commands([
+        telebot.types.BotCommand("help", "Список всех команд"),
+        telebot.types.BotCommand("image", "Сгенерировать картинку"),
+        telebot.types.BotCommand("gemini", "Спросить Gemini"),
+        telebot.types.BotCommand("search", "Поиск в интернете"),
+        telebot.types.BotCommand("weather", "Узнать погоду"),
+        telebot.types.BotCommand("fact", "Случайный факт"),
+        telebot.types.BotCommand("code", "Написать или разобрать код"),
+        telebot.types.BotCommand("sum", "Краткая выжимка"),
+        telebot.types.BotCommand("tr", "Перевод"),
+        telebot.types.BotCommand("fix", "Исправить ошибки"),
+        telebot.types.BotCommand("tts", "Озвучить текст"),
+        telebot.types.BotCommand("clear", "Сбросить контекст"),
+    ])
+except Exception as e:
+    print(f"[Telegram] Не удалось установить команды: {e}")
+
+
+# ============================================================
+# /START /HELP
+# ============================================================
+
+@bot.message_handler(commands=["start", "help"])
 def send_welcome(message):
-
-    bot.reply_to(
-        message,
-        "Привет! Я ИИ-помощник.\n\n"
-        "Команды:\n"
-        "/weather город — погода\n"
-        "/fact — случайный факт\n"
-        "/image описание — изображение\n"
-        "/gemini запрос — Gemini\n"
-        "/search запрос — поиск\n"
-        "/tts текст — озвучка\n"
-        "/code задача — код\n"
-        "/sum текст — выжимка\n"
-        "/tr текст — перевод\n"
-        "/fix текст — исправление\n"
-        "/clear — очистить память"
-    )
-
-
-# ============================================================
-# CLEAR
-# ============================================================
-
-@bot.message_handler(
-    commands=["clear"]
-)
-def handle_clear(message):
-
-    clear_history(
-        message.chat.id
-    )
-
-    bot.reply_to(
-        message,
-        "Память диалога очищена."
-    )
-
-
-# ============================================================
-# WEATHER
-# ============================================================
-
-@bot.message_handler(
-    commands=["weather"]
-)
-def handle_weather(message):
-
     text = (
-        message.text
-        or ""
+        "Привет! Твой ИИ-помощник.\n\n"
+        "Команды:\n"
+        "/weather [город] — погода\n"
+        "/fact — случайный факт\n"
+        "/image [описание] — генерация картинки\n"
+        "/gemini [запрос] — Gemini\n"
+        "/search [запрос] — поиск в интернете\n"
+        "/tts [текст] — озвучка\n"
+        "/code [текст] — работа с кодом\n"
+        "/sum [текст] — краткая выжимка\n"
+        "/tr [текст] — перевод\n"
+        "/fix [текст] — исправление ошибок\n"
+        "/clear — сбросить контекст"
     )
 
-    parts = text.split(
-        maxsplit=1
+    bot.reply_to(message, text)
+
+
+# ============================================================
+# /CLEAR
+# ============================================================
+
+@bot.message_handler(commands=["clear"])
+def clear_history(message):
+    dialog_history[message.chat.id] = []
+
+    bot.reply_to(
+        message,
+        "Память диалога полностью сброшена."
     )
 
-    if len(parts) < 2:
 
+# ============================================================
+# /WEATHER
+# ============================================================
+
+@bot.message_handler(commands=["weather"])
+def handle_weather(message):
+    city = message.text.replace("/weather", "").strip()
+
+    if not city:
         bot.reply_to(
             message,
-            "Укажи город.\n"
-            "Например: /weather Москва"
+            "Укажи город.\nПример: /weather Москва"
         )
-
         return
 
-    city = parts[1].strip()
-
     try:
-
         geo_url = (
-            "https://geocoding-api.open-meteo.com/"
-            "v1/search"
+            "https://geocoding-api.open-meteo.com/v1/search"
+            f"?name={requests.utils.quote(city)}"
+            "&count=1"
+            "&language=ru"
+            "&format=json"
         )
 
         geo_response = requests.get(
             geo_url,
-            params={
-                "name": city,
-                "count": 1,
-                "language": "ru",
-                "format": "json"
-            },
             timeout=10
         )
 
-        geo_response.raise_for_status()
-
         geo_data = geo_response.json()
 
-        results = geo_data.get(
-            "results",
-            []
-        )
-
-        if not results:
-
+        if not geo_data.get("results"):
             bot.reply_to(
                 message,
                 "Город не найден."
             )
-
             return
 
-        location = results[0]
+        result = geo_data["results"][0]
 
-        latitude = location["latitude"]
-        longitude = location["longitude"]
-
-        name = location.get(
-            "name",
-            city
-        )
+        latitude = result["latitude"]
+        longitude = result["longitude"]
+        name = result["name"]
 
         weather_url = (
-            "https://api.open-meteo.com/"
-            "v1/forecast"
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={latitude}"
+            f"&longitude={longitude}"
+            "&current=temperature_2m,wind_speed_10m"
         )
 
         weather_response = requests.get(
             weather_url,
-            params={
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": (
-                    "temperature_2m,"
-                    "apparent_temperature,"
-                    "relative_humidity_2m,"
-                    "weather_code,"
-                    "wind_speed_10m"
-                ),
-                "timezone": "auto"
-            },
             timeout=10
         )
 
-        weather_response.raise_for_status()
+        weather_data = weather_response.json()
+        current = weather_data.get("current", {})
 
-        data = weather_response.json()
-
-        current = data.get(
-            "current",
-            {}
-        )
+        temperature = current.get("temperature_2m")
+        wind = current.get("wind_speed_10m")
 
         bot.reply_to(
             message,
-            f"Погода в {name}:\n\n"
-            f"Температура: "
-            f"{current.get('temperature_2m')}°C\n"
-            f"Ощущается как: "
-            f"{current.get('apparent_temperature')}°C\n"
-            f"Влажность: "
-            f"{current.get('relative_humidity_2m')}%\n"
-            f"Ветер: "
-            f"{current.get('wind_speed_10m')} км/ч"
+            f"Погода в городе {name}:\n"
+            f"Температура: {temperature} °C\n"
+            f"Ветер: {wind} км/ч"
         )
 
     except Exception as e:
-
-        print(
-            "Weather error:",
-            repr(e)
-        )
-
         bot.reply_to(
             message,
-            "Не удалось получить погоду."
+            f"Ошибка получения погоды: {e}"
         )
 
 
 # ============================================================
-# FACT
+# /FACT
 # ============================================================
 
-@bot.message_handler(
-    commands=["fact"]
-)
+@bot.message_handler(commands=["fact"])
 def handle_fact(message):
-
     facts = [
+        "Мёд при правильном хранении может сохраняться очень долго.",
         "У осьминога три сердца.",
-        "Банан ботанически считается ягодой.",
-        "На Венере сутки длиннее года.",
-        "У жирафа и человека одинаковое количество шейных позвонков.",
-        "Молния действительно может ударять в одно место несколько раз."
+        "Банан с ботанической точки зрения является ягодой.",
+        "Молния может неоднократно ударять в одно и то же место.",
+        "У акул появились первые представители задолго до динозавров."
     ]
 
     bot.reply_to(
@@ -656,90 +401,82 @@ def handle_fact(message):
 
 
 # ============================================================
-# IMAGE
+# /IMAGE
 # ============================================================
 
-@bot.message_handler(
-    commands=["image"]
-)
-def handle_image(message):
+@bot.message_handler(commands=["image"])
+def handle_image_generation(message):
+    prompt = message.text.replace("/image", "").strip()
 
-    parts = (
-        message.text
-        or ""
-    ).split(
-        maxsplit=1
-    )
-
-    if len(parts) < 2:
-
+    if not prompt:
         bot.reply_to(
             message,
-            "Напиши описание.\n"
-            "Например:\n"
-            "/image космический кот"
+            "Напиши, что нарисовать.\n"
+            "Пример: /image космический кот"
         )
-
         return
 
-    prompt = parts[1].strip()
+    bot.send_chat_action(
+        message.chat.id,
+        "upload_photo"
+    )
 
     try:
-
         english_prompt = prompt
 
+        # Если OpenRouter доступен —
+        # улучшаем prompt.
         if client:
-
             try:
+                translation_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты профессиональный prompt engineer. "
+                            "Переведи запрос пользователя на английский "
+                            "и сделай его подробным prompt для генерации "
+                            "изображения FLUX. "
+                            "Добавь описание композиции, света, деталей "
+                            "и визуального стиля. "
+                            "Верни только готовый prompt."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
 
                 english_prompt = query_ai(
-                    [
-                        {
-                            "role": "system",
-                            "content":
-                                "Translate the image request "
-                                "into a detailed English prompt "
-                                "for an image generator. "
-                                "Return only the prompt."
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
+                    translation_messages,
                     temperature=0.7
                 )
 
             except Exception as e:
-
                 print(
-                    "Image prompt translation error:",
-                    repr(e)
+                    f"[Image] Ошибка улучшения prompt: {e}"
                 )
 
-        # ----------------------------------------------------
+        # ====================================================
         # HUGGING FACE
-        # ----------------------------------------------------
+        # ====================================================
 
         if HF_TOKEN:
-
             try:
-
                 hf_url = (
-                    "https://api-inference.huggingface.co/"
-                    "models/"
+                    "https://api-inference.huggingface.co/models/"
                     "black-forest-labs/FLUX.1-schnell"
                 )
 
+                headers = {
+                    "Authorization": f"Bearer {HF_TOKEN}"
+                }
+
                 response = requests.post(
                     hf_url,
-                    headers={
-                        "Authorization":
-                            f"Bearer {HF_TOKEN}"
-                    },
+                    headers=headers,
                     json={
-                        "inputs":
-                            english_prompt
+                        "inputs": english_prompt
                     },
                     timeout=60
                 )
@@ -748,115 +485,101 @@ def handle_image(message):
                     response.status_code == 200
                     and len(response.content) > 1000
                 ):
-
                     bot.send_photo(
                         message.chat.id,
                         response.content,
-                        caption=(
-                            "Готово.\n"
-                            + prompt
-                        )
+                        caption=f"Запрос: {prompt}"
                     )
-
                     return
 
-            except Exception as e:
-
                 print(
-                    "Hugging Face error:",
-                    repr(e)
+                    "[HF] Не удалось получить изображение: "
+                    f"{response.status_code}"
                 )
 
-        # ----------------------------------------------------
-        # POLLINATIONS FALLBACK
-        # ----------------------------------------------------
+            except Exception as e:
+                print(
+                    f"[HF] Ошибка: {e}"
+                )
 
-        encoded = requests.utils.quote(
-            english_prompt
-        )
+        # ====================================================
+        # POLLINATIONS FALLBACK
+        # ====================================================
 
         seed = random.randint(
             1,
             9999999
         )
 
+        encoded_prompt = requests.utils.quote(
+            english_prompt
+        )
+
         image_url = (
-            "https://image.pollinations.ai/"
-            "prompt/"
-            + encoded
-            + f"?model=flux&seed={seed}"
-            "&width=1024"
-            "&height=1024"
-            "&nologo=true"
+            "https://image.pollinations.ai/prompt/"
+            f"{encoded_prompt}"
+            f"?model=flux"
+            f"&seed={seed}"
+            f"&width=1024"
+            f"&height=1024"
+            f"&nologo=true"
         )
 
         bot.send_photo(
             message.chat.id,
             image_url,
-            caption=(
-                "Готово.\n"
-                + prompt
-            )
+            caption=f"Запрос: {prompt}"
         )
 
     except Exception as e:
-
-        print(
-            "Image error:",
-            repr(e)
-        )
-
         bot.reply_to(
             message,
-            "Не удалось создать изображение."
+            f"Ошибка генерации изображения: {e}"
         )
 
 
 # ============================================================
-# GEMINI COMMAND
+# /GEMINI
 # ============================================================
 
-@bot.message_handler(
-    commands=["gemini"]
-)
+@bot.message_handler(commands=["gemini"])
 def handle_gemini(message):
-
-    if not gemini_client:
-
-        bot.reply_to(
-            message,
-            "Gemini сейчас недоступен.\n\n"
-            "Причина: Gemini Client не был "
-            "инициализирован.\n\n"
-            "Проверь GEMINI_API_KEY в Render."
-        )
-
-        return
-
-    text = (
-        message.text
-        or ""
-    )
-
-    parts = text.split(
-        maxsplit=1
-    )
-
-    if len(parts) < 2:
-
-        bot.reply_to(
-            message,
-            "Напиши запрос после /gemini."
-        )
-
-        return
-
-    query = parts[1].strip()
+    query = message.text.replace(
+        "/gemini",
+        "",
+        1
+    ).strip()
 
     if not query:
         bot.reply_to(
             message,
-            "Напиши запрос после /gemini."
+            "Напиши запрос.\n"
+            "Пример: /gemini объясни теорию относительности"
+        )
+        return
+
+    if not GEMINI_KEY:
+        bot.reply_to(
+            message,
+            "Gemini недоступен.\n\n"
+            "Причина: GEMINI_API_KEY не найден в Render."
+        )
+        return
+
+    if not GEMINI_SDK_AVAILABLE:
+        bot.reply_to(
+            message,
+            "Gemini недоступен.\n\n"
+            "Причина: пакет google-genai не установлен."
+        )
+        return
+
+    if not gemini_client:
+        bot.reply_to(
+            message,
+            "Gemini недоступен.\n\n"
+            "Причина: Gemini Client не удалось создать.\n"
+            "Проверь GEMINI_API_KEY в Render."
         )
         return
 
@@ -866,47 +589,54 @@ def handle_gemini(message):
     )
 
     try:
-
-        answer = ask_gemini(
+        answer = query_gemini(
             query
         )
 
-        safe_reply(
+        bot.reply_to(
             message,
             answer
         )
 
     except Exception as e:
-
         print(
-            "Gemini error:",
-            repr(e)
+            f"[Gemini] {e}"
         )
 
         bot.reply_to(
             message,
-            "Ошибка Gemini:\n"
-            + str(e)
+            "Ошибка Gemini.\n\n"
+            f"Причина: {e}"
         )
 
 
 # ============================================================
-# PHOTO / GEMINI VISION
+# PHOTO → GEMINI VISION
 # ============================================================
 
-@bot.message_handler(
-    content_types=["photo"]
-)
+@bot.message_handler(content_types=["photo"])
 def handle_photo(message):
+    if not GEMINI_KEY:
+        bot.reply_to(
+            message,
+            "Gemini недоступен: "
+            "GEMINI_API_KEY не найден."
+        )
+        return
+
+    if not GEMINI_SDK_AVAILABLE:
+        bot.reply_to(
+            message,
+            "Gemini недоступен: "
+            "google-genai не установлен."
+        )
+        return
 
     if not gemini_client:
-
         bot.reply_to(
             message,
-            "Анализ фото недоступен.\n"
-            "Проверь GEMINI_API_KEY."
+            "Gemini Client не создан."
         )
-
         return
 
     bot.send_chat_action(
@@ -915,100 +645,88 @@ def handle_photo(message):
     )
 
     try:
-
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
 
-        image_bytes = bot.download_file(
+        downloaded_file = bot.download_file(
             file_info.file_path
         )
 
-        caption = (
+        user_caption = (
             message.caption
-            or
-            "Опиши это изображение."
+            or "Опиши это изображение подробно."
         )
 
-        image_part = types.Part.from_bytes(
-            data=image_bytes,
-            mime_type="image/jpeg"
-        )
+        contents = [
+            types.Part.from_bytes(
+                data=downloaded_file,
+                mime_type="image/jpeg"
+            ),
+            user_caption
+        ]
 
         response = gemini_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                image_part,
-                caption
-            ],
+            model="gemini-2.5-flash",
+            contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0.5,
-                max_output_tokens=4096
+                temperature=0.7,
             )
         )
 
         answer = response.text
 
         if not answer:
-            answer = "Gemini не смог вернуть описание."
+            answer = "Gemini не смог дать описание изображения."
 
-        safe_reply(
+        bot.reply_to(
             message,
             answer
         )
 
     except Exception as e:
-
         print(
-            "Gemini vision error:",
-            repr(e)
+            f"[Gemini Vision] {e}"
         )
 
         bot.reply_to(
             message,
-            "Ошибка анализа изображения:\n"
-            + str(e)
+            f"Ошибка при обработке фото: {e}"
         )
 
 
 # ============================================================
-# TTS
+# /TTS
 # ============================================================
 
-@bot.message_handler(
-    commands=["tts"]
-)
+@bot.message_handler(commands=["tts"])
 def handle_tts(message):
+    text = message.text.replace(
+        "/tts",
+        "",
+        1
+    ).strip()
 
-    parts = (
-        message.text
-        or ""
-    ).split(
-        maxsplit=1
-    )
-
-    if len(parts) < 2:
-
+    if not text:
         bot.reply_to(
             message,
-            "Напиши текст после /tts."
+            "Напиши текст для озвучки."
         )
-
         return
 
-    text = parts[1].strip()
+    bot.send_chat_action(
+        message.chat.id,
+        "record_voice"
+    )
 
     filename = (
-        f"voice_"
-        f"{message.chat.id}_"
+        f"voice_{message.chat.id}_"
         f"{message.message_id}.mp3"
     )
 
     try:
-
-        async def generate():
-
+        async def generate_voice():
             communicate = edge_tts.Communicate(
                 text,
                 "ru-RU-SvetlanaNeural"
@@ -1019,118 +737,93 @@ def handle_tts(message):
             )
 
         asyncio.run(
-            generate()
+            generate_voice()
         )
 
         with open(
             filename,
             "rb"
         ) as voice:
-
             bot.send_voice(
                 message.chat.id,
                 voice
             )
 
     except Exception as e:
-
-        print(
-            "TTS error:",
-            repr(e)
-        )
-
         bot.reply_to(
             message,
-            "Ошибка озвучки."
+            f"Ошибка аудио: {e}"
         )
 
     finally:
-
         try:
-
-            if os.path.exists(
-                filename
-            ):
-                os.remove(
-                    filename
-                )
-
+            if os.path.exists(filename):
+                os.remove(filename)
         except Exception:
             pass
 
 
 # ============================================================
-# SEARCH
+# /SEARCH
 # ============================================================
 
-@bot.message_handler(
-    commands=["search"]
-)
+@bot.message_handler(commands=["search"])
 def handle_search(message):
+    query = message.text.replace(
+        "/search",
+        "",
+        1
+    ).strip()
+
+    if not query:
+        bot.reply_to(
+            message,
+            "Напиши запрос для поиска."
+        )
+        return
 
     if not client:
-
         bot.reply_to(
             message,
-            "Поиск недоступен: "
-            "OPENROUTER_API_KEY не задан."
+            "Поиск требует OpenRouter API ключ."
         )
-
         return
 
-    parts = (
-        message.text
-        or ""
-    ).split(
-        maxsplit=1
+    bot.send_chat_action(
+        message.chat.id,
+        "typing"
     )
 
-    if len(parts) < 2:
-
-        bot.reply_to(
-            message,
-            "Напиши запрос после /search."
-        )
-
-        return
-
-    query = parts[1].strip()
-
     try:
-
-        from googlesearch import search
-
         urls = list(
             search(
                 query,
-                num_results=5
+                num_results=3
             )
         )
 
         if not urls:
-
             bot.reply_to(
                 message,
                 "Ничего не найдено."
             )
-
             return
 
-        sources = []
+        search_snippets = []
 
         headers = {
-            "User-Agent":
-                "Mozilla/5.0"
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64)"
+            )
         }
 
         for url in urls:
-
             try:
-
                 response = requests.get(
                     url,
                     headers=headers,
-                    timeout=8
+                    timeout=7
                 )
 
                 if response.status_code != 200:
@@ -1141,202 +834,169 @@ def handle_search(message):
                     "html.parser"
                 )
 
-                for element in soup(
-                    [
-                        "script",
-                        "style",
-                        "noscript"
-                    ]
+                for tag in soup(
+                    ["script", "style", "noscript"]
                 ):
-                    element.decompose()
+                    tag.decompose()
 
                 text = soup.get_text(
                     separator=" ",
                     strip=True
                 )
 
-                text = re.sub(
-                    r"\s+",
-                    " ",
-                    text
+                if text:
+                    search_snippets.append(
+                        f"Источник: {url}\n"
+                        f"{text[:1200]}"
+                    )
+
+            except Exception as e:
+                print(
+                    f"[Search] {url}: {e}"
                 )
 
-                sources.append(
-                    f"Источник: {url}\n"
-                    f"{text[:2000]}"
-                )
-
-            except Exception:
-                continue
-
-        if not sources:
-
+        if not search_snippets:
             bot.reply_to(
                 message,
                 "Не удалось прочитать найденные сайты."
             )
-
             return
 
-        search_text = (
-            "\n\n".join(
-                sources
-            )
+        search_text = "\n\n".join(
+            search_snippets
         )
+
+        prompt = (
+            f"Запрос пользователя:\n{query}\n\n"
+            f"Данные из найденных источников:\n"
+            f"{search_text}\n\n"
+            "На основе этих данных дай понятный "
+            "и связный ответ на русском языке."
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": SYSTEM_INSTRUCTION
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
 
         answer = query_ai(
-            [
-                {
-                    "role":
-                        "system",
-                    "content":
-                        SYSTEM_INSTRUCTION
-                },
-                {
-                    "role":
-                        "user",
-                    "content":
-                        (
-                            f"Запрос: {query}\n\n"
-                            f"Данные из интернета:\n"
-                            f"{search_text}\n\n"
-                            "Сформируй точный и понятный ответ."
-                        )
-                }
-            ],
-            temperature=0.4
+            messages,
+            temperature=0.5
         )
 
-        safe_reply(
+        bot.reply_to(
             message,
             answer
         )
 
     except Exception as e:
-
-        print(
-            "Search error:",
-            repr(e)
-        )
-
         bot.reply_to(
             message,
-            "Ошибка поиска."
+            f"Ошибка поиска: {e}"
         )
 
 
 # ============================================================
-# CODE / SUM / TR / FIX
+# /CODE /SUM /TR /FIX
 # ============================================================
 
 @bot.message_handler(
-    commands=[
-        "code",
-        "sum",
-        "tr",
-        "fix"
-    ]
+    commands=["code", "sum", "tr", "fix"]
 )
 def handle_special_commands(message):
-
     if not client:
-
         bot.reply_to(
             message,
-            "OpenRouter/Groq API ключ не задан."
+            "OpenRouter API ключ не задан."
         )
-
         return
 
-    text = (
-        message.text
-        or ""
-    )
-
-    parts = text.split(
-        maxsplit=1
-    )
-
     command = (
-        parts[0]
+        message.text
+        .split()[0]
         .split("@")[0]
         .lower()
     )
 
-    if len(parts) < 2:
+    user_text = message.text[
+        len(message.text.split()[0]):
+    ].strip()
 
+    if not user_text:
         bot.reply_to(
             message,
-            f"Напиши текст после {command}."
+            f"Напиши текст после {command}"
         )
-
         return
 
-    user_text = parts[1].strip()
-
     instructions = {
-
-        "/code":
-            "Напиши, исправь или объясни код.",
-
-        "/sum":
-            "Сделай краткую выжимку текста.",
-
-        "/tr":
-            "Переведи текст. Если язык указан пользователем, "
-            "переводи именно на него.",
-
-        "/fix":
-            "Исправь ошибки текста, сохранив его смысл."
+        "/code": (
+            "Напиши, объясни или разбери код. "
+            "Если пользователь просит исправить код, "
+            "верни исправленный вариант."
+        ),
+        "/sum": (
+            "Сделай краткую и понятную выжимку текста."
+        ),
+        "/tr": (
+            "Переведи текст на русский язык. "
+            "Если он уже на русском, объясни это."
+        ),
+        "/fix": (
+            "Исправь ошибки в тексте, "
+            "сохрани смысл и стиль."
+        )
     }
 
+    bot.send_chat_action(
+        message.chat.id,
+        "typing"
+    )
+
     try:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    SYSTEM_INSTRUCTION
+                    + "\n\nЗадача: "
+                    + instructions.get(
+                        command,
+                        ""
+                    )
+                )
+            },
+            {
+                "role": "user",
+                "content": user_text
+            }
+        ]
 
         answer = query_ai(
-            [
-                {
-                    "role":
-                        "system",
-                    "content":
-                        (
-                            SYSTEM_INSTRUCTION
-                            + "\n\n"
-                            + instructions.get(
-                                command,
-                                ""
-                            )
-                        )
-                },
-                {
-                    "role":
-                        "user",
-                    "content":
-                        user_text
-                }
-            ],
-            temperature=0.4
+            messages,
+            temperature=0.5
         )
 
-        safe_reply(
+        bot.reply_to(
             message,
             answer
         )
 
     except Exception as e:
-
-        print(
-            "Special command error:",
-            repr(e)
-        )
-
         bot.reply_to(
             message,
-            "Произошла ошибка."
+            f"Ошибка: {e}"
         )
 
 
 # ============================================================
-# ОБЫЧНЫЙ ДИАЛОГ
+# ОБЫЧНЫЙ ТЕКСТОВЫЙ ЧАТ
 # ============================================================
 
 @bot.message_handler(
@@ -1344,87 +1004,91 @@ def handle_special_commands(message):
     content_types=["text"]
 )
 def handle_text_message(message):
-
     if not client:
-
         bot.reply_to(
             message,
-            "Основной ИИ временно недоступен: "
-            "API ключ не задан."
+            "OpenRouter API ключ не задан."
         )
-
         return
+
+    bot.send_chat_action(
+        message.chat.id,
+        "typing"
+    )
 
     chat_id = message.chat.id
 
-    user_text = (
-        message.text
-        or ""
-    ).strip()
+    if chat_id not in dialog_history:
+        dialog_history[chat_id] = []
 
-    if not user_text:
-        return
+    history = dialog_history[chat_id]
+
+    user_text = message.text
+
+    if (
+        message.reply_to_message
+        and message.reply_to_message.text
+    ):
+        user_text = (
+            f"[Ответ на сообщение: "
+            f"'{message.reply_to_message.text}']\n"
+            f"{user_text}"
+        )
+
+    messages_payload = [
+        {
+            "role": "system",
+            "content": SYSTEM_INSTRUCTION
+        }
+    ]
+
+    messages_payload.extend(
+        history
+    )
+
+    messages_payload.append(
+        {
+            "role": "user",
+            "content": user_text
+        }
+    )
 
     try:
-
-        history = get_history(
-            chat_id
-        )
-
-        messages = [
-            {
-                "role":
-                    "system",
-                "content":
-                    SYSTEM_INSTRUCTION
-            }
-        ]
-
-        messages.extend(
-            history
-        )
-
-        messages.append(
-            {
-                "role":
-                    "user",
-                "content":
-                    user_text
-            }
-        )
-
         answer = query_ai(
-            messages,
-            temperature=0.8
+            messages_payload,
+            temperature=0.9
         )
 
-        add_history(
-            chat_id,
-            "user",
-            user_text
+        history.append(
+            {
+                "role": "user",
+                "content": user_text
+            }
         )
 
-        add_history(
-            chat_id,
-            "assistant",
-            answer
+        history.append(
+            {
+                "role": "assistant",
+                "content": answer
+            }
         )
 
-        safe_reply(
+        max_messages = MAX_HISTORY_LENGTH * 2
+
+        if len(history) > max_messages:
+            dialog_history[chat_id] = (
+                history[-max_messages:]
+            )
+
+        bot.reply_to(
             message,
             answer
         )
 
     except Exception as e:
-
-        print(
-            "Chat error:",
-            repr(e)
-        )
-
         bot.reply_to(
             message,
-            "Ошибка при обращении к ИИ."
+            f"Ошибка: {e}"
         )
 
 
@@ -1432,55 +1096,95 @@ def handle_text_message(message):
 # TELEGRAM POLLING
 # ============================================================
 
-def polling_loop():
+def run_bot():
+    print("=" * 50)
+    print("Запуск Telegram-бота...")
+    print("=" * 50)
+
+    if GEMINI_KEY:
+        print("[Gemini] GEMINI_API_KEY найден.")
+    else:
+        print("[Gemini] GEMINI_API_KEY НЕ найден.")
+
+    if gemini_client:
+        print("[Gemini] Client готов.")
+    else:
+        print("[Gemini] Client НЕ готов.")
+
+    if OPENROUTER_KEY:
+        print("[OpenRouter] API key найден.")
+    else:
+        print("[OpenRouter] API key НЕ найден.")
+
+    # Удаляем webhook.
+    # Это важно, если раньше использовался webhook.
+    try:
+        bot.remove_webhook()
+        print("[Telegram] Webhook удалён.")
+    except Exception as e:
+        print(
+            f"[Telegram] Ошибка удаления webhook: {e}"
+        )
+
+    time.sleep(2)
 
     while True:
-
         try:
-
-            print(
-                "Starting Telegram polling..."
-            )
+            print("[Telegram] Запускаю polling...")
 
             bot.infinity_polling(
                 timeout=30,
                 long_polling_timeout=30,
-                skip_pending=True
+                skip_pending=True,
+                allowed_updates=[
+                    "message"
+                ]
             )
 
-        except Exception as e:
+            print(
+                "[Telegram] Polling остановился. "
+                "Перезапуск через 5 секунд..."
+            )
 
+            time.sleep(5)
+
+        except Exception as e:
             error_text = str(e)
 
             print(
-                "Polling error:",
-                repr(e)
+                f"[Telegram] Polling error: {error_text}"
             )
 
             # Telegram 409:
-            # другой экземпляр уже использует getUpdates.
+            # другой процесс уже использует getUpdates.
             if (
                 "409" in error_text
-                or
-                "Conflict" in error_text
-                or
-                "terminated by other getUpdates" in error_text
+                or "Conflict" in error_text
+                or "terminated by other getUpdates" in error_text
             ):
-
                 print(
-                    "Telegram 409 detected."
+                    "[Telegram] Обнаружен 409 Conflict."
                 )
 
                 print(
-                    "Waiting 15 seconds before retry..."
+                    "[Telegram] Возможно, "
+                    "запущен второй экземпляр бота."
+                )
+
+                print(
+                    "[Telegram] Жду 15 секунд "
+                    "и пробую снова..."
                 )
 
                 time.sleep(15)
 
             else:
+                print(
+                    "[Telegram] Неизвестная ошибка."
+                )
 
                 print(
-                    "Waiting 5 seconds before retry..."
+                    "[Telegram] Жду 5 секунд..."
                 )
 
                 time.sleep(5)
@@ -1491,36 +1195,9 @@ def polling_loop():
 # ============================================================
 
 if __name__ == "__main__":
+    print("Бот запускается...")
 
-    print(
-        "======================================"
-    )
-
-    print(
-        "AI Telegram Bot starting..."
-    )
-
-    print(
-        "OpenRouter:",
-        "OK" if client else "NO"
-    )
-
-    print(
-        "Gemini:",
-        "OK" if gemini_client else "NO"
-    )
-
-    print(
-        "Hugging Face:",
-        "OK" if HF_TOKEN else "NO"
-    )
-
-    print(
-        "======================================"
-    )
-
-    setup_commands()
-
+    # Flask запускаем отдельным daemon-потоком.
     web_thread = threading.Thread(
         target=run_web,
         daemon=True
@@ -1528,4 +1205,5 @@ if __name__ == "__main__":
 
     web_thread.start()
 
-    polling_loop()
+    # Telegram polling запускаем в основном потоке.
+    run_bot()
