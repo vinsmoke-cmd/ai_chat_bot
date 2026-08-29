@@ -45,7 +45,6 @@ def clean_markdown(text):
     return re.sub(r'[*_#]', '', text)
 
 def ask_ai_with_history(user_id, prompt):
-    """Динамический перебор текстовых моделей с автовыбором языка и без Markdown"""
     if user_id not in user_histories:
         user_histories[user_id] = [{
             "role": "system", 
@@ -130,19 +129,28 @@ def generate_image_dynamic(prompt):
             
     return None
 
-def analyze_image_hf(image_bytes):
-    try:
-        API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
-        response = requests.post(API_URL, headers=headers, data=image_bytes)
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and 'generated_text' in result[0]:
-                desc = result[0]['generated_text']
-                return ask_ai_with_history(0, f"Translate this image description to the user's language and describe it: {desc}")
-        return "Не удалось распознать изображение."
-    except Exception as e:
-        return f"Ошибка анализа фото: {e}"
+def analyze_image_dynamic(image_bytes):
+    """Динамический перебор моделей для анализа фото с резервными вариантами"""
+    hf_vision_models = [
+        "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large",
+        "https://api-inference.huggingface.co/models/nlpconnect/vit-gpt2-image-captioning",
+        "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+    ]
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    
+    for api_url in hf_vision_models:
+        try:
+            response = requests.post(api_url, headers=headers, data=image_bytes, timeout=15)
+            if response.status_code == 200:
+                result = response.json()
+                if isinstance(result, list) and len(result) > 0:
+                    desc = result[0].get('generated_text') or result[0].get('caption')
+                    if desc:
+                        return ask_ai_with_history(0, f"Translate this image description to the user's language and describe it: {desc}")
+        except requests.exceptions.RequestException:
+            continue
+            
+    return "Не удалось распознать изображение: все бесплатные сервисы анализа временно недоступны или возникла ошибка сети."
 
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
@@ -310,7 +318,7 @@ def handle_photo(message):
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded = bot.download_file(file_info.file_path)
-        answer = analyze_image_hf(downloaded)
+        answer = analyze_image_dynamic(downloaded)
         bot.edit_message_text(answer, chat_id=message.chat.id, message_id=msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"Ошибка: {e}", chat_id=message.chat.id, message_id=msg.message_id)
@@ -338,3 +346,4 @@ def handle_doc(message):
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     bot.infinity_polling()
+    
