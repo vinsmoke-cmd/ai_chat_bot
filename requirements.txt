@@ -1,6 +1,6 @@
 pyTelegramBotAPI
 flask
-groq
+g4f
 requests
 beautifulsoup4
 pypdf
