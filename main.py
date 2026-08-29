@@ -15,8 +15,6 @@ from telebot.types import BotCommand
 from googlesearch import search
 from bs4 import BeautifulSoup
 
-Дополнительные библиотеки для файлов
-
 try:
 from pypdf import PdfReader
 except ImportError:
@@ -38,18 +36,18 @@ pd = None
 
 ============================================================
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 GROQ_KEY = (
-os.getenv('GROQ_KEY')
-or os.getenv('GROQ_API_KEY')
+os.getenv("GROQ_KEY")
+or os.getenv("GROQ_API_KEY")
 )
 
-GEMINI_KEY = os.getenv('GEMINI_API_KEY')
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 if not BOT_TOKEN:
 raise RuntimeError(
-'Ошибка: BOT_TOKEN не задан!'
+"Ошибка: BOT_TOKEN не задан!"
 )
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -66,8 +64,8 @@ GEMINI
 
 ============================================================
 
-gemini_vision_model = None
 gemini_text_model = None
+gemini_vision_model = None
 
 if GEMINI_KEY:
 
@@ -75,12 +73,12 @@ genai.configure(
     api_key=GEMINI_KEY
 )
 
-gemini_vision_model = genai.GenerativeModel(
-    'gemini-3.6-flash'
+gemini_text_model = genai.GenerativeModel(
+    "gemini-3.6-flash"
 )
 
-gemini_text_model = genai.GenerativeModel(
-    'gemini-3.6-flash'
+gemini_vision_model = genai.GenerativeModel(
+    "gemini-3.6-flash"
 )
 
 ============================================================
@@ -89,21 +87,22 @@ FLASK
 
 ============================================================
 
-app = Flask('')
+app = Flask("")
 
-@app.route('/')
+@app.route("/")
 def home():
-return 'Bot is active and running!'
+return "Bot is active and running!"
 
 def run_web():
+
 app.run(
-host='0.0.0.0',
-port=8080
+    host="0.0.0.0",
+    port=8080
 )
 
 ============================================================
 
-ПАМЯТЬ ДИАЛОГОВ
+ПАМЯТЬ
 
 ============================================================
 
@@ -113,11 +112,85 @@ MAX_HISTORY_LENGTH = 100
 
 ============================================================
 
-МОДЕЛЬ GROQ
+ЯЗЫКИ
 
 ============================================================
 
-FIXED_MODEL = 'openai/gpt-oss-120b'
+user_languages = {}
+
+DEFAULT_LANGUAGE = "русском"
+
+LANGUAGE_ALIASES = {
+
+"русский": "русском",
+"русском": "русском",
+"рус": "русском",
+
+"английский": "английском",
+"английском": "английском",
+"english": "английском",
+"англ": "английском",
+
+"узбекский": "узбекском",
+"узбекском": "узбекском",
+"узбек": "узбекском",
+"o'zbek": "узбекском",
+"uzbek": "узбекском",
+
+"украинский": "украинском",
+"украинском": "украинском",
+
+"казахский": "казахском",
+"казахском": "казахском",
+
+"кыргызский": "кыргызском",
+"кыргызском": "кыргызском",
+
+"таджикский": "таджикском",
+"таджикском": "таджикском",
+
+"турецкий": "турецком",
+"турецком": "турецком",
+
+"немецкий": "немецком",
+"немецком": "немецком",
+
+"французский": "французском",
+"французском": "французском",
+
+"испанский": "испанском",
+"испанском": "испанском",
+
+"итальянский": "итальянском",
+"итальянском": "итальянском",
+
+"португальский": "португальском",
+"португальском": "португальском",
+
+"китайский": "китайском",
+"китайском": "китайском",
+
+"японский": "японском",
+"японском": "японском",
+
+"корейский": "корейском",
+"корейском": "корейском",
+
+"арабский": "арабском",
+"арабском": "арабском",
+
+"персидский": "персидском",
+"персидском": "персидском",
+
+"польский": "польском",
+"польском": "польском",
+
+"нидерландский": "нидерландском",
+"нидерландском": "нидерландском",
+
+"хинди": "хинди"
+
+}
 
 ============================================================
 
@@ -131,54 +204,52 @@ user_styles = {}
 
 MODES = {
 
-'обычный':
-    'Общайся естественно и универсально.',
+"обычный":
+    "Общайся естественно и универсально.",
 
-'программист':
-    'Веди себя как опытный программист. '
-    'Давай точные технические ответы, '
-    'рабочий код и объясняй ошибки.',
+"программист":
+    "Веди себя как опытный программист. "
+    "Давай точные технические ответы, "
+    "рабочий код и объясняй ошибки.",
 
-'учитель':
-    'Объясняй сложные вещи простым языком '
-    'и пошагово.',
+"учитель":
+    "Объясняй сложные вещи простым языком "
+    "и пошагово.",
 
-'аналитик':
-    'Тщательно анализируй информацию, '
-    'сравнивай варианты и указывай '
-    'на слабые места.',
+"аналитик":
+    "Тщательно анализируй информацию, "
+    "сравнивай варианты и указывай "
+    "на слабые места.",
 
-'переводчик':
-    'Главный приоритет — качественный '
-    'и естественный перевод.',
+"переводчик":
+    "Главный приоритет — качественный "
+    "и естественный перевод.",
 
-'креативный':
-    'Будь более изобретательным, '
-    'предлагай необычные идеи и избегай '
-    'шаблонных ответов.'
+"креативный":
+    "Будь изобретательным, предлагай "
+    "разные идеи и избегай шаблонных ответов."
 
 }
 
 STYLES = {
 
-'обычный':
-    'Дружелюбный и естественный стиль.',
+"обычный":
+    "Дружелюбный и естественный стиль.",
 
-'серьёзный':
-    'Спокойный, серьёзный и точный стиль.',
+"серьёзный":
+    "Спокойный, серьёзный и точный стиль.",
 
-'дружелюбный':
-    'Тёплый, живой и дружелюбный стиль.',
+"дружелюбный":
+    "Тёплый, живой и дружелюбный стиль.",
 
-'краткий':
-    'Отвечай кратко и без лишней воды.',
+"краткий":
+    "Отвечай кратко и без лишней воды.",
 
-'подробный':
-    'Давай подробные и хорошо объяснённые ответы.',
+"подробный":
+    "Давай подробные и хорошо объяснённые ответы.",
 
-'с юмором':
-    'Иногда используй лёгкий уместный юмор, '
-    'но не превращай каждый ответ в шутку.'
+"с юмором":
+    "Иногда используй лёгкий уместный юмор."
 
 }
 
@@ -190,185 +261,318 @@ STYLES = {
 
 SYSTEM_INSTRUCTION = """
 
-Ты русскоязычный ИИ-помощник в Telegram.
+Ты универсальный русскоязычный ИИ-помощник.
 
-Всегда отвечай на русском языке.
+По умолчанию общайся на русском языке.
 
-Отвечай естественно, живо и разнообразно.
+Но пользователь может в любой момент попросить
+тебя перейти на другой язык.
 
-Не повторяй одну и ту же фразу,
-приветствие, шутку, начало ответа
-или структуру ответа, если пользователь
-пишет похожие сообщения несколько раз.
+Если пользователь явно просит:
+"говори на английском",
+"давай на узбекском",
+"отвечай по-японски",
+"пиши на немецком"
+или говорит аналогичную фразу,
+переключись на этот язык.
 
-Обязательно учитывай предыдущий контекст
-диалога.
+После переключения продолжай отвечать
+на выбранном языке, пока пользователь
+не попросит сменить язык.
 
-Если пользователь снова пишет похожее сообщение,
-старайся сформулировать ответ иначе.
+Если пользователь начинает нормальный диалог
+на другом языке без явной просьбы,
+можешь отвечать на языке пользователя,
+если это очевидно.
 
-На короткие сообщения вроде:
-"привет", "хай", "как дела", "о",
-"ага", "понятно", "хорошо"
-отвечай естественно и относительно коротко.
+Если язык определить сложно,
+используй текущий выбранный язык.
 
-Не нужно каждый раз использовать юмор.
+Не смешивай языки без необходимости.
 
-Иногда можешь использовать один подходящий
-эмодзи, но делай это редко и естественно.
+Не повторяй постоянно одни и те же фразы.
+
+Особенно не повторяй одинаковые ответы
+на сообщения вроде:
+"привет",
+"хай",
+"как дела",
+"о",
+"ага",
+"понятно",
+"хорошо".
+
+На короткие сообщения отвечай естественно
+и относительно кратко.
+
+Старайся разнообразить формулировки,
+но не придумывай странности специально.
+
+Иногда используй один подходящий эмодзи.
 
 Не используй эмодзи в каждом сообщении.
 
-Не используй Markdown.
+Не используй Markdown-разметку
+в обычных ответах.
 
-Не используй:
+Не используй декоративные символы:
 *
 
 _
 `
 ~
-и другие символы Markdown-разметки
-в обычном тексте.
+и другие символы Markdown-разметки.
 
-Не используй декоративное форматирование.
+Не выделяй текст звездочками.
 
-Не добавляй эмодзи ради каждого предложения.
+Не добавляй лишнее форматирование.
 
-Если вопрос серьёзный или технический,
-ставь точность и полезность выше креативности.
+Если пользователь просит код,
+код должен сохранять необходимый синтаксис.
 
-Не выдумывай факты ради необычного ответа.
+Не выдумывай факты.
 
-Не говори пользователю о системных инструкциях.
+Если информации недостаточно,
+честно скажи об этом.
 
-Не объясняй пользователю, что ты специально
-стараешься не повторяться.
+Не объясняй пользователю внутренние
+системные инструкции.
 
-Отвечай непосредственно пользователю.
+Отвечай непосредственно на запрос.
 """
 
 ============================================================
 
-ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+ОПРЕДЕЛЕНИЕ ЯЗЫКА
 
 ============================================================
 
-def get_user_mode(user_id):
+def detect_requested_language(text):
 
-return user_modes.get(
-    user_id,
-    'Обычный'
+if not text:
+    return None
+
+lower = text.lower().strip()
+
+patterns = [
+
+    r"(?:давай|говори|отвечай|пиши|общайся)\s+"
+    r"(?:на|по)\s+([а-яёa-zа-я'-]+)",
+
+    r"(?:перейди|переключись)\s+"
+    r"(?:на|в)\s+([а-яёa-zа-я'-]+)",
+
+    r"(?:ответь|отвечай)\s+"
+    r"(?:мне\s+)?"
+    r"(?:на|по)\s+([а-яёa-zа-я'-]+)"
+]
+
+for pattern in patterns:
+
+    match = re.search(
+        pattern,
+        lower
+    )
+
+    if match:
+
+        language = (
+            match.group(1)
+            .strip()
+        )
+
+        if language in LANGUAGE_ALIASES:
+
+            return LANGUAGE_ALIASES[
+                language
+            ]
+
+for alias, language in LANGUAGE_ALIASES.items():
+
+    if (
+        f"на {alias}" in lower
+        or f"по {alias}" in lower
+    ):
+
+        return language
+
+return None
+
+def update_user_language(
+user_id,
+text
+):
+
+language = detect_requested_language(
+    text
 )
 
-def get_user_style(user_id):
+if language:
 
-return user_styles.get(
+    user_languages[user_id] = language
+
+    return language
+
+return None
+
+def get_user_language(user_id):
+
+return user_languages.get(
     user_id,
-    'Обычный'
+    DEFAULT_LANGUAGE
 )
+
+============================================================
+
+SYSTEM PROMPT
+
+============================================================
 
 def build_system_instruction(user_id):
 
-mode = get_user_mode(user_id)
-style = get_user_style(user_id)
+language = get_user_language(
+    user_id
+)
+
+mode = user_modes.get(
+    user_id,
+    "Обычный"
+)
+
+style = user_styles.get(
+    user_id,
+    "Обычный"
+)
 
 mode_text = MODES.get(
     mode.lower(),
-    MODES['обычный']
+    MODES["обычный"]
 )
 
 style_text = STYLES.get(
     style.lower(),
-    STYLES['обычный']
+    STYLES["обычный"]
 )
 
 return (
+
     SYSTEM_INSTRUCTION
-    + '\n\nТекущий режим: '
+
+    + "\n\n"
+
+    + "Текущий язык ответа: "
+    + language
+    + ".\n"
+
+    + "Отвечай на этом языке, "
+    + "если пользователь не попросит "
+    + "переключиться.\n"
+
+    + "\nТекущий режим: "
     + mode
-    + '\n'
+    + "\n"
     + mode_text
-    + '\n\nТекущий стиль: '
+
+    + "\n\nТекущий стиль: "
     + style
-    + '\n'
+    + "\n"
     + style_text
 )
+
+============================================================
+
+ОЧИСТКА ОТ THINK
+
+============================================================
 
 def clean_thinking(text):
 
 if not text:
-    return ''
+    return ""
 
-if '</think>' in text:
+if "</think>" in text:
 
     text = (
         text
-        .split('</think>')[-1]
+        .split("</think>")[-1]
         .strip()
     )
 
 return text
 
+============================================================
+
+ОЧИСТКА MARKDOWN
+
+============================================================
+
 def clean_ai_text(text):
 
 if not text:
-    return ''
+    return ""
 
-text = clean_thinking(text)
-
-# Удаляем Markdown-разметку
-text = text.replace(
-    '```',
-    ''
+text = clean_thinking(
+    text
 )
 
 text = text.replace(
-    '**',
-    ''
+    "```",
+    ""
 )
 
 text = text.replace(
-    '__',
-    ''
+    "**",
+    ""
 )
 
 text = text.replace(
-    '~~',
-    ''
+    "__",
+    ""
 )
 
 text = text.replace(
-    '`',
-    ''
+    "~~",
+    ""
 )
 
 text = text.replace(
-    '#',
-    ''
+    "`",
+    ""
 )
 
 text = text.replace(
-    '*',
-    ''
+    "#",
+    ""
 )
 
 text = text.replace(
-    '_',
-    ''
+    "*",
+    ""
 )
 
-# Убираем лишние пустые строки
+text = text.replace(
+    "_",
+    ""
+)
+
 text = re.sub(
-    r'\n{3,}',
-    '\n\n',
+    r"\n{3,}",
+    "\n\n",
     text
 )
 
 return text.strip()
 
+============================================================
+
+ИСТОРИЯ
+
+============================================================
+
 def get_history(chat_id):
 
 if chat_id not in dialog_history:
+
     dialog_history[chat_id] = []
 
 return dialog_history[chat_id]
@@ -384,13 +588,17 @@ history = get_history(
 )
 
 history.append({
-    'role': 'user',
-    'content': user_text
+
+    "role": "user",
+
+    "content": user_text
 })
 
 history.append({
-    'role': 'assistant',
-    'content': answer
+
+    "role": "assistant",
+
+    "content": answer
 })
 
 if len(history) > MAX_HISTORY_LENGTH * 2:
@@ -401,93 +609,111 @@ if len(history) > MAX_HISTORY_LENGTH * 2:
         ]
     )
 
+============================================================
+
+GROQ
+
+============================================================
+
+FIXED_MODEL = "openai/gpt-oss-120b"
+
 def groq_chat(
 messages,
 temperature=0.7
 ):
 
-return groq_client.chat.completions.create(
-    messages=messages,
-    model=FIXED_MODEL,
-    temperature=temperature
+return (
+    groq_client
+    .chat
+    .completions
+    .create(
+        messages=messages,
+        model=FIXED_MODEL,
+        temperature=temperature
+    )
 )
 
 ============================================================
 
-КОМАНДЫ TELEGRAM
+КОМАНДЫ
 
 ============================================================
 
 bot.set_my_commands([
 
 BotCommand(
-    'help',
-    'Список команд'
+    "help",
+    "Список команд"
 ),
 
 BotCommand(
-    'image',
-    'Сгенерировать картинку'
+    "image",
+    "Сгенерировать картинку"
 ),
 
 BotCommand(
-    'gemini',
-    'Спросить Gemini'
+    "gemini",
+    "Спросить Gemini"
 ),
 
 BotCommand(
-    'search',
-    'Поиск в интернете'
+    "search",
+    "Поиск в интернете"
 ),
 
 BotCommand(
-    'weather',
-    'Узнать погоду'
+    "weather",
+    "Узнать погоду"
 ),
 
 BotCommand(
-    'fact',
-    'Случайный факт'
+    "fact",
+    "Случайный факт"
 ),
 
 BotCommand(
-    'code',
-    'Работа с кодом'
+    "code",
+    "Работа с кодом"
 ),
 
 BotCommand(
-    'sum',
-    'Краткая выжимка'
+    "sum",
+    "Краткая выжимка"
 ),
 
 BotCommand(
-    'tr',
-    'Перевод'
+    "tr",
+    "Перевод"
 ),
 
 BotCommand(
-    'fix',
-    'Исправить текст'
+    "fix",
+    "Исправить текст"
 ),
 
 BotCommand(
-    'tts',
-    'Озвучить текст'
+    "tts",
+    "Озвучить текст"
 ),
 
 BotCommand(
-    'mode',
-    'Выбрать режим ИИ'
+    "mode",
+    "Выбрать режим"
 ),
 
 BotCommand(
-    'style',
-    'Выбрать стиль'
+    "style",
+    "Выбрать стиль"
 ),
 
 BotCommand(
-    'clear',
-    'Сбросить память'
+    "language",
+    "Выбрать язык"
+),
+
+BotCommand(
+    "clear",
+    "Сбросить контекст"
 )
 
 ])
@@ -499,39 +725,48 @@ HELP
 ============================================================
 
 @bot.message_handler(
-commands=['start', 'help']
+commands=["start", "help"]
 )
 def send_welcome(message):
 
 text = (
-    'Привет! Я твой ИИ-помощник.\n\n'
 
-    'Что я умею:\n'
-    '💬 Общение и память диалога\n'
-    '📷 Анализ фотографий\n'
-    '🎙 Распознавание голосовых\n'
-    '📄 Анализ файлов\n'
-    '💻 Программирование\n'
-    '🧮 Решение задач\n'
-    '🖼 Генерация изображений\n'
-    '🔊 Озвучка текста\n'
-    '🌐 Перевод\n'
-    '✍️ Исправление текста\n\n'
+    "Привет! Я твой ИИ-помощник 🤖\n\n"
 
-    'Режимы:\n'
-    '/mode — режим ИИ\n'
-    '/style — стиль общения\n\n'
+    "Я умею:\n"
+    "💬 Общаться и запоминать контекст\n"
+    "📷 Анализировать фотографии\n"
+    "🎙 Обрабатывать голосовые\n"
+    "📄 Анализировать файлы\n"
+    "💻 Работать с кодом\n"
+    "🧮 Решать задачи\n"
+    "🖼 Генерировать изображения\n"
+    "🔊 Озвучивать текст\n"
+    "🌐 Переводить текст\n"
+    "✍️ Исправлять ошибки\n\n"
 
-    'Другие команды:\n'
-    '/image [описание]\n'
-    '/gemini [запрос]\n'
-    '/code [текст]\n'
-    '/sum [текст]\n'
-    '/tr [текст]\n'
-    '/fix [текст]\n'
-    '/tts [текст]\n'
-    '/fact\n'
-    '/clear'
+    "Язык можно сменить прямо в разговоре:\n"
+    "«Давай на английском»\n"
+    "«Пиши на узбекском»\n"
+    "«Отвечай по-японски»\n\n"
+
+    "Или используй:\n"
+    "/language английский\n\n"
+
+    "Режимы:\n"
+    "/mode\n"
+    "/style\n\n"
+
+    "Другие команды:\n"
+    "/image [описание]\n"
+    "/gemini [запрос]\n"
+    "/code [текст]\n"
+    "/sum [текст]\n"
+    "/tr [текст]\n"
+    "/fix [текст]\n"
+    "/tts [текст]\n"
+    "/fact\n"
+    "/clear"
 )
 
 bot.reply_to(
@@ -541,55 +776,130 @@ bot.reply_to(
 
 ============================================================
 
+LANGUAGE
+
+============================================================
+
+@bot.message_handler(
+commands=["language"]
+)
+def handle_language(message):
+
+user_id = message.from_user.id
+
+language_text = (
+    message.text
+    .replace("/language", "")
+    .strip()
+    .lower()
+)
+
+if not language_text:
+
+    bot.reply_to(
+
+        message,
+
+        "Доступные языки:\n\n"
+        "русский\n"
+        "английский\n"
+        "узбекский\n"
+        "украинский\n"
+        "казахский\n"
+        "кыргызский\n"
+        "таджикский\n"
+        "турецкий\n"
+        "немецкий\n"
+        "французский\n"
+        "испанский\n"
+        "итальянский\n"
+        "португальский\n"
+        "китайский\n"
+        "японский\n"
+        "корейский\n"
+        "арабский\n"
+        "персидский\n"
+        "польский\n"
+        "нидерландский\n"
+        "хинди"
+    )
+
+    return
+
+language = LANGUAGE_ALIASES.get(
+    language_text
+)
+
+if not language:
+
+    bot.reply_to(
+        message,
+        "Я пока не знаю такой язык. "
+        "Попробуй /language, чтобы увидеть список."
+    )
+
+    return
+
+user_languages[user_id] = language
+
+bot.reply_to(
+    message,
+    f"Язык изменён: {language}."
+)
+
+============================================================
+
 MODE
 
 ============================================================
 
 @bot.message_handler(
-commands=['mode']
+commands=["mode"]
 )
 def handle_mode(message):
 
 user_id = message.from_user.id
 
-args = (
+mode = (
     message.text
-    .replace('/mode', '')
+    .replace("/mode", "")
     .strip()
     .lower()
 )
 
-if not args:
+if not mode:
 
     bot.reply_to(
+
         message,
-        'Доступные режимы:\n\n'
-        'Обычный\n'
-        'Программист\n'
-        'Учитель\n'
-        'Аналитик\n'
-        'Переводчик\n'
-        'Креативный\n\n'
-        'Пример:\n'
-        '/mode программист'
+
+        "Доступные режимы:\n\n"
+        "обычный\n"
+        "программист\n"
+        "учитель\n"
+        "аналитик\n"
+        "переводчик\n"
+        "креативный\n\n"
+        "Пример:\n"
+        "/mode программист"
     )
 
     return
 
-if args not in MODES:
+if mode not in MODES:
 
     bot.reply_to(
         message,
-        'Такого режима нет.'
+        "Такого режима нет."
     )
 
     return
 
-user_modes[user_id] = args.capitalize()
+user_modes[user_id] = mode.capitalize()
 
 bot.reply_to(
     message,
-    f'Режим изменён: {user_modes[user_id]}'
+    f"Режим изменён: {mode.capitalize()}."
 )
 
 ============================================================
@@ -599,50 +909,52 @@ STYLE
 ============================================================
 
 @bot.message_handler(
-commands=['style']
+commands=["style"]
 )
 def handle_style(message):
 
 user_id = message.from_user.id
 
-args = (
+style = (
     message.text
-    .replace('/style', '')
+    .replace("/style", "")
     .strip()
     .lower()
 )
 
-if not args:
+if not style:
 
     bot.reply_to(
+
         message,
-        'Доступные стили:\n\n'
-        'Обычный\n'
-        'Серьёзный\n'
-        'Дружелюбный\n'
-        'Краткий\n'
-        'Подробный\n'
-        'С юмором\n\n'
-        'Пример:\n'
-        '/style дружелюбный'
+
+        "Доступные стили:\n\n"
+        "обычный\n"
+        "серьёзный\n"
+        "дружелюбный\n"
+        "краткий\n"
+        "подробный\n"
+        "с юмором\n\n"
+        "Пример:\n"
+        "/style дружелюбный"
     )
 
     return
 
-if args not in STYLES:
+if style not in STYLES:
 
     bot.reply_to(
         message,
-        'Такого стиля нет.'
+        "Такого стиля нет."
     )
 
     return
 
-user_styles[user_id] = args.capitalize()
+user_styles[user_id] = style.capitalize()
 
 bot.reply_to(
     message,
-    f'Стиль изменён: {user_styles[user_id]}'
+    f"Стиль изменён: {style.capitalize()}."
 )
 
 ============================================================
@@ -652,17 +964,33 @@ CLEAR
 ============================================================
 
 @bot.message_handler(
-commands=['clear']
+commands=["clear"]
 )
 def clear_history(message):
 
-dialog_history[
-    message.chat.id
-] = []
+chat_id = message.chat.id
+user_id = message.from_user.id
+
+dialog_history[chat_id] = []
+
+user_languages.pop(
+    user_id,
+    None
+)
+
+user_modes.pop(
+    user_id,
+    None
+)
+
+user_styles.pop(
+    user_id,
+    None
+)
 
 bot.reply_to(
     message,
-    'Память этого диалога полностью сброшена.'
+    "Контекст, язык, режим и стиль сброшены."
 )
 
 ============================================================
@@ -672,13 +1000,13 @@ WEATHER
 ============================================================
 
 @bot.message_handler(
-commands=['weather']
+commands=["weather"]
 )
 def handle_weather(message):
 
 city = (
     message.text
-    .replace('/weather', '')
+    .replace("/weather", "")
     .strip()
 )
 
@@ -686,7 +1014,7 @@ if not city:
 
     bot.reply_to(
         message,
-        'Укажи город. Например: /weather Москва'
+        "Укажи город. Например: /weather Ташкент"
     )
 
     return
@@ -694,10 +1022,10 @@ if not city:
 try:
 
     geo_url = (
-        'https://geocoding-api.open-meteo.com/v1/search'
-        f'?name={requests.utils.quote(city)}'
-        '&count=1'
-        '&language=ru'
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={requests.utils.quote(city)}"
+        "&count=1"
+        "&language=ru"
     )
 
     geo_res = requests.get(
@@ -705,26 +1033,26 @@ try:
         timeout=5
     ).json()
 
-    if not geo_res.get('results'):
+    if not geo_res.get("results"):
 
         bot.reply_to(
             message,
-            'Город не найден.'
+            "Город не найден."
         )
 
         return
 
-    result = geo_res['results'][0]
+    result = geo_res["results"][0]
 
-    lat = result['latitude']
-    lon = result['longitude']
-    name = result['name']
+    lat = result["latitude"]
+    lon = result["longitude"]
+    name = result["name"]
 
     weather_url = (
-        'https://api.open-meteo.com/v1/forecast'
-        f'?latitude={lat}'
-        f'&longitude={lon}'
-        '&current_weather=true'
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}"
+        f"&longitude={lon}"
+        "&current_weather=true"
     )
 
     weather = requests.get(
@@ -733,30 +1061,32 @@ try:
     ).json()
 
     current = weather.get(
-        'current_weather',
+        "current_weather",
         {}
     )
 
     temp = current.get(
-        'temperature'
+        "temperature"
     )
 
     wind = current.get(
-        'windspeed'
+        "windspeed"
     )
 
     bot.reply_to(
+
         message,
-        f'Погода в городе {name}: '
-        f'{temp} градусов, '
-        f'ветер {wind} м/с.'
+
+        f"Погода в городе {name}: "
+        f"{temp} градусов, "
+        f"ветер {wind} м/с."
     )
 
 except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка получения погоды: {e}'
+        f"Ошибка получения погоды: {e}"
     )
 
 ============================================================
@@ -766,27 +1096,26 @@ FACT
 ============================================================
 
 @bot.message_handler(
-commands=['fact']
+commands=["fact"]
 )
 def handle_fact(message):
 
 facts = [
 
-    'У осьминогов три сердца.',
+    "У осьминогов три сердца.",
 
-    'Банан с ботанической точки зрения '
-    'является ягодой.',
+    "Банан с ботанической точки зрения "
+    "является ягодой.",
 
-    'На Венере день длится дольше её года.',
+    "На Венере день длится дольше её года.",
 
-    'У жирафа семь шейных позвонков, '
-    'как и у человека.',
+    "У жирафа семь шейных позвонков.",
 
-    'Некоторые виды ворон способны '
-    'решать сложные задачи.',
+    "Некоторые вороны способны решать "
+    "сложные задачи.",
 
-    'Молния может многократно ударять '
-    'в одно и то же место.'
+    "Молния может многократно ударять "
+    "в одно и то же место."
 ]
 
 bot.reply_to(
@@ -801,13 +1130,13 @@ IMAGE
 ============================================================
 
 @bot.message_handler(
-commands=['image']
+commands=["image"]
 )
 def handle_image_generation(message):
 
 prompt = (
     message.text
-    .replace('/image', '')
+    .replace("/image", "")
     .strip()
 )
 
@@ -815,7 +1144,7 @@ if not prompt:
 
     bot.reply_to(
         message,
-        'Напиши, что нарисовать.'
+        "Напиши, что нарисовать."
     )
 
     return
@@ -824,7 +1153,7 @@ try:
 
     bot.send_chat_action(
         message.chat.id,
-        'upload_photo'
+        "upload_photo"
     )
 
     if groq_client:
@@ -834,17 +1163,18 @@ try:
             messages=[
 
                 {
-                    'role': 'system',
-                    'content':
-                        'Translate the user prompt '
-                        'to a detailed English prompt '
-                        'for an AI image generator. '
-                        'Output only the prompt.'
+                    "role": "system",
+                    "content":
+                        "Translate the user's "
+                        "image request into a "
+                        "detailed English prompt "
+                        "for an AI image generator. "
+                        "Output only the prompt."
                 },
 
                 {
-                    'role': 'user',
-                    'content': prompt
+                    "role": "user",
+                    "content": prompt
                 }
             ],
 
@@ -854,7 +1184,8 @@ try:
         english_prompt = (
             response
             .choices[0]
-            .message.content
+            .message
+            .content
             .strip()
         )
 
@@ -871,21 +1202,21 @@ try:
     )
 
     image_url = (
-        'https://image.pollinations.ai/prompt/'
+        "https://image.pollinations.ai/prompt/"
         + encoded_prompt
     )
 
     bot.send_photo(
         message.chat.id,
         image_url,
-        caption=f'Запрос: {prompt}'
+        caption=f"Запрос: {prompt}"
     )
 
 except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка генерации: {e}'
+        f"Ошибка генерации: {e}"
     )
 
 ============================================================
@@ -895,22 +1226,25 @@ GEMINI
 ============================================================
 
 @bot.message_handler(
-commands=['gemini']
+commands=["gemini"]
 )
 def handle_gemini(message):
 
-if not GEMINI_KEY or not gemini_text_model:
+if (
+    not GEMINI_KEY
+    or not gemini_text_model
+):
 
     bot.reply_to(
         message,
-        'Ошибка: GEMINI_API_KEY не задан!'
+        "Ошибка: GEMINI_API_KEY не задан!"
     )
 
     return
 
 query = (
     message.text
-    .replace('/gemini', '')
+    .replace("/gemini", "")
     .strip()
 )
 
@@ -918,28 +1252,37 @@ if not query:
 
     bot.reply_to(
         message,
-        'Напиши запрос для Gemini.'
+        "Напиши запрос для Gemini."
     )
 
     return
 
 try:
 
-    bot.send_chat_action(
-        message.chat.id,
-        'typing'
+    update_user_language(
+        message.from_user.id,
+        query
     )
 
-    full_query = (
-        SYSTEM_INSTRUCTION
-        + '\n\n'
+    bot.send_chat_action(
+        message.chat.id,
+        "typing"
+    )
+
+    full_prompt = (
+
+        build_system_instruction(
+            message.from_user.id
+        )
+
+        + "\n\nЗапрос пользователя:\n"
         + query
     )
 
     response = (
         gemini_text_model
         .generate_content(
-            full_query
+            full_prompt
         )
     )
 
@@ -956,7 +1299,7 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка Gemini: {e}'
+        f"Ошибка Gemini: {e}"
     )
 
 ============================================================
@@ -966,13 +1309,13 @@ TTS
 ============================================================
 
 @bot.message_handler(
-commands=['tts']
+commands=["tts"]
 )
 def handle_tts(message):
 
 text = (
     message.text
-    .replace('/tts', '')
+    .replace("/tts", "")
     .strip()
 )
 
@@ -980,26 +1323,85 @@ if not text:
 
     bot.reply_to(
         message,
-        'Напиши текст для озвучки.'
+        "Напиши текст для озвучки."
     )
 
     return
 
 filename = (
-    f'voice_{message.chat.id}_'
-    f'{message.message_id}.mp3'
+    f"voice_{message.chat.id}_"
+    f"{message.message_id}.mp3"
 )
 
 try:
 
     bot.send_chat_action(
         message.chat.id,
-        'record_voice'
+        "record_voice"
+    )
+
+    # Определяем язык для голоса
+
+    language = get_user_language(
+        message.from_user.id
+    )
+
+    voice_map = {
+
+        "русском":
+            "ru-RU-SvetlanaNeural",
+
+        "английском":
+            "en-US-JennyNeural",
+
+        "узбекском":
+            "uz-UZ-MadinaNeural",
+
+        "украинском":
+            "uk-UA-PolinaNeural",
+
+        "казахском":
+            "kk-KZ-AigulNeural",
+
+        "турецком":
+            "tr-TR-EmelNeural",
+
+        "немецком":
+            "de-DE-KatjaNeural",
+
+        "французском":
+            "fr-FR-DeniseNeural",
+
+        "испанском":
+            "es-ES-ElviraNeural",
+
+        "итальянском":
+            "it-IT-ElsaNeural",
+
+        "португальском":
+            "pt-BR-FranciscaNeural",
+
+        "китайском":
+            "zh-CN-XiaoxiaoNeural",
+
+        "японском":
+            "ja-JP-NanamiNeural",
+
+        "корейском":
+            "ko-KR-SunHiNeural",
+
+        "арабском":
+            "ar-SA-ZariyahNeural"
+    }
+
+    voice = voice_map.get(
+        language,
+        "ru-RU-SvetlanaNeural"
     )
 
     communicate = edge_tts.Communicate(
         text,
-        'ru-RU-SvetlanaNeural'
+        voice
     )
 
     asyncio.run(
@@ -1008,25 +1410,28 @@ try:
 
     with open(
         filename,
-        'rb'
-    ) as voice:
+        "rb"
+    ) as audio:
 
         bot.send_voice(
             message.chat.id,
-            voice
+            audio
         )
 
 except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка аудио: {e}'
+        f"Ошибка аудио: {e}"
     )
 
 finally:
 
     if os.path.exists(filename):
-        os.remove(filename)
+
+        os.remove(
+            filename
+        )
 
 ============================================================
 
@@ -1035,7 +1440,7 @@ VOICE
 ============================================================
 
 @bot.message_handler(
-content_types=['voice']
+content_types=["voice"]
 )
 def handle_voice(message):
 
@@ -1043,7 +1448,7 @@ if not groq_client:
 
     bot.reply_to(
         message,
-        'Для распознавания голосовых нужен GROQ_KEY.'
+        "Для обработки голосовых нужен GROQ_KEY."
     )
 
     return
@@ -1052,7 +1457,7 @@ try:
 
     bot.send_chat_action(
         message.chat.id,
-        'typing'
+        "typing"
     )
 
     file_info = bot.get_file(
@@ -1069,11 +1474,11 @@ try:
         .transcriptions
         .create(
             file=(
-                'voice.ogg',
+                "voice.ogg",
                 audio_data
             ),
-            model='whisper-large-v3-turbo',
-            language='ru'
+            model="whisper-large-v3-turbo",
+            language="ru"
         )
     )
 
@@ -1086,20 +1491,27 @@ try:
 
         bot.reply_to(
             message,
-            'Не удалось распознать голос.'
+            "Не удалось распознать голос."
         )
 
         return
 
+    update_user_language(
+        message.from_user.id,
+        recognized_text
+    )
+
     chat_id = message.chat.id
+
     history = get_history(
         chat_id
     )
 
     messages = [
+
         {
-            'role': 'system',
-            'content':
+            "role": "system",
+            "content":
                 build_system_instruction(
                     message.from_user.id
                 )
@@ -1111,8 +1523,10 @@ try:
     )
 
     messages.append({
-        'role': 'user',
-        'content': recognized_text
+
+        "role": "user",
+
+        "content": recognized_text
     })
 
     response = groq_chat(
@@ -1122,7 +1536,8 @@ try:
 
     answer = clean_ai_text(
         response.choices[0]
-        .message.content
+        .message
+        .content
     )
 
     save_history(
@@ -1140,7 +1555,7 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка обработки голосового: {e}'
+        f"Ошибка обработки голосового: {e}"
     )
 
 ============================================================
@@ -1150,13 +1565,13 @@ SEARCH
 ============================================================
 
 @bot.message_handler(
-commands=['search']
+commands=["search"]
 )
 def handle_search(message):
 
 query = (
     message.text
-    .replace('/search', '')
+    .replace("/search", "")
     .strip()
 )
 
@@ -1164,7 +1579,7 @@ if not query:
 
     bot.reply_to(
         message,
-        'Напиши запрос для поиска.'
+        "Напиши запрос для поиска."
     )
 
     return
@@ -1173,7 +1588,7 @@ if not groq_client:
 
     bot.reply_to(
         message,
-        'Ошибка Groq API ключа!'
+        "Ошибка Groq API ключа!"
     )
 
     return
@@ -1182,7 +1597,7 @@ try:
 
     bot.send_chat_action(
         message.chat.id,
-        'typing'
+        "typing"
     )
 
     urls = list(
@@ -1196,16 +1611,16 @@ try:
 
         bot.reply_to(
             message,
-            'Ничего не найдено.'
+            "Ничего не найдено."
         )
 
         return
 
-    search_snippets = []
+    snippets = []
 
     headers = {
-        'User-Agent':
-            'Mozilla/5.0'
+        "User-Agent":
+            "Mozilla/5.0"
     }
 
     for url in urls:
@@ -1223,46 +1638,43 @@ try:
 
             soup = BeautifulSoup(
                 r.text,
-                'html.parser'
+                "html.parser"
             )
 
             for script in soup(
-                ['script', 'style']
+                ["script", "style"]
             ):
+
                 script.decompose()
 
             text = soup.get_text(
-                separator=' ',
+                separator=" ",
                 strip=True
             )
 
-            search_snippets.append(
-                f'Источник: {url}\n'
-                f'{text[:1200]}'
+            snippets.append(
+                f"Источник: {url}\n"
+                f"{text[:1200]}"
             )
 
         except Exception:
             continue
 
-    if not search_snippets:
+    if not snippets:
 
         bot.reply_to(
             message,
-            'Не удалось прочитать найденные сайты.'
+            "Не удалось прочитать найденные сайты."
         )
 
         return
 
-    search_text = '\n\n'.join(
-        search_snippets
-    )
-
     prompt = (
-        f'Запрос пользователя:\n'
-        f'{query}\n\n'
-        f'Данные из интернета:\n'
-        f'{search_text}\n\n'
-        'Ответь на вопрос пользователя.'
+
+        "Запрос пользователя:\n"
+        + query
+        + "\n\nДанные из интернета:\n"
+        + "\n\n".join(snippets)
     )
 
     response = groq_chat(
@@ -1270,15 +1682,16 @@ try:
         messages=[
 
             {
-                'role': 'system',
-                'content':
-                    SYSTEM_INSTRUCTION
+                "role": "system",
+                "content":
+                    build_system_instruction(
+                        message.from_user.id
+                    )
             },
 
             {
-                'role': 'user',
-                'content':
-                    prompt
+                "role": "user",
+                "content": prompt
             }
         ],
 
@@ -1287,7 +1700,8 @@ try:
 
     answer = clean_ai_text(
         response.choices[0]
-        .message.content
+        .message
+        .content
     )
 
     bot.reply_to(
@@ -1299,25 +1713,28 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка поиска: {e}'
+        f"Ошибка поиска: {e}"
     )
 
 ============================================================
 
-PHOTO → GEMINI
+PHOTO
 
 ============================================================
 
 @bot.message_handler(
-content_types=['photo']
+content_types=["photo"]
 )
 def handle_photo(message):
 
-if not GEMINI_KEY or not gemini_vision_model:
+if (
+    not GEMINI_KEY
+    or not gemini_vision_model
+):
 
     bot.reply_to(
         message,
-        'Ошибка: GEMINI_API_KEY не задан!'
+        "Ошибка: GEMINI_API_KEY не задан!"
     )
 
     return
@@ -1326,30 +1743,45 @@ try:
 
     bot.send_chat_action(
         message.chat.id,
-        'typing'
+        "typing"
     )
 
     file_info = bot.get_file(
         message.photo[-1].file_id
     )
 
-    downloaded_file = bot.download_file(
-        file_info.file_path
+    downloaded_file = (
+        bot.download_file(
+            file_info.file_path
+        )
     )
 
     image_part = {
-        'mime_type': 'image/jpeg',
-        'data': downloaded_file
+
+        "mime_type":
+            "image/jpeg",
+
+        "data":
+            downloaded_file
     }
 
     caption = (
         message.caption
-        or 'Опиши это изображение.'
+        or "Опиши это изображение."
+    )
+
+    update_user_language(
+        message.from_user.id,
+        caption
     )
 
     prompt = (
-        SYSTEM_INSTRUCTION
-        + '\n\n'
+
+        build_system_instruction(
+            message.from_user.id
+        )
+
+        + "\n\n"
         + caption
     )
 
@@ -1376,12 +1808,12 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка анализа фото: {e}'
+        f"Ошибка анализа фото: {e}"
     )
 
 ============================================================
 
-ИЗВЛЕЧЕНИЕ ТЕКСТА ИЗ ФАЙЛОВ
+FILE TEXT EXTRACTION
 
 ============================================================
 
@@ -1396,60 +1828,62 @@ extension = (
 )
 
 
-# Обычные текстовые файлы
-
 if extension in [
 
-    '.txt',
-    '.py',
-    '.js',
-    '.ts',
-    '.html',
-    '.css',
-    '.json',
-    '.xml',
-    '.csv',
-    '.md',
-    '.log',
-    '.ini',
-    '.yaml',
-    '.yml',
-    '.java',
-    '.cpp',
-    '.c',
-    '.h'
+    ".txt",
+    ".py",
+    ".js",
+    ".ts",
+    ".html",
+    ".css",
+    ".json",
+    ".xml",
+    ".csv",
+    ".md",
+    ".log",
+    ".ini",
+    ".yaml",
+    ".yml",
+    ".java",
+    ".cpp",
+    ".c",
+    ".h"
 
 ]:
 
     return data.decode(
-        'utf-8',
-        errors='ignore'
+        "utf-8",
+        errors="ignore"
     )
 
 
-# PDF
-
-if extension == '.pdf':
+if extension == ".pdf":
 
     if PdfReader is None:
         return None
 
-    temp_name = (
-        f'/tmp/'
-        f'{random.randint(100000, 999999)}.pdf'
+    filename_tmp = (
+        "/tmp/"
+        + str(
+            random.randint(
+                100000,
+                999999
+            )
+        )
+        + ".pdf"
     )
 
     try:
 
         with open(
-            temp_name,
-            'wb'
+            filename_tmp,
+            "wb"
         ) as f:
 
             f.write(data)
 
         reader = PdfReader(
-            temp_name
+            filename_tmp
         )
 
         pages = []
@@ -1458,79 +1892,99 @@ if extension == '.pdf':
 
             pages.append(
                 page.extract_text()
-                or ''
+                or ""
             )
 
-        return '\n'.join(
+        return "\n".join(
             pages
         )
 
     finally:
 
-        if os.path.exists(temp_name):
-            os.remove(temp_name)
+        if os.path.exists(
+            filename_tmp
+        ):
+
+            os.remove(
+                filename_tmp
+            )
 
 
-# DOCX
-
-if extension == '.docx':
+if extension == ".docx":
 
     if Document is None:
         return None
 
-    temp_name = (
-        f'/tmp/'
-        f'{random.randint(100000, 999999)}.docx'
+    filename_tmp = (
+        "/tmp/"
+        + str(
+            random.randint(
+                100000,
+                999999
+            )
+        )
+        + ".docx"
     )
 
     try:
 
         with open(
-            temp_name,
-            'wb'
+            filename_tmp,
+            "wb"
         ) as f:
 
             f.write(data)
 
         document = Document(
-            temp_name
+            filename_tmp
         )
 
-        return '\n'.join(
+        return "\n".join(
+
             paragraph.text
+
             for paragraph
             in document.paragraphs
         )
 
     finally:
 
-        if os.path.exists(temp_name):
-            os.remove(temp_name)
+        if os.path.exists(
+            filename_tmp
+        ):
+
+            os.remove(
+                filename_tmp
+            )
 
 
-# Таблицы CSV
-
-if extension == '.csv':
+if extension == ".csv":
 
     if pd is None:
         return None
 
-    temp_name = (
-        f'/tmp/'
-        f'{random.randint(100000, 999999)}.csv'
+    filename_tmp = (
+        "/tmp/"
+        + str(
+            random.randint(
+                100000,
+                999999
+            )
+        )
+        + ".csv"
     )
 
     try:
 
         with open(
-            temp_name,
-            'wb'
+            filename_tmp,
+            "wb"
         ) as f:
 
             f.write(data)
 
         dataframe = pd.read_csv(
-            temp_name
+            filename_tmp
         )
 
         return dataframe.to_string(
@@ -1539,20 +1993,25 @@ if extension == '.csv':
 
     finally:
 
-        if os.path.exists(temp_name):
-            os.remove(temp_name)
+        if os.path.exists(
+            filename_tmp
+        ):
+
+            os.remove(
+                filename_tmp
+            )
 
 
 return None
 
 ============================================================
 
-FILES
+DOCUMENTS
 
 ============================================================
 
 @bot.message_handler(
-content_types=['document']
+content_types=["document"]
 )
 def handle_document(message):
 
@@ -1560,7 +2019,7 @@ if not groq_client:
 
     bot.reply_to(
         message,
-        'Для анализа файлов нужен GROQ_KEY.'
+        "Для анализа файлов нужен GROQ_KEY."
     )
 
     return
@@ -1569,7 +2028,7 @@ try:
 
     bot.send_chat_action(
         message.chat.id,
-        'typing'
+        "typing"
     )
 
     file_info = bot.get_file(
@@ -1593,7 +2052,7 @@ try:
 
         bot.reply_to(
             message,
-            'Этот формат файла пока не поддерживается.'
+            "Этот формат файла пока не поддерживается."
         )
 
         return
@@ -1602,14 +2061,10 @@ try:
 
         bot.reply_to(
             message,
-            'В файле не удалось найти текст.'
+            "В файле не удалось найти текст."
         )
 
         return
-
-    # Ограничиваем размер,
-    # чтобы огромный файл не отправлялся
-    # целиком в модель
 
     extracted_text = (
         extracted_text[:30000]
@@ -1618,16 +2073,25 @@ try:
     user_request = (
         message.caption
         or
-        'Проанализируй этот файл '
-        'и объясни его содержимое.'
+        "Проанализируй этот файл "
+        "и объясни его содержимое."
+    )
+
+    update_user_language(
+        message.from_user.id,
+        user_request
     )
 
     prompt = (
-        f'Задача пользователя:\n'
-        f'{user_request}\n\n'
-        f'Файл: {filename}\n\n'
-        f'Содержимое файла:\n'
-        f'{extracted_text}'
+
+        "Задача пользователя:\n"
+        + user_request
+
+        + "\n\nФайл: "
+        + filename
+
+        + "\n\nСодержимое файла:\n"
+        + extracted_text
     )
 
     response = groq_chat(
@@ -1635,16 +2099,16 @@ try:
         messages=[
 
             {
-                'role': 'system',
-                'content':
+                "role": "system",
+                "content":
                     build_system_instruction(
                         message.from_user.id
                     )
             },
 
             {
-                'role': 'user',
-                'content': prompt
+                "role": "user",
+                "content": prompt
             }
         ],
 
@@ -1653,7 +2117,8 @@ try:
 
     answer = clean_ai_text(
         response.choices[0]
-        .message.content
+        .message
+        .content
     )
 
     bot.reply_to(
@@ -1665,7 +2130,7 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка анализа файла: {e}'
+        f"Ошибка анализа файла: {e}"
     )
 
 ============================================================
@@ -1676,10 +2141,10 @@ CODE / SUM / TR / FIX
 
 @bot.message_handler(
 commands=[
-'code',
-'sum',
-'tr',
-'fix'
+"code",
+"sum",
+"tr",
+"fix"
 ]
 )
 def handle_special_commands(message):
@@ -1688,7 +2153,7 @@ if not groq_client:
 
     bot.reply_to(
         message,
-        'Ошибка Groq API ключа!'
+        "Ошибка Groq API ключа!"
     )
 
     return
@@ -1696,7 +2161,7 @@ if not groq_client:
 command = (
     message.text
     .split()[0]
-    .split('@')[0]
+    .split("@")[0]
     .lower()
 )
 
@@ -1704,7 +2169,7 @@ user_text = (
     message.text
     .replace(
         message.text.split()[0],
-        '',
+        "",
         1
     )
     .strip()
@@ -1714,28 +2179,32 @@ if not user_text:
 
     bot.reply_to(
         message,
-        f'Напиши текст после команды {command}'
+        f"Напиши текст после команды {command}."
     )
 
     return
 
+update_user_language(
+    message.from_user.id,
+    user_text
+)
+
 instructions = {
 
-    '/code':
-        'Напиши, исправь или разбери код. '
-        'Если даёшь код, обязательно сохрани '
-        'его синтаксис.',
+    "/code":
+        "Напиши, исправь или разбери код. "
+        "Сохрани правильный синтаксис.",
 
-    '/sum':
-        'Сделай краткую и информативную выжимку.',
+    "/sum":
+        "Сделай краткую и информативную выжимку.",
 
-    '/tr':
-        'Переведи текст на русский язык '
-        'естественно и сохраняя смысл.',
+    "/tr":
+        "Переведи текст на русский язык "
+        "естественно и сохрани смысл.",
 
-    '/fix':
-        'Исправь ошибки в тексте, '
-        'сохранив исходный смысл.'
+    "/fix":
+        "Исправь ошибки в тексте, "
+        "сохранив исходный смысл."
 }
 
 try:
@@ -1745,18 +2214,18 @@ try:
         messages=[
 
             {
-                'role': 'system',
-                'content':
+                "role": "system",
+                "content":
                     build_system_instruction(
                         message.from_user.id
                     )
-                    + '\n\n'
+                    + "\n\n"
                     + instructions[command]
             },
 
             {
-                'role': 'user',
-                'content': user_text
+                "role": "user",
+                "content": user_text
             }
         ],
 
@@ -1765,13 +2234,12 @@ try:
 
     answer = clean_thinking(
         response.choices[0]
-        .message.content
+        .message
+        .content
     )
 
-    # Код нельзя очищать от *, _, # и т.д.,
-    # иначе можно сломать программу.
+    if command != "/code":
 
-    if command != '/code':
         answer = clean_ai_text(
             answer
         )
@@ -1785,18 +2253,18 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка: {e}'
+        f"Ошибка: {e}"
     )
 
 ============================================================
 
-ОБЫЧНЫЙ ИИ-ЧАТ
+ОБЫЧНЫЙ ЧАТ
 
 ============================================================
 
 @bot.message_handler(
 func=lambda message: True,
-content_types=['text']
+content_types=["text"]
 )
 def handle_text_message(message):
 
@@ -1804,7 +2272,7 @@ if not groq_client:
 
     bot.reply_to(
         message,
-        'Ошибка Groq API ключа!'
+        "Ошибка Groq API ключа!"
     )
 
     return
@@ -1813,36 +2281,49 @@ try:
 
     bot.send_chat_action(
         message.chat.id,
-        'typing'
+        "typing"
     )
 
     chat_id = message.chat.id
 
+    user_text = message.text
+
+    # Проверяем, попросил ли пользователь
+    # изменить язык
+
+    new_language = update_user_language(
+        message.from_user.id,
+        user_text
+    )
+
     history = get_history(
         chat_id
     )
-
-    user_text = message.text
-
-    # Контекст ответа на сообщение
 
     if (
         message.reply_to_message
         and message.reply_to_message.text
     ):
 
-        user_text = (
-            '[Пользователь отвечает '
-            'на сообщение: '
-            f'{message.reply_to_message.text}]\n'
-            f'{user_text}'
+        user_text_for_ai = (
+
+            "[Пользователь отвечает "
+            "на сообщение: "
+            + message.reply_to_message.text
+            + "]\n"
+            + user_text
         )
+
+    else:
+
+        user_text_for_ai = user_text
+
 
     messages_payload = [
 
         {
-            'role': 'system',
-            'content':
+            "role": "system",
+            "content":
                 build_system_instruction(
                     message.from_user.id
                 )
@@ -1853,58 +2334,73 @@ try:
         history
     )
 
-    # Специальная инструкция
-    # против повторений
 
     messages_payload.append({
 
-        'role': 'system',
+        "role": "system",
 
-        'content':
-            'Перед ответом посмотри '
-            'на предыдущие ответы '
-            'в этом диалоге. '
+        "content":
 
-            'Не копируй их дословно. '
+            "Перед ответом посмотри "
+            "на предыдущие ответы. "
 
-            'Если пользователь написал '
-            'похожее сообщение, используй '
-            'новую естественную формулировку. '
+            "Не копируй их дословно. "
 
-            'Не нужно специально делать '
-            'каждый ответ необычным. '
+            "Если пользователь снова "
+            "пишет похожее сообщение, "
+            "сформулируй ответ иначе. "
 
-            'Главное — не звучать как '
-            'бот с одной заготовленной фразой.'
+            "Не нужно специально делать "
+            "каждый ответ необычным. "
+
+            "Главное — естественное общение."
     })
+
 
     messages_payload.append({
 
-        'role': 'user',
+        "role": "user",
 
-        'content': user_text
+        "content":
+            user_text_for_ai
     })
+
 
     response = groq_chat(
 
         messages=messages_payload,
 
-        # Повышенная вариативность
-        # только для обычного общения
-
         temperature=0.9
     )
 
+
     answer = clean_ai_text(
-        response.choices[0]
-        .message.content
+
+        response
+        .choices[0]
+        .message
+        .content
     )
 
+
+    # Если пользователь только что
+    # сменил язык, ответ уже должен
+    # быть на новом языке.
+
+    if new_language:
+
+        pass
+
+
     save_history(
+
         chat_id,
-        user_text,
+
+        user_text_for_ai,
+
         answer
     )
+
 
     bot.reply_to(
         message,
@@ -1915,7 +2411,7 @@ except Exception as e:
 
     bot.reply_to(
         message,
-        f'Ошибка: {e}'
+        f"Ошибка: {e}"
     )
 
 ============================================================
@@ -1924,7 +2420,7 @@ except Exception as e:
 
 ============================================================
 
-if name == 'main':
+if name == "main":
 
 threading.Thread(
     target=run_web,
@@ -1932,7 +2428,7 @@ threading.Thread(
 ).start()
 
 print(
-    'Бот успешно запущен!'
+    "Бот успешно запущен!"
 )
 
 bot.infinity_polling(
