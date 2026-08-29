@@ -99,7 +99,6 @@ def perform_web_search(query):
 
 def generate_image_dynamic(prompt):
     """Надежная генерация картинок с резервными вариантами"""
-    # 1. Пробуем через g4f клиент (модели flux, dall-e-3)
     g4f_models = ["flux", "dall-e-3"]
     for model in g4f_models:
         try:
@@ -116,7 +115,6 @@ def generate_image_dynamic(prompt):
         except Exception:
             continue
 
-    # 2. Резервный вариант через Hugging Face API
     hf_models = [
         "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
         "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
@@ -185,7 +183,8 @@ def fact_cmd(message):
 
 @bot.message_handler(commands=['weather'])
 def weather_cmd(message):
-    city = message.text.replace("/weather", "", 1).strip()
+    parts = message.text.split(maxsplit=1)
+    city = parts[1] if len(parts) > 1 else ""
     if not city:
         bot.reply_to(message, "Укажи город. Пример: /weather Москва")
         return
@@ -204,7 +203,8 @@ def weather_cmd(message):
 
 @bot.message_handler(commands=['search'])
 def search_cmd(message):
-    query = message.text.replace("/search", "", 1).strip()
+    parts = message.text.split(maxsplit=1)
+    query = parts[1] if len(parts) > 1 else ""
     if not query:
         bot.reply_to(message, "Напиши запрос. Пример: /search новости науки")
         return
@@ -224,13 +224,18 @@ def search_cmd(message):
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
 def ai_tools_cmd(message):
-    text_parts = message.text.split(" ", 1)
-    if len(text_parts) < 2:
-        bot.reply_to(message, f"Напиши текст после команды {text_parts[0]}")
+    parts = message.text.split(maxsplit=1)
+    if not parts:
         return
     
-    cmd = text_parts[0]
-    content = text_parts[1]
+    cmd_full = parts[0]
+    cmd = cmd_full.split('@')[0]  # Убирает @botname из названия команды
+    
+    if len(parts) < 2:
+        bot.reply_to(message, f"Напиши текст после команды {cmd}")
+        return
+    
+    content = parts[1]
     msg = bot.reply_to(message, "Обрабатываю запрос...")
     
     if cmd == '/gemini':
@@ -251,7 +256,8 @@ def ai_tools_cmd(message):
 
 @bot.message_handler(commands=['image'])
 def image_cmd(message):
-    prompt = message.text.replace("/image", "", 1).strip()
+    parts = message.text.split(maxsplit=1)
+    prompt = parts[1] if len(parts) > 1 else ""
     if not prompt:
         bot.reply_to(message, "Опиши картинку. Пример: /image кот в космосе")
         return
@@ -265,7 +271,8 @@ def image_cmd(message):
 
 @bot.message_handler(commands=['tts'])
 def tts_cmd(message):
-    text_to_speak = message.text.replace("/tts", "", 1).strip()
+    parts = message.text.split(maxsplit=1)
+    text_to_speak = parts[1] if len(parts) > 1 else ""
     if not text_to_speak:
         bot.reply_to(message, "Напиши текст. Пример: /tts Привет мир")
         return
