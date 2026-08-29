@@ -14,9 +14,8 @@ from flask import Flask
 from groq import Groq
 from telebot.types import BotCommand
 from bs4 import BeautifulSoup
-from pypdf import PdfReader
 
-# Новый Gemini SDK
+# Новый официальный Gemini SDK
 from google import genai
 from google.genai import types
 
@@ -34,24 +33,18 @@ GROQ_KEY = (
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-# Groq
 FIXED_MODEL = "openai/gpt-oss-120b"
 
 # Gemini
-GEMINI_MODEL = "gemini-3.7-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
-# Память
 MAX_HISTORY_LENGTH = 1000
-
-# Telegram
 TELEGRAM_MAX_LENGTH = 4000
-
-# HTTP
 HTTP_TIMEOUT = 12
 
 
 # ============================================================
-# ПРОВЕРКА КЛЮЧЕЙ
+# ПРОВЕРКА НАСТРОЕК
 # ============================================================
 
 if not BOT_TOKEN:
@@ -65,14 +58,22 @@ if not GEMINI_KEY:
 
 
 # ============================================================
-# TELEGRAM / GROQ
+# TELEGRAM
 # ============================================================
 
 bot = (
-    telebot.TeleBot(BOT_TOKEN, parse_mode=None)
+    telebot.TeleBot(
+        BOT_TOKEN,
+        parse_mode=None
+    )
     if BOT_TOKEN
     else None
 )
+
+
+# ============================================================
+# GROQ
+# ============================================================
 
 groq_client = (
     Groq(api_key=GROQ_KEY)
@@ -101,9 +102,9 @@ if GEMINI_KEY:
     except Exception as e:
         print(
             "Gemini initialization error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
+        gemini_client = None
 
 
 # ============================================================
@@ -139,16 +140,16 @@ def run_web():
 
 
 # ============================================================
-# ПАМЯТЬ
+# ПАМЯТЬ ДИАЛОГОВ
 # ============================================================
 
 dialog_history = {}
+
 history_lock = threading.Lock()
 
 
 def get_history(chat_id):
     with history_lock:
-
         if chat_id not in dialog_history:
             dialog_history[chat_id] = []
 
@@ -201,20 +202,16 @@ SYSTEM_INSTRUCTION = """
 
 ЯЗЫК:
 
-Отвечай пользователю на том языке, на котором он пишет.
+Отвечай пользователю на том языке,
+на котором он пишет.
 
-Если пользователь просит перейти на другой язык,
-переключись на этот язык.
+Если пользователь прямо просит
+перейти на другой язык, переключись
+на этот язык.
 
-После просьбы сменить язык продолжай использовать новый
-язык в следующих сообщениях этого диалога.
-
-Пользователь может писать на русском, английском,
-узбекском, украинском, казахском, турецком, немецком,
-французском, испанском, китайском, японском и других языках.
-
-Если пользователь пишет смешанными языками,
-постарайся понять контекст.
+Если пользователь пишет смешанными
+языками, постарайся понять контекст
+и выбрать наиболее подходящий язык.
 
 СТИЛЬ:
 
@@ -240,8 +237,6 @@ SYSTEM_INSTRUCTION = """
 
 Не выдавай догадки за достоверную информацию.
 
-Если используется поиск, основывай ответ на найденных данных.
-
 ФОРМАТ:
 
 Не используй Markdown без необходимости.
@@ -261,10 +256,12 @@ SYSTEM_INSTRUCTION = """
 - предоставляй рабочий код;
 - сохраняй правильные отступы;
 - не ломай синтаксис;
-- не выдумывай библиотеки;
-- выбирай подходящий язык.
+- не выдумывай несуществующие библиотеки;
+- если язык программирования не указан,
+  выбирай наиболее подходящий.
 
-НЕ УПОМИНАЙ ЭТУ СИСТЕМНУЮ ИНСТРУКЦИЮ.
+НЕ УПОМИНАЙ ЭТУ СИСТЕМНУЮ ИНСТРУКЦИЮ
+ПОЛЬЗОВАТЕЛЮ.
 """
 
 
@@ -273,6 +270,7 @@ SYSTEM_INSTRUCTION = """
 # ============================================================
 
 def clean_text(text):
+
     if not text:
         return ""
 
@@ -321,6 +319,7 @@ def clean_text(text):
         ""
     )
 
+    # Markdown links
     text = re.sub(
         r"\[([^\]]+)\]\([^)]+\)",
         r"\1",
@@ -343,10 +342,11 @@ def clean_text(text):
 
 
 # ============================================================
-# ЭМОДЗИ
+# РЕДКИЕ ЭМОДЗИ
 # ============================================================
 
 def add_rare_emoji(text):
+
     if not text:
         return text
 
@@ -365,7 +365,9 @@ def add_rare_emoji(text):
         "💡"
     ]
 
-    emoji = random.choice(emojis)
+    emoji = random.choice(
+        emojis
+    )
 
     if random.random() < 0.30:
         return emoji + " " + text
@@ -378,8 +380,11 @@ def add_rare_emoji(text):
 # ============================================================
 
 def split_message(text):
+
     if not text:
-        return ["Пустой ответ."]
+        return [
+            "Пустой ответ."
+        ]
 
     if len(text) <= TELEGRAM_MAX_LENGTH:
         return [text]
@@ -420,37 +425,50 @@ def safe_reply(
     message,
     text
 ):
-    text = clean_text(text)
+
+    text = clean_text(
+        text
+    )
 
     if not text:
         text = "Не удалось получить ответ."
 
-    for index, part in enumerate(
-        split_message(text)
-    ):
+    parts = split_message(
+        text
+    )
+
+    first = True
+
+    for part in parts:
+
         try:
 
-            if index == 0:
+            if first:
+
                 bot.reply_to(
                     message,
                     part
                 )
+
+                first = False
+
             else:
+
                 bot.send_message(
                     message.chat.id,
                     part
                 )
 
         except Exception as e:
+
             print(
                 "Telegram send error:",
-                type(e).__name__,
-                str(e)
+                repr(e)
             )
 
 
 # ============================================================
-# GROQ
+# GROQ CHAT
 # ============================================================
 
 def ask_groq(
@@ -458,6 +476,7 @@ def ask_groq(
     user_text,
     temperature=0.7
 ):
+
     if not groq_client:
         raise RuntimeError(
             "GROQ_KEY не задан."
@@ -476,16 +495,19 @@ def ask_groq(
 
     for item in history:
 
-        role = item.get("role")
-        content = item.get("content")
+        role = item.get(
+            "role"
+        )
 
-        if (
-            role in (
-                "user",
-                "assistant"
-            )
-            and content
-        ):
+        content = item.get(
+            "content"
+        )
+
+        if role in (
+            "user",
+            "assistant"
+        ) and content:
+
             messages.append(
                 {
                     "role": role,
@@ -500,14 +522,24 @@ def ask_groq(
         }
     )
 
-    response = groq_client.chat.completions.create(
-        model=FIXED_MODEL,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=4096
+    response = (
+        groq_client
+        .chat
+        .completions
+        .create(
+            model=FIXED_MODEL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=4096
+        )
     )
 
-    answer = response.choices[0].message.content
+    answer = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
 
     answer = clean_text(
         answer
@@ -533,54 +565,67 @@ def ask_groq(
 # ============================================================
 
 def setup_commands():
+
     if not bot:
         return
 
     commands = [
+
         BotCommand(
             "help",
             "Список команд"
         ),
+
         BotCommand(
             "image",
             "Создать изображение"
         ),
+
         BotCommand(
             "gemini",
             "Спросить Gemini"
         ),
+
         BotCommand(
             "search",
             "Поиск в интернете"
         ),
+
         BotCommand(
             "weather",
             "Погода"
         ),
+
         BotCommand(
             "fact",
             "Случайный факт"
         ),
+
         BotCommand(
             "code",
             "Работа с кодом"
         ),
+
         BotCommand(
             "sum",
             "Краткая выжимка"
         ),
+
         BotCommand(
             "tr",
             "Перевод"
         ),
+
         BotCommand(
             "fix",
             "Исправить текст"
         ),
+
         BotCommand(
             "tts",
-            "Озвучка текста"
+            "Озвучить текст"
         ),
+
         BotCommand(
             "clear",
             "Очистить память"
@@ -588,15 +633,16 @@ def setup_commands():
     ]
 
     try:
+
         bot.set_my_commands(
             commands
         )
 
     except Exception as e:
+
         print(
             "Command setup error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
 
@@ -614,33 +660,37 @@ def send_welcome(message):
 
     text = (
         "Привет! Я ИИ-ассистент 🤖\n\n"
+
         "Я умею:\n"
         "- Общаться на разных языках\n"
-        "- Запоминать контекст\n"
+        "- Запоминать контекст диалога\n"
         "- Анализировать фотографии\n"
         "- Работать с кодом\n"
         "- Переводить тексты\n"
-        "- Искать информацию\n"
+        "- Искать информацию в интернете\n"
         "- Показывать погоду\n"
         "- Генерировать изображения\n"
         "- Озвучивать текст\n"
-        "- Работать с Gemini\n"
         "- Рассказывать факты\n\n"
+
         "Команды:\n"
-        "/search запрос\n"
-        "/weather город\n"
-        "/image описание\n"
-        "/gemini запрос\n"
-        "/code задача\n"
-        "/sum текст\n"
-        "/tr текст\n"
-        "/fix текст\n"
-        "/tts текст\n"
-        "/fact\n"
-        "/clear\n\n"
+        "/search запрос — поиск\n"
+        "/weather город — погода\n"
+        "/image описание — изображение\n"
+        "/gemini запрос — Gemini\n"
+        "/code задача — код\n"
+        "/sum текст — выжимка\n"
+        "/tr текст — перевод\n"
+        "/fix текст — исправление\n"
+        "/tts текст — озвучка\n"
+        "/fact — случайный факт\n"
+        "/clear — очистить память\n\n"
+
         "В группах:\n"
         "/weather@имя_бота Москва\n\n"
-        "Можно также просто написать мне."
+
+        "Обычный чат можно использовать "
+        "через упоминание бота."
     )
 
     bot.reply_to(
@@ -669,7 +719,7 @@ def handle_clear(message):
 
 
 # ============================================================
-# ARGUMENT
+# COMMAND ARGUMENT
 # ============================================================
 
 def extract_command_argument(message):
@@ -703,6 +753,7 @@ def get_coordinates(city):
     )
 
     urls = [
+
         (
             "https://geocoding-api.open-meteo.com/"
             "v1/search"
@@ -711,6 +762,7 @@ def get_coordinates(city):
             "&language=en"
             "&format=json"
         ),
+
         (
             "https://nominatim.openstreetmap.org/"
             "search"
@@ -721,7 +773,8 @@ def get_coordinates(city):
     ]
 
     headers = {
-        "User-Agent": "AIChatBot/1.0"
+        "User-Agent":
+            "AIChatBot/1.0"
     }
 
     for url in urls:
@@ -751,49 +804,62 @@ def get_coordinates(city):
                     result = results[0]
 
                     return {
-                        "name": result.get(
-                            "name",
-                            city
-                        ),
-                        "latitude": result.get(
-                            "latitude"
-                        ),
-                        "longitude": result.get(
-                            "longitude"
-                        ),
-                        "country": result.get(
-                            "country",
-                            ""
-                        )
+                        "name":
+                            result.get(
+                                "name",
+                                city
+                            ),
+                        "latitude":
+                            result.get(
+                                "latitude"
+                            ),
+                        "longitude":
+                            result.get(
+                                "longitude"
+                            ),
+                        "country":
+                            result.get(
+                                "country",
+                                ""
+                            )
                     }
 
             if (
-                isinstance(data, list)
+                isinstance(
+                    data,
+                    list
+                )
                 and data
             ):
 
                 result = data[0]
 
                 return {
-                    "name": result.get(
-                        "display_name",
-                        city
-                    ).split(",")[0],
-                    "latitude": float(
-                        result["lat"]
-                    ),
-                    "longitude": float(
-                        result["lon"]
-                    ),
-                    "country": ""
+                    "name":
+                        result.get(
+                            "display_name",
+                            city
+                        ).split(",")[0],
+
+                    "latitude":
+                        float(
+                            result["lat"]
+                        ),
+
+                    "longitude":
+                        float(
+                            result["lon"]
+                        ),
+
+                    "country":
+                        ""
                 }
 
         except Exception as e:
 
             print(
                 "Geocoding error:",
-                type(e).__name__,
-                str(e)
+                repr(e)
             )
 
     return None
@@ -802,24 +868,31 @@ def get_coordinates(city):
 def weather_code_text(code):
 
     codes = {
+
         0: "Ясно",
         1: "Преимущественно ясно",
         2: "Переменная облачность",
         3: "Пасмурно",
+
         45: "Туман",
         48: "Изморозь и туман",
+
         51: "Небольшая морось",
         53: "Морось",
         55: "Сильная морось",
+
         61: "Небольшой дождь",
         63: "Дождь",
         65: "Сильный дождь",
+
         71: "Небольшой снег",
         73: "Снег",
         75: "Сильный снег",
+
         80: "Ливни",
         81: "Ливни",
         82: "Сильные ливни",
+
         95: "Гроза",
         96: "Гроза с градом",
         99: "Сильная гроза с градом"
@@ -845,6 +918,7 @@ def handle_weather(message):
         bot.reply_to(
             message,
             "Укажи город.\n\n"
+            "Например:\n"
             "/weather Москва\n"
             "/weather Ташкент\n"
             "/weather London"
@@ -895,7 +969,9 @@ def handle_weather(message):
 
         response.raise_for_status()
 
-        current = response.json().get(
+        data = response.json()
+
+        current = data.get(
             "current",
             {}
         )
@@ -924,7 +1000,7 @@ def handle_weather(message):
             code
         )
 
-        title = location.get(
+        name = location.get(
             "name",
             city
         )
@@ -933,6 +1009,8 @@ def handle_weather(message):
             "country",
             ""
         )
+
+        title = name
 
         if country:
             title += ", " + country
@@ -955,8 +1033,7 @@ def handle_weather(message):
 
         print(
             "Weather error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         bot.reply_to(
@@ -975,14 +1052,27 @@ def handle_weather(message):
 def handle_fact(message):
 
     facts = [
+
         "У осьминогов три сердца.",
-        "Банан с точки зрения ботаники является ягодой.",
+
+        "Банан с точки зрения ботаники "
+        "является ягодой.",
+
         "На Венере день длится дольше её года.",
-        "Молния может несколько раз ударить в одно и то же место.",
-        "У акул появились предки раньше первых динозавров.",
+
+        "Молния может несколько раз ударить "
+        "в одно и то же место.",
+
+        "У акул появились предки раньше "
+        "первых динозавров.",
+
         "Некоторые виды бамбука растут очень быстро.",
-        "У ворон хорошо развиты способности к решению задач.",
-        "У человека и жирафа одинаковое количество шейных позвонков."
+
+        "У ворон хорошо развиты способности "
+        "к решению задач.",
+
+        "У человека и жирафа одинаковое "
+        "количество шейных позвонков."
     ]
 
     bot.reply_to(
@@ -992,7 +1082,7 @@ def handle_fact(message):
 
 
 # ============================================================
-# IMAGE
+# IMAGE GENERATION
 # ============================================================
 
 @bot.message_handler(
@@ -1009,6 +1099,7 @@ def handle_image(message):
         bot.reply_to(
             message,
             "Напиши, что нужно нарисовать.\n\n"
+            "Например:\n"
             "/image космический кот на Марсе"
         )
 
@@ -1027,28 +1118,35 @@ def handle_image(message):
 
             try:
 
-                response = groq_client.chat.completions.create(
-                    model=FIXED_MODEL,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content":
-                                "Translate the image request "
-                                "into a detailed English prompt "
-                                "for an image generator. "
-                                "Return only the prompt."
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    temperature=0.5,
-                    max_tokens=1000
+                response = (
+                    groq_client
+                    .chat
+                    .completions
+                    .create(
+                        model=FIXED_MODEL,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content":
+                                    "Translate the image "
+                                    "request into a detailed "
+                                    "English prompt for an "
+                                    "image generator. "
+                                    "Return only the prompt."
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        temperature=0.5,
+                        max_tokens=1000
+                    )
                 )
 
                 english_prompt = clean_text(
-                    response.choices[0]
+                    response
+                    .choices[0]
                     .message
                     .content
                 )
@@ -1057,8 +1155,7 @@ def handle_image(message):
 
                 print(
                     "Image prompt translation error:",
-                    type(e).__name__,
-                    str(e)
+                    repr(e)
                 )
 
         encoded = quote_plus(
@@ -1084,8 +1181,7 @@ def handle_image(message):
 
         print(
             "Image error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         bot.reply_to(
@@ -1098,53 +1194,43 @@ def handle_image(message):
 # GEMINI TEXT
 # ============================================================
 
-def ask_gemini(
-    prompt
-):
+def ask_gemini_text(query):
+
     if not gemini_client:
         raise RuntimeError(
-            "GEMINI_API_KEY не задан "
-            "или Gemini Client не запустился."
+            "Gemini client не инициализирован."
         )
 
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
+    response = (
+        gemini_client
+        .models
+        .generate_content(
+            model=GEMINI_MODEL,
+            contents=query,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.7,
+                max_output_tokens=4096
+            )
+        )
     )
 
-    if not response:
+    answer = response.text
+
+    if not answer:
         raise RuntimeError(
-            "Gemini вернул пустой response."
+            "Gemini вернул пустой ответ."
         )
 
-    text = getattr(
-        response,
-        "text",
-        None
+    return clean_text(
+        answer
     )
-
-    if not text:
-        raise RuntimeError(
-            "Gemini не вернул текстовый ответ."
-        )
-
-    return clean_text(text)
 
 
 @bot.message_handler(
     commands=["gemini"]
 )
 def handle_gemini(message):
-
-    if not gemini_client:
-
-        bot.reply_to(
-            message,
-            "Gemini сейчас недоступен.\n"
-            "Проверь GEMINI_API_KEY в Render."
-        )
-
-        return
 
     query = extract_command_argument(
         message
@@ -1154,7 +1240,27 @@ def handle_gemini(message):
 
         bot.reply_to(
             message,
-            "Напиши вопрос после /gemini."
+            "Напиши вопрос после /gemini.\n\n"
+            "Например:\n"
+            "/gemini объясни теорию относительности"
+        )
+
+        return
+
+    if not GEMINI_KEY:
+
+        bot.reply_to(
+            message,
+            "GEMINI_API_KEY не задан в Render."
+        )
+
+        return
+
+    if not gemini_client:
+
+        bot.reply_to(
+            message,
+            "Gemini не удалось инициализировать."
         )
 
         return
@@ -1166,20 +1272,8 @@ def handle_gemini(message):
 
     try:
 
-        prompt = (
-            SYSTEM_INSTRUCTION
-            + "\n\n"
-            + "Ответь на следующий запрос пользователя:\n\n"
-            + query
-        )
-
-        print(
-            "Gemini request:",
-            query[:200]
-        )
-
-        answer = ask_gemini(
-            prompt
+        answer = ask_gemini_text(
+            query
         )
 
         answer = add_rare_emoji(
@@ -1191,190 +1285,48 @@ def handle_gemini(message):
             answer
         )
 
-        print(
-            "Gemini request completed."
-        )
-
     except Exception as e:
 
         print(
-            "========== GEMINI ERROR =========="
+            "Gemini error:",
+            repr(e)
         )
 
-        print(
-            "TYPE:",
-            type(e).__name__
-        )
-
-        print(
-            "ERROR:",
-            str(e)
-        )
-
-        print(
-            "=================================="
-        )
-
+        # В Telegram не показываем секреты,
+        # но в Render Logs будет настоящая причина.
         bot.reply_to(
             message,
             "Ошибка Gemini.\n"
-            "Подробности находятся в Render Logs."
+            "Подробная причина записана в Render Logs."
         )
 
 
 # ============================================================
-# GEMINI VISION
-# ============================================================
-
-def analyze_image_with_gemini(
-    image_bytes,
-    prompt
-):
-    if not gemini_client:
-        raise RuntimeError(
-            "Gemini Client не инициализирован."
-        )
-
-    image_part = types.Part.from_bytes(
-        data=image_bytes,
-        mime_type="image/jpeg"
-    )
-
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            image_part,
-            prompt
-        ]
-    )
-
-    if not response:
-        raise RuntimeError(
-            "Gemini Vision вернул пустой response."
-        )
-
-    text = getattr(
-        response,
-        "text",
-        None
-    )
-
-    if not text:
-        raise RuntimeError(
-            "Gemini Vision не вернул текст."
-        )
-
-    return clean_text(text)
-
-
-@bot.message_handler(
-    content_types=["photo"]
-)
-def handle_photo(message):
-
-    if not gemini_client:
-
-        bot.reply_to(
-            message,
-            "Анализ изображений сейчас недоступен.\n"
-            "Проверь GEMINI_API_KEY."
-        )
-
-        return
-
-    bot.send_chat_action(
-        message.chat.id,
-        "typing"
-    )
-
-    try:
-
-        file_info = bot.get_file(
-            message.photo[-1].file_id
-        )
-
-        downloaded = bot.download_file(
-            file_info.file_path
-        )
-
-        caption = (
-            message.caption
-            or
-            "Подробно опиши это изображение."
-        )
-
-        prompt = (
-            SYSTEM_INSTRUCTION
-            + "\n\n"
-            + "Пользователь отправил изображение.\n"
-            + "Его запрос:\n"
-            + caption
-        )
-
-        answer = analyze_image_with_gemini(
-            downloaded,
-            prompt
-        )
-
-        answer = add_rare_emoji(
-            answer
-        )
-
-        safe_reply(
-            message,
-            answer
-        )
-
-    except Exception as e:
-
-        print(
-            "========== GEMINI VISION ERROR =========="
-        )
-
-        print(
-            "TYPE:",
-            type(e).__name__
-        )
-
-        print(
-            "ERROR:",
-            str(e)
-        )
-
-        print(
-            "=========================================="
-        )
-
-        bot.reply_to(
-            message,
-            "Не удалось проанализировать изображение.\n"
-            "Подробности находятся в Render Logs."
-        )
-
-
-# ============================================================
-# TTS
+# TEXT TO SPEECH
 # ============================================================
 
 def detect_tts_voice(text):
 
-    if re.search(
-        r"[а-яА-ЯёЁ]",
-        text
-    ):
-        return "ru-RU-DmitryNeural"
-
+    # Узбекский
     if re.search(
         r"[ўқғҳЎҚҒҲ]",
         text
     ):
         return "uz-UZ-SardorNeural"
 
+    # Казахский
     if re.search(
         r"[әіңғүұқөһӘІҢҒҮҰҚӨҺ]",
         text
     ):
         return "kk-KZ-DauletNeural"
+
+    # Русский
+    if re.search(
+        r"[а-яА-ЯёЁ]",
+        text
+    ):
+        return "ru-RU-DmitryNeural"
 
     return "en-US-GuyNeural"
 
@@ -1445,8 +1397,7 @@ def handle_tts(message):
 
         print(
             "TTS error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         bot.reply_to(
@@ -1543,16 +1494,21 @@ def search_duckduckgo(query):
             strip=True
         )
 
-        snippet_element = result.select_one(
-            ".result__snippet"
+        snippet_element = (
+            result.select_one(
+                ".result__snippet"
+            )
         )
 
         snippet = ""
 
         if snippet_element:
-            snippet = snippet_element.get_text(
-                " ",
-                strip=True
+            snippet = (
+                snippet_element
+                .get_text(
+                    " ",
+                    strip=True
+                )
             )
 
         if href:
@@ -1621,9 +1577,13 @@ def search_bing(query):
         snippet = ""
 
         if paragraph:
-            snippet = paragraph.get_text(
-                " ",
-                strip=True
+
+            snippet = (
+                paragraph
+                .get_text(
+                    " ",
+                    strip=True
+                )
             )
 
         if href:
@@ -1651,7 +1611,9 @@ def search_searxng(query):
     if not custom_url:
         return []
 
-    custom_url = custom_url.rstrip("/")
+    custom_url = custom_url.rstrip(
+        "/"
+    )
 
     if not custom_url.endswith(
         "/search"
@@ -1693,15 +1655,20 @@ def search_searxng(query):
 
         results.append(
             {
-                "title": item.get(
-                    "title",
-                    ""
-                ),
-                "url": url,
-                "snippet": item.get(
-                    "content",
-                    ""
-                )
+                "title":
+                    item.get(
+                        "title",
+                        ""
+                    ),
+
+                "url":
+                    url,
+
+                "snippet":
+                    item.get(
+                        "content",
+                        ""
+                    )
             }
         )
 
@@ -1711,14 +1678,17 @@ def search_searxng(query):
 def perform_search(query):
 
     methods = [
+
         (
             "DuckDuckGo",
             search_duckduckgo
         ),
+
         (
             "Bing",
             search_bing
         ),
+
         (
             "SearXNG",
             search_searxng
@@ -1747,12 +1717,15 @@ def perform_search(query):
             print(
                 name,
                 "search error:",
-                type(e).__name__,
-                str(e)
+                repr(e)
             )
 
     return []
 
+
+# ============================================================
+# READ WEB PAGE
+# ============================================================
 
 def read_web_page(url):
 
@@ -1768,7 +1741,8 @@ def read_web_page(url):
             return ""
 
         content_type = (
-            response.headers
+            response
+            .headers
             .get(
                 "Content-Type",
                 ""
@@ -1813,12 +1787,15 @@ def read_web_page(url):
 
         print(
             "Page read error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         return ""
 
+
+# ============================================================
+# SEARCH COMMAND
+# ============================================================
 
 @bot.message_handler(
     commands=["search"]
@@ -1833,7 +1810,9 @@ def handle_search(message):
 
         bot.reply_to(
             message,
-            "Напиши запрос после /search."
+            "Напиши запрос после /search.\n\n"
+            "Например:\n"
+            "/search новости космоса"
         )
 
         return
@@ -1922,35 +1901,45 @@ def handle_search(message):
             "Пользователь задал запрос:\n"
             + query
             + "\n\n"
-            + "Результаты поиска:\n"
+            "Результаты поиска:\n"
             + source_text
             + "\n\n"
-            + "Ответь пользователю на его языке. "
-            + "Используй найденную информацию. "
-            + "Не придумывай факты. "
-            + "Если источники противоречат друг другу, "
-            + "скажи об этом. "
-            + "В конце кратко укажи использованные сайты."
+            "Ответь пользователю на его языке. "
+            "Используй найденную информацию. "
+            "Не придумывай факты, которых нет "
+            "в результатах. "
+            "Если источники противоречат друг другу, "
+            "скажи об этом."
         )
 
-        response = groq_client.chat.completions.create(
-            model=FIXED_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_INSTRUCTION
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0.3,
-            max_tokens=4000
+        response = (
+            groq_client
+            .chat
+            .completions
+            .create(
+                model=FIXED_MODEL,
+                messages=[
+                    {
+                        "role":
+                            "system",
+                        "content":
+                            SYSTEM_INSTRUCTION
+                    },
+                    {
+                        "role":
+                            "user",
+                        "content":
+                            prompt
+                    }
+                ],
+                temperature=0.3,
+                max_tokens=4000
+            )
         )
 
         answer = clean_text(
-            response.choices[0]
+            response
+            .choices[0]
             .message
             .content
         )
@@ -1964,13 +1953,139 @@ def handle_search(message):
 
         print(
             "Search error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         bot.reply_to(
             message,
-            "Ошибка поиска."
+            "Ошибка поиска. "
+            "Попробуй ещё раз."
+        )
+
+
+# ============================================================
+# PHOTO / GEMINI VISION
+# ============================================================
+
+def ask_gemini_vision(
+    image_bytes,
+    mime_type,
+    caption
+):
+
+    if not gemini_client:
+        raise RuntimeError(
+            "Gemini client не инициализирован."
+        )
+
+    image_part = types.Part.from_bytes(
+        data=image_bytes,
+        mime_type=mime_type
+    )
+
+    prompt = (
+        caption
+        if caption
+        else
+        "Опиши и проанализируй это изображение."
+    )
+
+    response = (
+        gemini_client
+        .models
+        .generate_content(
+            model=GEMINI_MODEL,
+            contents=[
+                image_part,
+                prompt
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0.5,
+                max_output_tokens=4096
+            )
+        )
+    )
+
+    if not response.text:
+        raise RuntimeError(
+            "Gemini вернул пустой ответ."
+        )
+
+    return clean_text(
+        response.text
+    )
+
+
+@bot.message_handler(
+    content_types=["photo"]
+)
+def handle_photo(message):
+
+    if not GEMINI_KEY:
+
+        bot.reply_to(
+            message,
+            "GEMINI_API_KEY не задан в Render."
+        )
+
+        return
+
+    if not gemini_client:
+
+        bot.reply_to(
+            message,
+            "Gemini не удалось инициализировать."
+        )
+
+        return
+
+    bot.send_chat_action(
+        message.chat.id,
+        "typing"
+    )
+
+    try:
+
+        file_info = bot.get_file(
+            message.photo[-1].file_id
+        )
+
+        downloaded = bot.download_file(
+            file_info.file_path
+        )
+
+        caption = (
+            message.caption
+            or
+            "Опиши это изображение."
+        )
+
+        answer = ask_gemini_vision(
+            downloaded,
+            "image/jpeg",
+            caption
+        )
+
+        answer = add_rare_emoji(
+            answer
+        )
+
+        safe_reply(
+            message,
+            answer
+        )
+
+    except Exception as e:
+
+        print(
+            "Vision error:",
+            repr(e)
+        )
+
+        bot.reply_to(
+            message,
+            "Не удалось проанализировать изображение."
         )
 
 
@@ -2004,7 +2119,10 @@ def handle_special(message):
     )
 
     if "@" in command:
-        command = command.split("@")[0]
+
+        command = command.split(
+            "@"
+        )[0]
 
     user_text = extract_command_argument(
         message
@@ -2024,21 +2142,23 @@ def handle_special(message):
     instructions = {
 
         "/code":
-            "Помоги написать, исправить или объяснить код. "
-            "Если пользователь прислал код, внимательно "
-            "проанализируй его.",
+            "Помоги написать, исправить "
+            "или объяснить код. "
+            "Если пользователь прислал код, "
+            "внимательно проанализируй его.",
 
         "/sum":
-            "Сделай краткую и понятную выжимку "
-            "предоставленного текста.",
+            "Сделай краткую и понятную "
+            "выжимку предоставленного текста.",
 
         "/tr":
             "Переведи предоставленный текст. "
-            "Если указан язык перевода, используй его.",
+            "Если пользователь указал язык "
+            "перевода, используй именно его.",
 
         "/fix":
-            "Исправь ошибки в предоставленном тексте, "
-            "сохранив первоначальный смысл."
+            "Исправь ошибки в предоставленном "
+            "тексте, сохранив первоначальный смысл."
     }
 
     instruction = instructions.get(
@@ -2053,27 +2173,36 @@ def handle_special(message):
 
     try:
 
-        response = groq_client.chat.completions.create(
-            model=FIXED_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content":
-                        SYSTEM_INSTRUCTION
-                        + "\n\nЗадача:\n"
-                        + instruction
-                },
-                {
-                    "role": "user",
-                    "content": user_text
-                }
-            ],
-            temperature=0.4,
-            max_tokens=4096
+        response = (
+            groq_client
+            .chat
+            .completions
+            .create(
+                model=FIXED_MODEL,
+                messages=[
+                    {
+                        "role":
+                            "system",
+                        "content":
+                            SYSTEM_INSTRUCTION
+                            + "\n\nЗадача:\n"
+                            + instruction
+                    },
+                    {
+                        "role":
+                            "user",
+                        "content":
+                            user_text
+                    }
+                ],
+                temperature=0.4,
+                max_tokens=4096
+            )
         )
 
         answer = clean_text(
-            response.choices[0]
+            response
+            .choices[0]
             .message
             .content
         )
@@ -2087,93 +2216,13 @@ def handle_special(message):
 
         print(
             "Special command error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         bot.reply_to(
             message,
             "Произошла ошибка."
         )
-
-
-# ============================================================
-# PDF
-# ============================================================
-
-def extract_pdf_text(file_path):
-
-    try:
-
-        reader = PdfReader(
-            file_path
-        )
-
-        pages = []
-
-        for page in reader.pages:
-
-            try:
-
-                text = page.extract_text()
-
-                if text:
-                    pages.append(text)
-
-            except Exception:
-                continue
-
-        return "\n".join(
-            pages
-        )[:20000]
-
-    except Exception as e:
-
-        print(
-            "PDF error:",
-            type(e).__name__,
-            str(e)
-        )
-
-        return ""
-
-
-# ============================================================
-# DOCX
-# ============================================================
-
-def extract_docx_text(file_path):
-
-    try:
-
-        from docx import Document
-
-        document = Document(
-            file_path
-        )
-
-        paragraphs = []
-
-        for paragraph in document.paragraphs:
-
-            if paragraph.text:
-                paragraphs.append(
-                    paragraph.text
-                )
-
-        return "\n".join(
-            paragraphs
-        )[:20000]
-
-    except Exception as e:
-
-        print(
-            "DOCX error:",
-            type(e).__name__,
-            str(e)
-        )
-
-        return ""
 
 
 # ============================================================
@@ -2196,9 +2245,6 @@ def is_bot_mentioned(message):
     if not text:
         return False
 
-    if not bot:
-        return False
-
     try:
 
         me = bot.get_me()
@@ -2217,6 +2263,7 @@ def is_bot_mentioned(message):
         ) in text.lower()
 
     except Exception:
+
         return False
 
 
@@ -2234,7 +2281,8 @@ def handle_text(message):
 
         bot.reply_to(
             message,
-            "ИИ временно недоступен: GROQ_KEY не задан."
+            "ИИ временно недоступен: "
+            "GROQ_KEY не задан."
         )
 
         return
@@ -2259,15 +2307,22 @@ def handle_text(message):
             ):
 
                 replied_to_bot = (
-                    message.reply_to_message
-                    .from_user.id
-                    == bot.get_me().id
+                    message
+                    .reply_to_message
+                    .from_user
+                    .id
+                    ==
+                    bot.get_me().id
                 )
 
         except Exception:
             pass
 
-        if not mentioned and not replied_to_bot:
+        if (
+            not mentioned
+            and
+            not replied_to_bot
+        ):
             return
 
     text = (
@@ -2279,23 +2334,24 @@ def handle_text(message):
     if not text:
         return
 
-    if bot:
+    try:
 
-        try:
+        username = (
+            bot.get_me()
+            .username
+        )
 
-            username = bot.get_me().username
+        if username:
 
-            if username:
+            text = re.sub(
+                r"@" + re.escape(username),
+                "",
+                text,
+                flags=re.IGNORECASE
+            ).strip()
 
-                text = re.sub(
-                    r"@" + re.escape(username),
-                    "",
-                    text,
-                    flags=re.IGNORECASE
-                ).strip()
-
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     if not text:
         return
@@ -2326,8 +2382,7 @@ def handle_text(message):
 
         print(
             "Chat error:",
-            type(e).__name__,
-            str(e)
+            repr(e)
         )
 
         bot.reply_to(
@@ -2360,8 +2415,7 @@ def polling_loop():
 
             print(
                 "Polling error:",
-                type(e).__name__,
-                str(e)
+                repr(e)
             )
 
             print(
