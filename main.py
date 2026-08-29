@@ -49,29 +49,31 @@ def run_web():
 # ==========================================
 
 def ask_groq_with_history(user_id, prompt):
-    """Общение с учетом истории сообщений"""
+    """Общение с учетом истории сообщений (Модель Mixtral)"""
     if user_id not in user_histories:
         user_histories[user_id] = [{"role": "system", "content": "Ты полезный и дружелюбный ИИ-ассистент."}]
     
     user_histories[user_id].append({"role": "user", "content": prompt})
     
+    # Ограничиваем историю 10 последними сообщениями
     if len(user_histories[user_id]) > 11:
         user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
         
     try:
         response = groq_client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="mixtral-8x7b-32768", # Отличная альтернатива Llama
             messages=user_histories[user_id]
         )
         answer = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": answer})
         return answer
     except Exception as e:
-        return f"Ошибка ИИ: {e}"
+        return f"Ошибка текстовой нейросети: {e}"
 
 def perform_web_search(query):
-    """Поиск в интернете (Tavily или DuckDuckGo)"""
+    """Улучшенный поиск в интернете"""
     results_text = ""
+    # Пробуем Tavily (если ключ установлен)
     if tavily_client:
         try:
             response = tavily_client.search(query=query, max_results=3)
@@ -80,22 +82,26 @@ def perform_web_search(query):
         except Exception:
             pass
             
+    # Переключаемся на DuckDuckGo
     if not results_text:
         try:
             with DDGS() as ddgs:
-                results = [r for r in ddgs.text(query, max_results=3)]
+                results = list(ddgs.text(query, max_results=3))
                 for res in results:
-                    results_text += f"- {res.get('title')}: {res.get('body')}\n"
+                    title = res.get('title', 'Без заголовка')
+                    body = res.get('body', '')[:300]
+                    results_text += f"- {title}: {body}...\n"
         except Exception as e:
-            results_text = f"Ошибка поиска: {e}"
+            results_text = f"Не удалось выполнить автоматический поиск: {e}"
+            
     return results_text
 
 def generate_image_hf(prompt):
-    """Генерация изображения через Hugging Face"""
+    """Генерация изображения (Hugging Face)"""
     try:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
+        API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=30)
+        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=40)
         if response.status_code == 200:
             return response.content
         return None
@@ -103,7 +109,7 @@ def generate_image_hf(prompt):
         return None
 
 def analyze_image_hf(image_bytes):
-    """Распознавание картинки через Hugging Face"""
+    """Распознавание картинки (Hugging Face)"""
     try:
         API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -132,16 +138,16 @@ def help_cmd(message):
         "**Список команд:**\n"
         "💬 Просто пиши текст для общения\n"
         "🔍 `/search <запрос>` — поиск в интернете\n"
-        "🌤 `/weather <город>` — погода\n"
+        "🌤 `/weather <город>` — подробная погода\n"
         "🖼 `/image <описание>` — создать картинку\n"
         "🧠 `/gemini <запрос>` — спросить ИИ\n"
         "💡 `/fact` — случайный факт\n"
         "💻 `/code <задача>` — работа с кодом\n"
-        "📄 `/sum <текст/ссылка>` — краткая выжимка\n"
+        "📄 `/sum <ссылка>` — краткая выжимка статьи\n"
         "🌐 `/tr <текст>` — перевод на английский\n"
         "✍️ `/fix <текст>` — исправить ошибки\n"
         "🎙 `/tts <текст>` — озвучить текст\n"
-        "🧹 `/clear` — очистить память памяти"
+        "🧹 `/clear` — очистить память диалога"
     )
     bot.reply_to(message, help_text, parse_mode="Markdown")
 
@@ -154,7 +160,7 @@ def clear_cmd(message):
 @bot.message_handler(commands=['fact'])
 def fact_cmd(message):
     msg = bot.reply_to(message, "⏳ Ищу интересный факт...")
-    fact = ask_groq_with_history(message.chat.id, "Расскажи один очень интересный, редкий и увлекательный научный факт на русском языке.")
+    fact = ask_groq_with_history(message.chat.id, "Расскажи один очень интересный, редкий и увлекательный научный факт на русском языке. Будь краток.")
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['weather'])
@@ -164,24 +170,35 @@ def weather_cmd(message):
         bot.reply_to(message, "Укажи город. Пример: `/weather Москва`", parse_mode="Markdown")
         return
     try:
-        url = f"https://wttr.in/{city}?format=3&lang=ru"
-        resp = requests.get(url, timeout=5)
+        # Улучшенный, структурированный формат погоды
+        params = {
+            'format': '🌍 Город: %l\n🌤 Погода: %C %c\n🌡 Температура: %t (ощущается как %F)\n💨 Ветер: %w\n💧 Влажность: %h\n☔ Осадки: %p',
+            'lang': 'ru'
+        }
+        resp = requests.get(f"https://wttr.in/{city}", params=params, timeout=5)
         if resp.status_code == 200:
-            bot.reply_to(message, f"🌤 {resp.text.strip()}")
+            bot.reply_to(message, f"**Текущая сводка:**\n\n{resp.text.strip()}", parse_mode="Markdown")
         else:
-            bot.reply_to(message, "Город не найден.")
+            bot.reply_to(message, "Не удалось найти город. Проверь название.")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка погоды: {e}")
+        bot.reply_to(message, f"Ошибка сервиса погоды: {e}")
 
 @bot.message_handler(commands=['search'])
 def search_cmd(message):
     query = message.text.replace("/search", "", 1).strip()
     if not query:
-        bot.reply_to(message, "Напиши поисковый запрос. Пример: `/search новости науки`", parse_mode="Markdown")
+        bot.reply_to(message, "Напиши запрос. Пример: `/search свежие новости науки`", parse_mode="Markdown")
         return
-    msg = bot.reply_to(message, f"🔍 Ищу: *{query}*", parse_mode="Markdown")
+    
+    msg = bot.reply_to(message, f"🔍 Ищу в интернете: *{query}*", parse_mode="Markdown")
     data = perform_web_search(query)
-    reply = ask_groq_with_history(message.chat.id, f"На основе этих поисковых данных ответь на запрос '{query}':\n\n{data}")
+    
+    if "Не удалось выполнить" in data:
+        bot.edit_message_text(data, chat_id=message.chat.id, message_id=msg.message_id)
+        return
+        
+    prompt = f"Пользователь ищет: '{query}'. На основе свежих данных из интернета составь подробный и понятный ответ:\n\n{data}"
+    reply = ask_groq_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
@@ -198,13 +215,13 @@ def ai_tools_cmd(message):
     if cmd == '/gemini':
         prompt = content
     elif cmd == '/code':
-        prompt = f"Напиши качественный код и объясни его решение для задачи: {content}"
+        prompt = f"Напиши качественный код и объясни решение для задачи: {content}"
     elif cmd == '/sum':
-        prompt = f"Сделай краткую и понятную выжимку/суммаризацию:\n\n{content}"
+        prompt = f"Сделай краткую, структурированную выжимку:\n\n{content}"
     elif cmd == '/tr':
-        prompt = f"Переведи следующий текст на английский язык:\n\n{content}"
+        prompt = f"Переведи этот текст на английский язык:\n\n{content}"
     elif cmd == '/fix':
-        prompt = f"Исправь грамматические и стилистические ошибки в этом тексте, сделай его аккуратным:\n\n{content}"
+        prompt = f"Исправь грамматические и стилистические ошибки, сделай текст лучше:\n\n{content}"
     else:
         prompt = content
         
@@ -215,23 +232,23 @@ def ai_tools_cmd(message):
 def image_cmd(message):
     prompt = message.text.replace("/image", "", 1).strip()
     if not prompt:
-        bot.reply_to(message, "Опиши картинку. Пример: `/image кот в космосе`", parse_mode="Markdown")
+        bot.reply_to(message, "Опиши картинку. Пример: `/image киберпанк город`", parse_mode="Markdown")
         return
-    msg = bot.reply_to(message, "🎨 Рисую картинку...")
+    msg = bot.reply_to(message, "🎨 Генерирую изображение...")
     img_bytes = generate_image_hf(prompt)
     if img_bytes:
         bot.send_photo(message.chat.id, img_bytes, caption=f"🖼 По запросу: {prompt}")
         bot.delete_message(message.chat.id, msg.message_id)
     else:
-        bot.edit_message_text("Не удалось сгенерировать картинку. Попробуй другой запрос.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("Не удалось сгенерировать картинку. Сервер временно перегружен.", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['tts'])
 def tts_cmd(message):
     text_to_speak = message.text.replace("/tts", "", 1).strip()
     if not text_to_speak:
-        bot.reply_to(message, "Напиши текст для озвучки. Пример: `/tts Привет мир`", parse_mode="Markdown")
+        bot.reply_to(message, "Напиши текст. Пример: `/tts Привет мир`", parse_mode="Markdown")
         return
-    msg = bot.reply_to(message, "⏳ Записываю голосовое...")
+    msg = bot.reply_to(message, "⏳ Создаю аудио...")
     audio_path = tempfile.mktemp(suffix=".mp3")
     asyncio.run(generate_audio(text_to_speak, audio_path))
     with open(audio_path, 'rb') as audio:
@@ -249,7 +266,7 @@ def handle_text(message):
             resp = requests.get(url, timeout=10)
             soup = BeautifulSoup(resp.text, 'html.parser')
             page_text = soup.get_text(separator=' ', strip=True)[:3000]
-            reply = ask_groq_with_history(message.chat.id, f"Сделай краткую выжимку статьи по ссылке:\n\n{page_text}")
+            reply = ask_groq_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
             bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
             return
         except Exception as e:
