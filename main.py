@@ -1,5 +1,6 @@
 import os
 import re
+import io
 import telebot
 import requests
 import asyncio
@@ -19,7 +20,6 @@ except ImportError:
     TavilyClient = None
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -112,45 +112,34 @@ def generate_image_dynamic(prompt):
                     return r.content
         except Exception:
             continue
-
-    hf_models = [
-        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
-        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-        "https://api-inference.huggingface.co/models/CompVis/stable-diffusion-v1-4"
-    ]
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
-    for api_url in hf_models:
-        try:
-            response = requests.post(api_url, headers=headers, json={"inputs": prompt}, timeout=35)
-            if response.status_code == 200:
-                return response.content
-        except Exception:
-            continue
             
     return None
 
-def analyze_image_dynamic(image_bytes):
-    """Динамический перебор моделей для анализа фото с резервными вариантами"""
-    hf_vision_models = [
-        "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large",
-        "https://api-inference.huggingface.co/models/nlpconnect/vit-gpt2-image-captioning",
-        "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
-    ]
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+def analyze_image_g4f(image_bytes):
+    """Анализ фото с помощью g4f и мультимодальных моделей (gpt-4o, gpt-4)"""
+    models_to_try = ["gpt-4o", "gpt-4o-mini", "gpt-4"]
+    image_file = io.BytesIO(image_bytes)
     
-    for api_url in hf_vision_models:
+    for model_name in models_to_try:
         try:
-            response = requests.post(api_url, headers=headers, data=image_bytes, timeout=15)
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    desc = result[0].get('generated_text') or result[0].get('caption')
-                    if desc:
-                        return ask_ai_with_history(0, f"Translate this image description to the user's language and describe it: {desc}")
-        except requests.exceptions.RequestException:
+            image_file.seek(0)
+            response = ai_client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Опиши подробно, что изображено на этой фотографии, и ответь на русском языке."
+                    }
+                ],
+                image=image_file
+            )
+            answer = response.choices[0].message.content
+            if answer:
+                return clean_markdown(answer)
+        except Exception:
             continue
             
-    return "Не удалось распознать изображение: все бесплатные сервисы анализа временно недоступны или возникла ошибка сети."
+    return "Не удалось распознать изображение через g4f. Все поддерживаемые модели временно недоступны."
 
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
@@ -318,7 +307,7 @@ def handle_photo(message):
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded = bot.download_file(file_info.file_path)
-        answer = analyze_image_dynamic(downloaded)
+        answer = analyze_image_g4f(downloaded)
         bot.edit_message_text(answer, chat_id=message.chat.id, message_id=msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"Ошибка: {e}", chat_id=message.chat.id, message_id=msg.message_id)
