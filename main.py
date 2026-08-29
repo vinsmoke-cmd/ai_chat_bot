@@ -84,15 +84,24 @@ def perform_web_search(query):
     return results_text
 
 def generate_image_hf(prompt):
-    try:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=60)
-        if response.status_code == 200:
-            return response.content
-        return None
-    except Exception:
-        return None
+    """Динамический перебор моделей Hugging Face в случае перегрузки"""
+    models = [
+        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
+        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1",
+        "https://api-inference.huggingface.co/models/CompVis/stable-diffusion-v1-4",
+        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+    ]
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    
+    for api_url in models:
+        try:
+            response = requests.post(api_url, headers=headers, json={"inputs": prompt}, timeout=40)
+            if response.status_code == 200:
+                return response.content
+        except Exception:
+            continue
+            
+    return None
 
 def analyze_image_hf(image_bytes):
     try:
@@ -220,7 +229,7 @@ def image_cmd(message):
         bot.send_photo(message.chat.id, img_bytes, caption=f"По запросу: {prompt}")
         bot.delete_message(message.chat.id, msg.message_id)
     else:
-        bot.edit_message_text("Не удалось сгенерировать картинку. Попробуй еще раз через минуту.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("Не удалось сгенерировать картинку ни на одной модели. Все бесплатные серверы сейчас перегружены.", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['tts'])
 def tts_cmd(message):
