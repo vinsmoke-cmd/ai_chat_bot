@@ -13,8 +13,7 @@ import edge_tts
 from duckduckgo_search import DDGS
 import g4f
 from g4f.client import Client
-import google.generativeai as genai
-from PIL import Image
+from groq import Groq
 
 try:
     from tavily import TavilyClient
@@ -24,16 +23,19 @@ except ImportError:
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 ai_client = Client()
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
 
 if GEMINI_API_KEY:
+    import google.generativeai as genai
+    from PIL import Image
     genai.configure(api_key=GEMINI_API_KEY)
 
 user_histories = {}
-
 app = Flask(__name__)
 
 @app.route('/')
@@ -45,7 +47,6 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 def clean_markdown(text):
-    """Удаляет символы разметки Markdown (*, _, #) из текста"""
     if not text:
         return ""
     return re.sub(r'[*_#]', '', text)
@@ -54,7 +55,7 @@ def ask_ai_with_history(user_id, prompt):
     if user_id not in user_histories:
         user_histories[user_id] = [{
             "role": "system", 
-            "content": "Ты полезный ИИ-ассистент. Отвечай строго на том же языке, на котором написан последний вопрос пользователя (если пользователь пишет на русском — отвечай на русском, если на английском — на английском, и т.д.). Категорически запрещено использовать любые символы Markdown, такие как *, _, #. Пиши обычным текстом без форматирования."
+            "content": "Ты полезный ИИ-ассистент. Отвечай строго на том же языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
         }]
     
     user_histories[user_id].append({"role": "user", "content": prompt})
@@ -62,7 +63,9 @@ def ask_ai_with_history(user_id, prompt):
     if len(user_histories[user_id]) > 11:
         user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
         
-    models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4"]
+    models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4", "llama-3-70b"]
+    success = False
+    answer = ""
     
     for model_name in models_to_try:
         try:
@@ -72,13 +75,29 @@ def ask_ai_with_history(user_id, prompt):
             )
             answer = response.choices[0].message.content
             answer = clean_markdown(answer)
-            user_histories[user_id].append({"role": "assistant", "content": answer})
-            return answer
+            success = True
+            break
         except Exception:
             continue
             
+    if not success and groq_client:
+        try:
+            response = groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=user_histories[user_id]
+            )
+            answer = response.choices[0].message.content
+            answer = clean_markdown(answer)
+            success = True
+        except Exception:
+            success = False
+
+    if success:
+        user_histories[user_id].append({"role": "assistant", "content": answer})
+        return answer
+            
     user_histories[user_id].pop()
-    return "Все бесплатные провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
+    return "Все провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
 
 def perform_web_search(query):
     results_text = ""
@@ -118,16 +137,13 @@ def generate_image_dynamic(prompt):
                     return r.content
         except Exception:
             continue
-            
     return None
 
 def analyze_image_gemini(image_bytes):
-    """Анализ фото с помощью официального Google Gemini API с динамическим перебором моделей"""
     if not GEMINI_API_KEY:
-        return "Не задан ключ GEMINI_API_KEY в переменных окружения хостинга."
+        return "Анализ фото недоступен: не задан GEMINI_API_KEY в переменных окружения."
     
     models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']
-    
     for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
@@ -138,7 +154,7 @@ def analyze_image_gemini(image_bytes):
         except Exception:
             continue
             
-    return "Не удалось получить ответ от Gemini. Проверьте правильность и активность вашего GEMINI_API_KEY."
+    return "Не удалось получить ответ от Gemini. Проверьте актуальность вашего ключа."
 
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
@@ -334,4 +350,3 @@ def handle_doc(message):
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     bot.infinity_polling()
-            
