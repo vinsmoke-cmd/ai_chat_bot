@@ -38,6 +38,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 def ask_ai_with_history(user_id, prompt):
+    """Динамический перебор текстовых моделей ИИ при ошибках"""
     if user_id not in user_histories:
         user_histories[user_id] = [{
             "role": "system", 
@@ -49,17 +50,24 @@ def ask_ai_with_history(user_id, prompt):
     if len(user_histories[user_id]) > 11:
         user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
         
-    try:
-        response = ai_client.chat.completions.create(
-            model="gpt-4", 
-            messages=user_histories[user_id]
-        )
-        answer = response.choices[0].message.content
-        user_histories[user_id].append({"role": "assistant", "content": answer})
-        return answer
-    except Exception as e:
-        user_histories[user_id].pop()
-        return f"Ошибка ИИ: {e}. Попробуй еще раз."
+    # Список моделей для текста (бот по очереди пробует каждую, если предыдущая выдала ошибку)
+    models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4"]
+    
+    for model_name in models_to_try:
+        try:
+            response = ai_client.chat.completions.create(
+                model=model_name, 
+                messages=user_histories[user_id]
+            )
+            answer = response.choices[0].message.content
+            user_histories[user_id].append({"role": "assistant", "content": answer})
+            return answer
+        except Exception:
+            continue  # Пробуем следующую модель в списке
+            
+    # Если все модели упали
+    user_histories[user_id].pop()
+    return "Все бесплатные провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
 
 def perform_web_search(query):
     results_text = ""
@@ -77,14 +85,14 @@ def perform_web_search(query):
                 results = list(ddgs.text(query, max_results=3))
                 for res in results:
                     title = res.get('title', 'Без заголовка')
-                    body = res.get('body', '')[:300]
+                    body = res.get('body', '')[:250]
                     results_text += f"- {title}: {body}...\n"
         except Exception as e:
             results_text = f"Не удалось выполнить поиск: {e}"
     return results_text
 
 def generate_image_hf(prompt):
-    """Динамический перебор моделей Hugging Face в случае перегрузки"""
+    """Динамический перебор моделей для картинок"""
     models = [
         "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
         "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1",
@@ -100,7 +108,6 @@ def generate_image_hf(prompt):
                 return response.content
         except Exception:
             continue
-            
     return None
 
 def analyze_image_hf(image_bytes):
@@ -186,7 +193,9 @@ def search_cmd(message):
         bot.edit_message_text(data, chat_id=message.chat.id, message_id=msg.message_id)
         return
         
-    prompt = f"Пользователь ищет: '{query}'. На основе данных из интернета составь подробный и понятный ответ:\n\n{data}"
+    safe_data = data[:1000]
+    prompt = f"Пользователь ищет: '{query}'. На основе этих данных из интернета дай короткий и понятный ответ:\n\n{safe_data}"
+    
     reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
@@ -229,7 +238,7 @@ def image_cmd(message):
         bot.send_photo(message.chat.id, img_bytes, caption=f"По запросу: {prompt}")
         bot.delete_message(message.chat.id, msg.message_id)
     else:
-        bot.edit_message_text("Не удалось сгенерировать картинку ни на одной модели. Все бесплатные серверы сейчас перегружены.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("Не удалось сгенерировать картинку ни на одной модели. Сервер перегружен.", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['tts'])
 def tts_cmd(message):
@@ -254,7 +263,7 @@ def handle_text(message):
             url = [w for w in text.split() if w.startswith("http")][0]
             resp = requests.get(url, timeout=10)
             soup = BeautifulSoup(resp.text, 'html.parser')
-            page_text = soup.get_text(separator=' ', strip=True)[:3000]
+            page_text = soup.get_text(separator=' ', strip=True)[:1500]
             reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
             bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
             return
@@ -288,9 +297,9 @@ def handle_doc(message):
                 f.write(downloaded)
                 path = f.name
             reader = PdfReader(path)
-            text = "".join([p.extract_text() for p in reader.pages[:5]])
+            text = "".join([p.extract_text() for p in reader.pages[:3]])
             os.remove(path)
-            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку из PDF:\n\n{text[:3000]}")
+            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку из PDF:\n\n{text[:1500]}")
             bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
         except Exception as e:
             bot.edit_message_text(f"Ошибка PDF: {e}", chat_id=message.chat.id, message_id=msg.message_id)
