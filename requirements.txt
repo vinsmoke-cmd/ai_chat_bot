@@ -5,3 +5,7 @@ flask
 requests
 beautifulsoup4
 edge-tts
+googlesearch-python
+pypdf
+python-docx
+pandas
