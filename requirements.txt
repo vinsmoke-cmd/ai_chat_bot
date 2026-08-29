@@ -7,4 +7,3 @@ beautifulsoup4
 edge-tts
 pypdf
 python-docx
-pandas
