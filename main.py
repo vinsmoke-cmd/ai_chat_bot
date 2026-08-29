@@ -122,18 +122,23 @@ def generate_image_dynamic(prompt):
     return None
 
 def analyze_image_gemini(image_bytes):
-    """Анализ фото с помощью официального Google Gemini API"""
+    """Анализ фото с помощью официального Google Gemini API с динамическим перебором моделей"""
     if not GEMINI_API_KEY:
         return "Не задан ключ GEMINI_API_KEY в переменных окружения хостинга."
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        image = Image.open(io.BytesIO(image_bytes))
-        response = model.generate_content(["Опиши подробно, что изображено на этой фотографии, и ответь на русском языке.", image])
-        if response and response.text:
-            return clean_markdown(response.text)
-    except Exception as e:
-        return f"Ошибка при анализе фото через Gemini: {e}"
-    return "Не удалось получить ответ от Gemini."
+    
+    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']
+    
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            image = Image.open(io.BytesIO(image_bytes))
+            response = model.generate_content(["Опиши подробно, что изображено на этой фотографии, и ответь на русском языке.", image])
+            if response and response.text:
+                return clean_markdown(response.text)
+        except Exception:
+            continue
+            
+    return "Не удалось получить ответ от Gemini. Проверьте правильность и активность вашего GEMINI_API_KEY."
 
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
@@ -329,4 +334,4 @@ def handle_doc(message):
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     bot.infinity_polling()
-        
+            
