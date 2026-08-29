@@ -13,6 +13,8 @@ import edge_tts
 from duckduckgo_search import DDGS
 import g4f
 from g4f.client import Client
+import google.generativeai as genai
+from PIL import Image
 
 try:
     from tavily import TavilyClient
@@ -20,11 +22,15 @@ except ImportError:
     TavilyClient = None
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 ai_client = Client()
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 user_histories = {}
 
@@ -115,31 +121,19 @@ def generate_image_dynamic(prompt):
             
     return None
 
-def analyze_image_g4f(image_bytes):
-    """Анализ фото с помощью g4f и мультимодальных моделей (gpt-4o, gpt-4)"""
-    models_to_try = ["gpt-4o", "gpt-4o-mini", "gpt-4"]
-    image_file = io.BytesIO(image_bytes)
-    
-    for model_name in models_to_try:
-        try:
-            image_file.seek(0)
-            response = ai_client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "Опиши подробно, что изображено на этой фотографии, и ответь на русском языке."
-                    }
-                ],
-                image=image_file
-            )
-            answer = response.choices[0].message.content
-            if answer:
-                return clean_markdown(answer)
-        except Exception:
-            continue
-            
-    return "Не удалось распознать изображение через g4f. Все поддерживаемые модели временно недоступны."
+def analyze_image_gemini(image_bytes):
+    """Анализ фото с помощью официального Google Gemini API"""
+    if not GEMINI_API_KEY:
+        return "Не задан ключ GEMINI_API_KEY в переменных окружения хостинга."
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        image = Image.open(io.BytesIO(image_bytes))
+        response = model.generate_content(["Опиши подробно, что изображено на этой фотографии, и ответь на русском языке.", image])
+        if response and response.text:
+            return clean_markdown(response.text)
+    except Exception as e:
+        return f"Ошибка при анализе фото через Gemini: {e}"
+    return "Не удалось получить ответ от Gemini."
 
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
@@ -307,7 +301,7 @@ def handle_photo(message):
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded = bot.download_file(file_info.file_path)
-        answer = analyze_image_g4f(downloaded)
+        answer = analyze_image_gemini(downloaded)
         bot.edit_message_text(answer, chat_id=message.chat.id, message_id=msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"Ошибка: {e}", chat_id=message.chat.id, message_id=msg.message_id)
@@ -335,3 +329,4 @@ def handle_doc(message):
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     bot.infinity_polling()
+        
