@@ -1,9 +1,11 @@
 pyTelegramBotAPI
-flask
-g4f
 requests
+Flask
 beautifulsoup4
 pypdf
 edge-tts
 duckduckgo-search
+g4f
+google-generativeai
+Pillow
 tavily-python
