@@ -5,11 +5,14 @@ import asyncio
 import threading
 import tempfile
 from flask import Flask
-from groq import Groq
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 import edge_tts
 from duckduckgo_search import DDGS
+
+# Импортируем g4f вместо Groq
+import g4f
+from g4f.client import Client
 
 try:
     from tavily import TavilyClient
@@ -20,12 +23,11 @@ except ImportError:
 # НАСТРОЙКИ КЛЮЧЕЙ
 # ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 bot = telebot.TeleBot(BOT_TOKEN)
-groq_client = Groq(api_key=GROQ_API_KEY)
+ai_client = Client() # Инициализируем клиент g4f
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
 
 # Память для диалогов пользователей
@@ -38,7 +40,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Бот работает!"
+    return "Бот работает на g4f!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -48,8 +50,8 @@ def run_web():
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==========================================
 
-def ask_groq_with_history(user_id, prompt):
-    """Общение с учетом истории сообщений (Модель Mixtral)"""
+def ask_ai_with_history(user_id, prompt):
+    """Общение с учетом истории сообщений через g4f"""
     if user_id not in user_histories:
         user_histories[user_id] = [{"role": "system", "content": "Ты полезный и дружелюбный ИИ-ассистент."}]
     
@@ -60,20 +62,22 @@ def ask_groq_with_history(user_id, prompt):
         user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
         
     try:
-        response = groq_client.chat.completions.create(
-            model="mixtral-8x7b-32768", # Отличная альтернатива Llama
+        # g4f сам подберет рабочего провайдера для этого запроса
+        response = ai_client.chat.completions.create(
+            model="gpt-4", 
             messages=user_histories[user_id]
         )
         answer = response.choices[0].message.content
         user_histories[user_id].append({"role": "assistant", "content": answer})
         return answer
     except Exception as e:
-        return f"Ошибка текстовой нейросети: {e}"
+        # Если словили ошибку — откатываем историю на шаг назад, чтобы не забивать ее мусором
+        user_histories[user_id].pop()
+        return f"Ошибка g4f: {e}\nПопробуй написать еще раз, провайдеры могут отваливаться."
 
 def perform_web_search(query):
     """Улучшенный поиск в интернете"""
     results_text = ""
-    # Пробуем Tavily (если ключ установлен)
     if tavily_client:
         try:
             response = tavily_client.search(query=query, max_results=3)
@@ -82,7 +86,6 @@ def perform_web_search(query):
         except Exception:
             pass
             
-    # Переключаемся на DuckDuckGo
     if not results_text:
         try:
             with DDGS() as ddgs:
@@ -118,7 +121,7 @@ def analyze_image_hf(image_bytes):
             result = response.json()
             if isinstance(result, list) and 'generated_text' in result[0]:
                 desc = result[0]['generated_text']
-                return ask_groq_with_history(0, f"Переведи описание картинки на русский и детально расскажи о ней: {desc}")
+                return ask_ai_with_history(0, f"Переведи описание картинки на русский и детально расскажи о ней: {desc}")
         return "Не удалось распознать изображение."
     except Exception as e:
         return f"Ошибка анализа фото: {e}"
@@ -160,7 +163,7 @@ def clear_cmd(message):
 @bot.message_handler(commands=['fact'])
 def fact_cmd(message):
     msg = bot.reply_to(message, "⏳ Ищу интересный факт...")
-    fact = ask_groq_with_history(message.chat.id, "Расскажи один очень интересный, редкий и увлекательный научный факт на русском языке. Будь краток.")
+    fact = ask_ai_with_history(message.chat.id, "Расскажи один очень интересный, редкий и увлекательный научный факт на русском языке. Будь краток.")
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['weather'])
@@ -170,7 +173,6 @@ def weather_cmd(message):
         bot.reply_to(message, "Укажи город. Пример: `/weather Москва`", parse_mode="Markdown")
         return
     try:
-        # Улучшенный, структурированный формат погоды
         params = {
             'format': '🌍 Город: %l\n🌤 Погода: %C %c\n🌡 Температура: %t (ощущается как %F)\n💨 Ветер: %w\n💧 Влажность: %h\n☔ Осадки: %p',
             'lang': 'ru'
@@ -198,7 +200,7 @@ def search_cmd(message):
         return
         
     prompt = f"Пользователь ищет: '{query}'. На основе свежих данных из интернета составь подробный и понятный ответ:\n\n{data}"
-    reply = ask_groq_with_history(message.chat.id, prompt)
+    reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
@@ -225,7 +227,7 @@ def ai_tools_cmd(message):
     else:
         prompt = content
         
-    reply = ask_groq_with_history(message.chat.id, prompt)
+    reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['image'])
@@ -266,7 +268,7 @@ def handle_text(message):
             resp = requests.get(url, timeout=10)
             soup = BeautifulSoup(resp.text, 'html.parser')
             page_text = soup.get_text(separator=' ', strip=True)[:3000]
-            reply = ask_groq_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
+            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
             bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
             return
         except Exception as e:
@@ -274,7 +276,7 @@ def handle_text(message):
             return
 
     msg = bot.reply_to(message, "⏳ Думаю...")
-    reply = ask_groq_with_history(message.chat.id, text)
+    reply = ask_ai_with_history(message.chat.id, text)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(content_types=['photo'])
@@ -301,7 +303,7 @@ def handle_doc(message):
             reader = PdfReader(path)
             text = "".join([p.extract_text() for p in reader.pages[:5]])
             os.remove(path)
-            reply = ask_groq_with_history(message.chat.id, f"Сделай выжимку из PDF:\n\n{text[:3000]}")
+            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку из PDF:\n\n{text[:3000]}")
             bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
         except Exception as e:
             bot.edit_message_text(f"Ошибка PDF: {e}", chat_id=message.chat.id, message_id=msg.message_id)
