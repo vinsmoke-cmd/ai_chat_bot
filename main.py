@@ -16,8 +16,7 @@ from groq import Groq
 from pypdf import PdfReader
 from telebot.types import BotCommand
 
-from google import genai
-from google.genai import types
+from huggingface_hub import InferenceClient
 
 
 # ============================================================
@@ -31,11 +30,11 @@ GROQ_KEY = (
     or os.getenv("GROQ_KEY")
 )
 
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+HF_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 FIXED_MODEL = "openai/gpt-oss-120b"
 
-GEMINI_MODEL = "gemini-2.5-flash"
+HF_VISION_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
 
 MAX_HISTORY_LENGTH = 1000
 
@@ -63,8 +62,8 @@ print(
 )
 
 print(
-    "GEMINI_API_KEY:",
-    "OK" if GEMINI_KEY else "NO"
+    "HUGGINGFACE_API_KEY:",
+    "OK" if HF_KEY else "NO"
 )
 
 
@@ -103,32 +102,32 @@ if GROQ_KEY:
 
 
 # ============================================================
-# GEMINI
+# HUGGING FACE (VISION)
 # ============================================================
 
-gemini_client = None
+hf_client = None
 
-if GEMINI_KEY:
+if HF_KEY:
     try:
-        gemini_client = genai.Client(
-            api_key=GEMINI_KEY
+        hf_client = InferenceClient(
+            api_key=HF_KEY
         )
 
         print(
-            "Gemini client initialized successfully."
+            "Hugging Face client initialized successfully."
         )
 
     except Exception as e:
-        gemini_client = None
+        hf_client = None
 
         print(
-            "Gemini initialization error:",
+            "Hugging Face initialization error:",
             repr(e)
         )
 
 else:
     print(
-        "GEMINI_API_KEY is not set."
+        "HUGGINGFACE_API_KEY is not set."
     )
 
 
@@ -618,11 +617,6 @@ def setup_commands():
         ),
 
         BotCommand(
-            "gemini",
-            "Спросить Gemini"
-        ),
-
-        BotCommand(
             "search",
             "Поиск в интернете"
         ),
@@ -724,7 +718,7 @@ def send_welcome(message):
         "Я умею:\n"
         "- Общаться на разных языках\n"
         "- Запоминать контекст диалога\n"
-        "- Анализировать фотографии\n"
+        "- Распознавать фотографии (Hugging Face)\n"
         "- Работать с кодом\n"
         "- Переводить тексты\n"
         "- Искать информацию в интернете\n"
@@ -1231,101 +1225,6 @@ def handle_image(message):
         bot.reply_to(
             message,
             "Не удалось создать изображение."
-        )
-
-
-# ============================================================
-# GEMINI TEXT
-# ============================================================
-
-@bot.message_handler(
-    commands=["gemini"]
-)
-def handle_gemini(message):
-
-    if not gemini_client:
-
-        bot.reply_to(
-            message,
-            "Gemini сейчас недоступен.\n\n"
-            "Причина: Gemini Client не создан.\n"
-            "Проверь переменную GEMINI_API_KEY "
-            "в Render."
-        )
-
-        return
-
-    query = extract_command_argument(
-        message
-    )
-
-    if not query:
-
-        bot.reply_to(
-            message,
-            "Напиши вопрос после /gemini."
-        )
-
-        return
-
-    bot.send_chat_action(
-        message.chat.id,
-        "typing"
-    )
-
-    try:
-
-        response = (
-            gemini_client
-            .models
-            .generate_content(
-
-                model=GEMINI_MODEL,
-
-                contents=(
-                    SYSTEM_INSTRUCTION
-                    + "\n\n"
-                    + "Запрос пользователя:\n"
-                    + query
-                )
-            )
-        )
-
-        answer = ""
-
-        if response.text:
-            answer = response.text
-
-        answer = clean_text(
-            answer
-        )
-
-        if not answer:
-            answer = (
-                "Gemini не вернул текстовый ответ."
-            )
-
-        answer = add_rare_emoji(
-            answer
-        )
-
-        safe_reply(
-            message,
-            answer
-        )
-
-    except Exception as e:
-
-        print(
-            "Gemini error:",
-            repr(e)
-        )
-
-        bot.reply_to(
-            message,
-            "Ошибка Gemini.\n\n"
-            "Проверь GEMINI_API_KEY, "
-            "доступность модели и логи Render."
         )
 
 
@@ -1995,7 +1894,7 @@ def handle_search(message):
 
 
 # ============================================================
-# PHOTO / GEMINI VISION
+# PHOTO / HUGGING FACE VISION
 # ============================================================
 
 @bot.message_handler(
@@ -2003,12 +1902,12 @@ def handle_search(message):
 )
 def handle_photo(message):
 
-    if not gemini_client:
+    if not hf_client:
 
         bot.reply_to(
             message,
             "Анализ изображений сейчас недоступен.\n\n"
-            "Проверь GEMINI_API_KEY в Render."
+            "Проверь HUGGINGFACE_API_KEY на хостинге."
         )
 
         return
@@ -2034,36 +1933,28 @@ def handle_photo(message):
             "Опиши это изображение."
         )
 
-        response = (
-            gemini_client
-            .models
-            .generate_content(
-
-                model=GEMINI_MODEL,
-
-                contents=[
-                    (
-                        SYSTEM_INSTRUCTION
-                        + "\n\n"
-                        + "Запрос пользователя:\n"
-                        + caption
-                    ),
-
-                    types.Part.from_bytes(
-                        data=downloaded,
-                        mime_type="image/jpeg"
-                    )
-                ]
-            )
+        response = hf_client.chat.completion(
+            model=HF_VISION_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "image": downloaded
+                        },
+                        {
+                            "type": "text",
+                            "text": caption
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1000
         )
 
-        answer = ""
-
-        if response.text:
-            answer = response.text
-
         answer = clean_text(
-            answer
+            response.choices[0].message.content
         )
 
         answer = add_rare_emoji(
@@ -2379,12 +2270,6 @@ def handle_text(message):
         "supergroup"
     ):
 
-        text = (
-            message.text
-            or
-            ""
-        )
-
         mentioned = is_bot_mentioned(
             message
         )
@@ -2572,13 +2457,13 @@ if __name__ == "__main__":
     )
 
     print(
-        "Gemini:",
-        "OK" if gemini_client else "NO"
+        "Hugging Face:",
+        "OK" if hf_client else "NO"
     )
 
     print(
-        "Gemini model:",
-        GEMINI_MODEL
+        "Vision model:",
+        HF_VISION_MODEL
     )
 
     print(
