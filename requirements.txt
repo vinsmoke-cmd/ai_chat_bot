@@ -1,9 +1,9 @@
 pyTelegramBotAPI
-edge-tts
 flask
-beautifulsoup4
 groq
-pypdf
-google-genai
 requests
-huggingface_hub
+beautifulsoup4
+pypdf
+edge-tts
+duckduckgo-search
+tavily-python
