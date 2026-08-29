@@ -45,11 +45,11 @@ def clean_markdown(text):
     return re.sub(r'[*_#]', '', text)
 
 def ask_ai_with_history(user_id, prompt):
-    """Динамический перебор текстовых моделей с поддержкой языка и без Markdown"""
+    """Динамический перебор текстовых моделей с автовыбором языка и без Markdown"""
     if user_id not in user_histories:
         user_histories[user_id] = [{
             "role": "system", 
-            "content": "Ты полезный ИИ-ассистент. По умолчанию всегда общайся на русском языке, если пользователь явно не попросит говорить на другом языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #. Пиши обычным текстом без форматирования."
+            "content": "Ты полезный ИИ-ассистент. Отвечай строго на том же языке, на котором написан последний вопрос пользователя (если пользователь пишет на русском — отвечай на русском, если на английском — на английском, и т.д.). Категорически запрещено использовать любые символы Markdown, такие как *, _, #. Пиши обычным текстом без форматирования."
         }]
     
     user_histories[user_id].append({"role": "user", "content": prompt})
@@ -98,7 +98,6 @@ def perform_web_search(query):
     return results_text
 
 def generate_image_dynamic(prompt):
-    """Надежная генерация картинок с резервными вариантами"""
     g4f_models = ["flux", "dall-e-3"]
     for model in g4f_models:
         try:
@@ -140,7 +139,7 @@ def analyze_image_hf(image_bytes):
             result = response.json()
             if isinstance(result, list) and 'generated_text' in result[0]:
                 desc = result[0]['generated_text']
-                return ask_ai_with_history(0, f"Переведи описание картинки на русский и расскажи о ней: {desc}")
+                return ask_ai_with_history(0, f"Translate this image description to the user's language and describe it: {desc}")
         return "Не удалось распознать изображение."
     except Exception as e:
         return f"Ошибка анализа фото: {e}"
@@ -217,7 +216,7 @@ def search_cmd(message):
         return
         
     safe_data = data[:1000]
-    prompt = f"Пользователь ищет: '{query}'. На основе этих данных из интернета дай короткий и понятный ответ:\n\n{safe_data}"
+    prompt = f"Пользователь ищет: '{query}'. На основе этих данных дай короткий и понятный ответ на языке запроса:\n\n{safe_data}"
     
     reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
@@ -229,7 +228,7 @@ def ai_tools_cmd(message):
         return
     
     cmd_full = parts[0]
-    cmd = cmd_full.split('@')[0]  # Убирает @botname из названия команды
+    cmd = cmd_full.split('@')[0]
     
     if len(parts) < 2:
         bot.reply_to(message, f"Напиши текст после команды {cmd}")
