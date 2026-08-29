@@ -1,8 +1,10 @@
-pyTelegramBotAPI
+pytelegrambotapi
 groq
 google-genai
 flask
 requests
 beautifulsoup4
-googlesearch-python
 edge-tts
+pypdf
+python-docx
+pandas
