@@ -1,4 +1,5 @@
 import os
+import re
 import telebot
 import requests
 import asyncio
@@ -37,12 +38,18 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
+def clean_markdown(text):
+    """Удаляет символы разметки Markdown (*, _, #) из текста"""
+    if not text:
+        return ""
+    return re.sub(r'[*_#]', '', text)
+
 def ask_ai_with_history(user_id, prompt):
-    """Динамический перебор текстовых моделей ИИ при ошибках"""
+    """Динамический перебор текстовых моделей с поддержкой языка и без Markdown"""
     if user_id not in user_histories:
         user_histories[user_id] = [{
             "role": "system", 
-            "content": "Ты полезный ИИ-ассистент. Отвечай обычным текстом строго без использования символов Markdown, таких как *, _, # и т.д."
+            "content": "Ты полезный ИИ-ассистент. По умолчанию всегда общайся на русском языке, если пользователь явно не попросит говорить на другом языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #. Пиши обычным текстом без форматирования."
         }]
     
     user_histories[user_id].append({"role": "user", "content": prompt})
@@ -50,7 +57,6 @@ def ask_ai_with_history(user_id, prompt):
     if len(user_histories[user_id]) > 11:
         user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
         
-    # Список моделей для текста (бот по очереди пробует каждую, если предыдущая выдала ошибку)
     models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4"]
     
     for model_name in models_to_try:
@@ -60,12 +66,12 @@ def ask_ai_with_history(user_id, prompt):
                 messages=user_histories[user_id]
             )
             answer = response.choices[0].message.content
+            answer = clean_markdown(answer)
             user_histories[user_id].append({"role": "assistant", "content": answer})
             return answer
         except Exception:
-            continue  # Пробуем следующую модель в списке
+            continue
             
-    # Если все модели упали
     user_histories[user_id].pop()
     return "Все бесплатные провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
 
@@ -91,29 +97,46 @@ def perform_web_search(query):
             results_text = f"Не удалось выполнить поиск: {e}"
     return results_text
 
-def generate_image_hf(prompt):
-    """Динамический перебор моделей для картинок"""
-    models = [
-        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
-        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1",
-        "https://api-inference.huggingface.co/models/CompVis/stable-diffusion-v1-4",
-        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
-    ]
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
-    for api_url in models:
+def generate_image_dynamic(prompt):
+    """Надежная генерация картинок с резервными вариантами"""
+    # 1. Пробуем через g4f клиент (модели flux, dall-e-3)
+    g4f_models = ["flux", "dall-e-3"]
+    for model in g4f_models:
         try:
-            response = requests.post(api_url, headers=headers, json={"inputs": prompt}, timeout=40)
+            response = ai_client.images.generate(
+                model=model,
+                prompt=prompt,
+                response_format="url"
+            )
+            image_url = response.data[0].url
+            if image_url:
+                r = requests.get(image_url, timeout=25)
+                if r.status_code == 200:
+                    return r.content
+        except Exception:
+            continue
+
+    # 2. Резервный вариант через Hugging Face API
+    hf_models = [
+        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
+        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+        "https://api-inference.huggingface.co/models/CompVis/stable-diffusion-v1-4"
+    ]
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    for api_url in hf_models:
+        try:
+            response = requests.post(api_url, headers=headers, json={"inputs": prompt}, timeout=35)
             if response.status_code == 200:
                 return response.content
         except Exception:
             continue
+            
     return None
 
 def analyze_image_hf(image_bytes):
     try:
         API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
         response = requests.post(API_URL, headers=headers, data=image_bytes)
         if response.status_code == 200:
             result = response.json()
@@ -157,7 +180,7 @@ def clear_cmd(message):
 @bot.message_handler(commands=['fact'])
 def fact_cmd(message):
     msg = bot.reply_to(message, "Ищу интересный факт...")
-    fact = ask_ai_with_history(message.chat.id, "Расскажи один интересный научный факт на русском языке. Будь краток.")
+    fact = ask_ai_with_history(message.chat.id, "Расскажи один интересный научный факт. Будь краток.")
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['weather'])
@@ -173,7 +196,7 @@ def weather_cmd(message):
         }
         resp = requests.get(f"https://wttr.in/{city}", params=params, timeout=5)
         if resp.status_code == 200:
-            bot.reply_to(message, f"Текущая сводка:\n\n{resp.text.strip()}")
+            bot.reply_to(message, f"Текущая сводка:\n\n{clean_markdown(resp.text.strip())}")
         else:
             bot.reply_to(message, "Не удалось найти город.")
     except Exception as e:
@@ -233,12 +256,12 @@ def image_cmd(message):
         bot.reply_to(message, "Опиши картинку. Пример: /image кот в космосе")
         return
     msg = bot.reply_to(message, "Генерирую изображение...")
-    img_bytes = generate_image_hf(prompt)
+    img_bytes = generate_image_dynamic(prompt)
     if img_bytes:
         bot.send_photo(message.chat.id, img_bytes, caption=f"По запросу: {prompt}")
         bot.delete_message(message.chat.id, msg.message_id)
     else:
-        bot.edit_message_text("Не удалось сгенерировать картинку ни на одной модели. Сервер перегружен.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("Не удалось сгенерировать картинку. Все сервисы генерации временно заняты.", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['tts'])
 def tts_cmd(message):
