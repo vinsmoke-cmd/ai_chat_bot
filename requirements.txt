@@ -9,3 +9,4 @@ g4f
 google-generativeai
 Pillow
 tavily-python
+groq
