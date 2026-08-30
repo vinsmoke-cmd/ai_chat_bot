@@ -68,29 +68,18 @@ def download_via_cobalt(url, mode="audio"):
     cobalt_api_url = "https://api.cobalt.tools/"
     headers = {
         "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "Content-Type": "application/json"
     }
-    
     payload = {
-        "url": url
+        "url": url,
+        "downloadMode": mode,
+        "audioFormat": "mp3",
+        "videoQuality": "720"
     }
     
-    if mode == "audio":
-        payload["downloadMode"] = "audio"
-        payload["audioFormat"] = "mp3"
-    else:
-        payload["downloadMode"] = "auto"
-        payload["videoQuality"] = "720"
-    
-    response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=25)
+    response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=30)
     if response.status_code != 200:
-        try:
-            err_data = response.json()
-            err_msg = err_data.get("text") or err_data.get("error") or response.text
-        except Exception:
-            err_msg = response.text
-        raise Exception(f"Cobalt API {response.status_code}: {err_msg}")
+        raise Exception(f"Cobalt API вернул статус {response.status_code}")
         
     data = response.json()
     status = data.get("status")
@@ -342,8 +331,6 @@ def music_cmd(message):
             'noplaylist': True,
             'default_search': 'ytsearch5',
             'quiet': True,
-            'extract_flat': 'in_playlist',
-            'nocheckcertificate': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
@@ -360,6 +347,7 @@ def music_cmd(message):
             for i, track in enumerate(results, 1):
                 title = track.get('title', 'Без названия')
                 text_result += f"{i}. {title}\n"
+                # Добавляем кнопки с выбором формата для каждого трека
                 btn_mp3 = InlineKeyboardButton(f"🎵 {i} MP3", callback_data=f"dl_mp3_{i-1}")
                 btn_mp4 = InlineKeyboardButton(f"🎬 {i} Video", callback_data=f"dl_mp4_{i-1}")
                 keyboard.row(btn_mp3, btn_mp4)
@@ -381,7 +369,7 @@ def callback_download_media(call):
         return
         
     track = results[index]
-    url = track.get('url') or track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id')}"
+    url = track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id')}"
     title = track.get('title', 'Медиа')
     
     bot.answer_callback_query(call.id, f"Скачиваю {title[:20]}...")
@@ -390,7 +378,7 @@ def callback_download_media(call):
     mode = "audio" if action == "dl_mp3" else "auto"
     
     try:
-        # Быстрое скачивание через Cobalt Tools API
+        # Пробуем быстро скачать через Cobalt Tools API
         file_url, filename = download_via_cobalt(url, mode=mode)
         media_bytes = requests.get(file_url, timeout=60).content
         
@@ -404,7 +392,7 @@ def callback_download_media(call):
             
         bot.delete_message(user_id, processing_msg.message_id)
     except Exception:
-        # Резервный метод через FFmpeg / yt-dlp
+        # Резервный метод через FFmpeg / yt-dlp, если Cobalt недоступен
         bot.edit_message_text("⚙️ Cobalt занят, скачиваю напрямую через FFmpeg...", chat_id=user_id, message_id=processing_msg.message_id)
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -413,15 +401,13 @@ def callback_download_media(call):
                         'format': 'bestaudio/best',
                         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
                         'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-                        'quiet': True,
-                        'nocheckcertificate': True
+                        'quiet': True
                     }
                 else:
                     ydl_opts = {
                         'format': 'best[ext=mp4]/best',
                         'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-                        'quiet': True,
-                        'nocheckcertificate': True
+                        'quiet': True
                     }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.extract_info(url, download=True)
@@ -487,12 +473,14 @@ def handle_text(message):
         bot.reply_to(message, "Она самая любимая, самая лучшая, самая добрая, самая красивая, самая милая, самая нежная, самая заботливая, самая прекрасная, самая родная, самая дорогая, самая искренняя, самая душевная, самая очаровательная, самая замечательная, самая невероятная, самая особенная, самая чудесная, самая ласковая, самая понимающая, самая веселая, самая позитивная, самая уютная, самая драгоценная, самая бесценная, самая неповторимая, самая удивительная и просто самая-самая ❤️")
         return
 
+    # Автоматическая загрузка видео/аудио, если отправлена ссылка (TikTok, YouTube, Insta и т.д.)
     if "http://" in text or "https://" in text:
         urls = [w for w in text.split() if w.startswith("http")]
         if urls:
             url = urls[0]
             msg = bot.reply_to(message, "🚀 Обнаружена ссылка! Скачиваю медиа...")
             try:
+                # Пробуем скачать как видео
                 file_url, filename = download_via_cobalt(url, mode="auto")
                 media_bytes = requests.get(file_url, timeout=60).content
                 media_file = io.BytesIO(media_bytes)
@@ -506,6 +494,7 @@ def handle_text(message):
                 bot.delete_message(message.chat.id, msg.message_id)
                 return
             except Exception:
+                # Если Cobalt не смог распознать видео, пробуем прочитать страницу как статью
                 try:
                     resp = requests.get(url, timeout=10)
                     soup = BeautifulSoup(resp.text, 'html.parser')
@@ -517,6 +506,7 @@ def handle_text(message):
                     bot.edit_message_text(f"Не удалось обработать ссылку: {e}", chat_id=message.chat.id, message_id=msg.message_id)
                     return
 
+    # Обычный разговор с ИИ
     msg = bot.reply_to(message, "Думаю...")
     reply = ask_ai_with_history(message.chat.id, text)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
