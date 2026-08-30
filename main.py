@@ -209,7 +209,7 @@ def help_cmd(message):
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
-        "- /music <название трека> - поиск и скачивание полного трека 🎵\n"
+        "- /music <название трека> - поиск и скачивание полного трека из SoundCloud 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -312,19 +312,19 @@ def music_cmd(message):
         if mode == "neuroham":
             bot.reply_to(message, "И что я должен искать? Пустоту? Напиши название трека 🙄")
         else:
-            bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Кино Группа крови")
+            bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Phonk")
         return
 
     if mode == "neuroham":
-        msg = bot.reply_to(message, "Копаюсь в архивах мусора в поисках твоей музыки... 🙄")
+        msg = bot.reply_to(message, "Копаюсь в звуковой свалке SoundCloud... 🙄")
     else:
-        msg = bot.reply_to(message, "Ищу полноценный трек... 🎧")
+        msg = bot.reply_to(message, "Ищу трек в SoundCloud... 🎧")
 
     try:
         ydl_opts = {
             'format': 'bestaudio',
             'noplaylist': True,
-            'default_search': 'ytsearch5',
+            'default_search': 'scsearch5',  # Поиск через SoundCloud
             'quiet': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -333,21 +333,27 @@ def music_cmd(message):
             
             if not results:
                 if mode == "neuroham":
-                    bot.edit_message_text("Даже по такому запросу ничего не нашлось. Уникальный вкус у тебя 💀", chat_id=user_id, message_id=msg.message_id)
+                    bot.edit_message_text("Даже SoundCloud не знает эту дичь 💀", chat_id=user_id, message_id=msg.message_id)
                 else:
-                    bot.edit_message_text("К сожалению, по твоему запросу ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
+                    bot.edit_message_text("К сожалению, в SoundCloud ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
                 return
 
             music_cache[user_id] = results
 
             if mode == "neuroham":
-                text_result = f"🗑️ Наковырял треки по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
+                text_result = f"🗑️ Нарыл треки на SoundCloud по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
             else:
-                text_result = f"🎵 Топ результатов по запросу '{query}'. Выбери цифру для скачивания:\n\n"
+                text_result = f"🎵 Треки из SoundCloud по запросу '{query}'. Выбери цифру:\n\n"
                 
             for i, track in enumerate(results, 1):
                 title = track.get('title', 'Без названия')
-                duration = track.get('duration_string', '0:00')
+                duration_sec = track.get('duration', 0)
+                if duration_sec:
+                    minutes = int(duration_sec // 60)
+                    seconds = int(duration_sec % 60)
+                    duration = f"{minutes}:{seconds:02d}"
+                else:
+                    duration = track.get('duration_string', '0:00')
                 text_result += f"{i}. {title} [{duration}]\n"
                 
             keyboard = InlineKeyboardMarkup()
