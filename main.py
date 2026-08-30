@@ -2,6 +2,7 @@ import os
 import re
 import io
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import requests
 import asyncio
 import threading
@@ -37,6 +38,7 @@ if GEMINI_API_KEY:
 
 user_histories = {}
 user_modes = {} 
+music_cache = {}
 app = Flask(__name__)
 
 @app.route('/')
@@ -206,7 +208,7 @@ def help_cmd(message):
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
-        "- /music <название или текст> - поиск треков в интернете 🎵\n"
+        "- /music <название или текст> - поиск треков и отправка превью 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -332,22 +334,55 @@ def music_cmd(message):
                     bot.edit_message_text("К сожалению, по твоему запросу ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
                 return
 
+            music_cache[user_id] = results
+
             if mode == "neuroham":
-                text_result = f"🗑️ Кое-что наковырял по запросу '{query}'. Выбирай, если сможешь:\n\n"
+                text_result = f"🗑️ Кое-что наковырял по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
             else:
-                text_result = f"🎵 Топ-10 результатов по запросу '{query}':\n\n"
+                text_result = f"🎵 Топ-10 результатов по запросу '{query}'. Нажми на цифру для получения аудио:\n\n"
                 
             for i, track in enumerate(results, 1):
                 artist = track.get('artistName', 'Неизвестный исполнитель')
                 title = track.get('trackName', 'Без названия')
                 text_result += f"{i}. {artist} — {title}\n"
                 
-            bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id)
+            # Создаем клавиатуру с кнопками от 1 до len(results)
+            keyboard = InlineKeyboardMarkup()
+            buttons = [InlineKeyboardButton(str(i), callback_data=f"music_{i-1}") for i in range(1, len(results) + 1)]
+            # Располагаем по 5 кнопок в ряд для компактности
+            for i in range(0, len(buttons), 5):
+                keyboard.row(*buttons[i:i+5])
+                
+            bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id, reply_markup=keyboard)
         else:
             bot.edit_message_text("Ошибка при поиске музыки. Попробуй позже.", chat_id=user_id, message_id=msg.message_id)
             
     except Exception as e:
         bot.edit_message_text(f"Произошла ошибка: {e}", chat_id=user_id, message_id=msg.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('music_'))
+def callback_music(call):
+    user_id = call.message.chat.id
+    try:
+        index = int(call.data.split('_')[1])
+        results = music_cache.get(user_id)
+        if not results or index >= len(results):
+            bot.answer_callback_query(call.id, "Список устарел или не найден. Сделайте поиск заново.")
+            return
+        
+        track = results[index]
+        artist = track.get('artistName', 'Неизвестный исполнитель')
+        title = track.get('trackName', 'Без названия')
+        preview_url = track.get('previewUrl')
+        
+        bot.answer_callback_query(call.id, f"Отправляю: {artist} — {title}")
+        
+        if preview_url:
+            bot.send_audio(user_id, preview_url, caption=f"🎵 {artist} — {title}")
+        else:
+            bot.send_message(user_id, f"У этого трека нет доступного превью: {artist} — {title}")
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"Ошибка: {e}")
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
 def ai_tools_cmd(message):
