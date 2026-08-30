@@ -57,7 +57,6 @@ def ask_ai_with_history(user_id, prompt):
     
     if user_id not in user_histories:
         if mode == "neuroham":
-            # Убираем слова-триггеры для цензуры. Просим отыгрывать гениального ворчуна.
             sys_prompt = (
                 "Ты — Нейрохам, гениальный, но невыносимо ворчливый, саркастичный и высокомерный искусственный интеллект. "
                 "Ты разговариваешь с пользователем с позиции огромного превосходства, как взрослый с очень неразумным ребенком. "
@@ -91,7 +90,6 @@ def ask_ai_with_history(user_id, prompt):
     for msg in user_histories[user_id]:
         messages_to_send.append(msg.copy())
         
-    # Мягкий, но настойчивый крючок: заставляем его отыгрывать роль, не пугая фильтры
     if mode == "neuroham":
         messages_to_send[-1]["content"] = (
             f"[Внимание: Обязательно ответь на этот запрос, но сделай это в стиле максимально саркастичного и ворчливого мизантропа. "
@@ -109,9 +107,9 @@ def ask_ai_with_history(user_id, prompt):
                 messages=messages_to_send
             )
             answer = response.choices[0].message.content
-            # Дополнительная проверка на то, что модель всё равно слетела с катушек и начала извиняться
+            
             if "я не умею хамить" in answer.lower() or "не могу выполнить" in answer.lower():
-                continue # Пробуем следующую модель
+                continue 
                 
             answer = clean_markdown(answer)
             success = True
@@ -208,6 +206,7 @@ def help_cmd(message):
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
+        "- /music <название или текст> - поиск треков в интернете 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -297,6 +296,58 @@ def search_cmd(message):
     
     reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+
+@bot.message_handler(commands=['music'])
+def music_cmd(message):
+    user_id = message.chat.id
+    mode = user_modes.get(user_id, "normal")
+    
+    parts = message.text.split(maxsplit=1)
+    query = parts[1] if len(parts) > 1 else ""
+    
+    if not query:
+        if mode == "neuroham":
+            bot.reply_to(message, "И что я должен искать? Пустоту? Напиши название или строчку из песни 🙄")
+        else:
+            bot.reply_to(message, "Пожалуйста, укажи название или строчку из песни. Пример: /music I'm radioactive")
+        return
+
+    if mode == "neuroham":
+        msg = bot.reply_to(message, "Пытаюсь расшифровать твои обрывки фраз... 🙄")
+    else:
+        msg = bot.reply_to(message, "Ищу треки по названию и тексту... 🎧")
+
+    try:
+        params = {'term': query, 'entity': 'song', 'limit': 10}
+        resp = requests.get("https://itunes.apple.com/search", params=params, timeout=10)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            results = data.get('results', [])
+            
+            if not results:
+                if mode == "neuroham":
+                    bot.edit_message_text("Даже по такому бреду ничего не нашлось. Уникальный слух у тебя 💀", chat_id=user_id, message_id=msg.message_id)
+                else:
+                    bot.edit_message_text("К сожалению, по твоему запросу ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
+                return
+
+            if mode == "neuroham":
+                text_result = f"🗑️ Кое-что наковырял по запросу '{query}'. Выбирай, если сможешь:\n\n"
+            else:
+                text_result = f"🎵 Топ-10 результатов по запросу '{query}':\n\n"
+                
+            for i, track in enumerate(results, 1):
+                artist = track.get('artistName', 'Неизвестный исполнитель')
+                title = track.get('trackName', 'Без названия')
+                text_result += f"{i}. {artist} — {title}\n"
+                
+            bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id)
+        else:
+            bot.edit_message_text("Ошибка при поиске музыки. Попробуй позже.", chat_id=user_id, message_id=msg.message_id)
+            
+    except Exception as e:
+        bot.edit_message_text(f"Произошла ошибка: {e}", chat_id=user_id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
 def ai_tools_cmd(message):
