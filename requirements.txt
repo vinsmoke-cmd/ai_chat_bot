@@ -1,14 +1,14 @@
 pyTelegramBotAPI
-flask
+requests
 yt-dlp
 static-ffmpeg
-requests
+Flask
 beautifulsoup4
 pypdf
 edge-tts
 duckduckgo-search
 g4f
 groq
-tavily-python
 google-generativeai
 pillow
+tavily-python
