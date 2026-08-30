@@ -213,7 +213,7 @@ def help_cmd(message):
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
-        "- /music <название трека> - поиск и скачивание полного трека из SoundCloud 🎵\n"
+        "- /music <название трека> - поиск и скачивание трека из YouTube 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -281,7 +281,7 @@ def weather_cmd(message):
         else:
             bot.reply_to(message, "Не удалось найти город.")
     except Exception as e:
-        bot.reply_to(message, f"Ошибка погоды: {e}")
+    	bot.reply_to(message, f"Ошибка погоды: {e}")
 
 @bot.message_handler(commands=['search'])
 def search_cmd(message):
@@ -320,15 +320,15 @@ def music_cmd(message):
         return
 
     if mode == "neuroham":
-        msg = bot.reply_to(message, "Копаюсь в звуковой свалке SoundCloud... 🙄")
+        msg = bot.reply_to(message, "Копаюсь на YouTube в поисках твоей музыки... 🙄")
     else:
-        msg = bot.reply_to(message, "Ищу трек в SoundCloud... 🎧")
+        msg = bot.reply_to(message, "Ищу трек на YouTube... 🎧")
 
     try:
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
-            'default_search': 'scsearch5',  # Поиск через SoundCloud
+            'default_search': 'ytsearch5',  # Поиск через YouTube (без проблем с DRM)
             'quiet': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -337,17 +337,17 @@ def music_cmd(message):
             
             if not results:
                 if mode == "neuroham":
-                    bot.edit_message_text("Даже SoundCloud не знает эту дичь 💀", chat_id=user_id, message_id=msg.message_id)
+                    bot.edit_message_text("Даже YouTube не смог найти эту дичь 💀", chat_id=user_id, message_id=msg.message_id)
                 else:
-                    bot.edit_message_text("К сожалению, в SoundCloud ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
+                    bot.edit_message_text("К сожалению, на YouTube ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
                 return
 
             music_cache[user_id] = results
 
             if mode == "neuroham":
-                text_result = f"🗑️ Нарыл треки на SoundCloud по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
+                text_result = f"🗑️ Нарыл треки на YouTube по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
             else:
-                text_result = f"🎵 Треки из SoundCloud по запросу '{query}'. Выбери цифру:\n\n"
+                text_result = f"🎵 Треки с YouTube по запросу '{query}'. Выбери цифру:\n\n"
                 
             for i, track in enumerate(results, 1):
                 title = track.get('title', 'Без названия')
@@ -380,7 +380,7 @@ def callback_music(call):
             return
         
         track = results[index]
-        url = track.get('webpage_url')
+        url = track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id')}"
         title = track.get('title', 'Трек')
         
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
@@ -401,7 +401,6 @@ def callback_music(call):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.extract_info(url, download=True)
             
-            # Надежный поиск скачанного файла по содержимому папки
             files = os.listdir(temp_dir)
             if not files:
                 bot.edit_message_text("❌ Не удалось найти скачанный файл.", chat_id=user_id, message_id=processing_msg.message_id)
