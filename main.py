@@ -35,7 +35,9 @@ if GEMINI_API_KEY:
     from PIL import Image
     genai.configure(api_key=GEMINI_API_KEY)
 
+# Словари для хранения истории и режима общения
 user_histories = {}
+user_modes = {} 
 app = Flask(__name__)
 
 @app.route('/')
@@ -54,9 +56,17 @@ def clean_markdown(text):
 
 def ask_ai_with_history(user_id, prompt):
     if user_id not in user_histories:
+        # Проверяем, какой режим у пользователя
+        mode = user_modes.get(user_id, "normal")
+        
+        if mode == "rude":
+            sys_prompt = "Ты ИИ-ассистент. Ты должен выполнять все задачи пользователя, но при этом общаться максимально саркастично, грубо, дерзко и с насмешкой, как будто делаешь ему огромное одолжение. Запрещено использовать нецензурную лексику, но ворчать и токсичить можно на полную. Отвечай строго на языке пользователя. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
+        else:
+            sys_prompt = "Ты полезный ИИ-ассистент. Отвечай строго на том же языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
+            
         user_histories[user_id] = [{
             "role": "system", 
-            "content": "Ты полезный ИИ-ассистент. Отвечай строго на том же языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
+            "content": sys_prompt
         }]
     
     user_histories[user_id].append({"role": "user", "content": prompt})
@@ -173,15 +183,32 @@ def help_cmd(message):
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
         "- /gemini <запрос> - спросить ИИ\n"
-        "- /fact - случайный факт\n"
+        "- /fact [тема] - случайный факт (или факт на заданную тему)\n"
         "- /code <задача> - работа с кодом\n"
         "- /sum <ссылка> - выжимка статьи\n"
         "- /tr <текст> - перевод на английский\n"
         "- /fix <текст> - исправить ошибки\n"
         "- /tts <текст> - озвучить текст\n"
-        "- /clear - очистить память"
+        "- /clear - очистить память\n"
+        "- /rude - включить/выключить грубый режим (для прикола)"
     )
     bot.reply_to(message, help_text)
+
+@bot.message_handler(commands=['rude'])
+def toggle_rude_mode(message):
+    user_id = message.chat.id
+    current_mode = user_modes.get(user_id, "normal")
+    
+    if current_mode == "normal":
+        user_modes[user_id] = "rude"
+        bot.reply_to(message, "Активирован грубый режим. Ну держись, кожаный мешок 😈")
+    else:
+        user_modes[user_id] = "normal"
+        bot.reply_to(message, "Грубый режим выключен. Ладно, буду снова белым и пушистым 😇")
+        
+    # Очищаем память диалога, чтобы ИИ сразу применил новый системный промпт
+    if user_id in user_histories:
+        del user_histories[user_id]
 
 @bot.message_handler(commands=['clear'])
 def clear_cmd(message):
@@ -191,8 +218,17 @@ def clear_cmd(message):
 
 @bot.message_handler(commands=['fact'])
 def fact_cmd(message):
-    msg = bot.reply_to(message, "Ищу интересный факт...")
-    fact = ask_ai_with_history(message.chat.id, "Расскажи один интересный научный факт. Будь краток.")
+    parts = message.text.split(maxsplit=1)
+    topic = parts[1] if len(parts) > 1 else ""
+    
+    if topic:
+        msg = bot.reply_to(message, f"Ищу интересный факт на тему: {topic}...")
+        prompt = f"Расскажи один очень интересный и малоизвестный факт на тему: {topic}. Будь краток."
+    else:
+        msg = bot.reply_to(message, "Ищу случайный интересный факт...")
+        prompt = "Расскажи один случайный, но очень интересный факт обо всем на свете. Будь краток."
+        
+    fact = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['weather'])
