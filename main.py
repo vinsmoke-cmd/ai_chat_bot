@@ -17,7 +17,7 @@ from duckduckgo_search import DDGS
 from g4f.client import Client
 from groq import Groq
 
-# Автоматически внедряем FFmpeg в окружение Render
+# Автоматически внедряем FFmpeg в окружение
 static_ffmpeg.add_paths()
 
 try:
@@ -182,12 +182,29 @@ def generate_image_dynamic(prompt):
             continue
     return None
 
+def analyze_image_gemini(image_bytes):
+    if not GEMINI_API_KEY:
+        return "Анализ фото недоступен: не задан GEMINI_API_KEY."
+    
+    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            image = Image.open(io.BytesIO(image_bytes))
+            response = model.generate_content(["Опиши подробно, что изображено на этой фотографии, и ответь на русском языке.", image])
+            if response and response.text:
+                return clean_markdown(response.text)
+        except Exception:
+            continue
+            
+    return "Не удалось получить ответ от Gemini."
+
 @bot.message_handler(commands=['start', 'help'])
 def help_cmd(message):
     help_text = (
-        "Привет! Я ИИ-ассистент (работает 24/7 с поддержкой FFmpeg).\n\n"
+        "Привет! Я ИИ-ассистент (работает 24/7 с FFmpeg).\n\n"
         "Список команд:\n"
-        "- /music <название трека> - поиск и скачивание MP3 из SoundCloud 🎵\n"
+        "- /music <название трека> - поиск и скачивание трека из SoundCloud 🎵\n"
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
@@ -385,6 +402,44 @@ def image_cmd(message):
         bot.delete_message(message.chat.id, msg.message_id)
     else:
         bot.edit_message_text("Не удалось сгенерировать картинку.", chat_id=message.chat.id, message_id=msg.message_id)
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        msg = bot.reply_to(message, "Анализирую изображение с помощью Gemini...")
+        description = analyze_image_gemini(downloaded_file)
+        bot.edit_message_text(description, chat_id=message.chat.id, message_id=msg.message_id)
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка при обработке фото: {e}")
+
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        file_name = message.document.file_name.lower()
+        
+        if file_name.endswith('.pdf'):
+            msg = bot.reply_to(message, "Читаю PDF документ...")
+            reader = PdfReader(io.BytesIO(downloaded_file))
+            text = ""
+            for page in reader.pages[:5]:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+            
+            if not text.strip():
+                bot.edit_message_text("Не удалось извлечь текст из PDF.", chat_id=message.chat.id, message_id=msg.message_id)
+                return
+            
+            summary = ask_ai_with_history(message.chat.id, f"Сделай краткое содержание этого документа:\n\n{text[:3000]}")
+            bot.edit_message_text(summary, chat_id=message.chat.id, message_id=msg.message_id)
+        else:
+            bot.reply_to(message, "Поддерживается анализ только PDF-документов.")
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка при обработке документа: {e}")
 
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
