@@ -380,6 +380,7 @@ def callback_music(call):
         title = track.get('title', 'Трек')
         
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
+        processing_msg = bot.send_message(user_id, "⏳ Скачиваю трек из SoundCloud...")
         
         with tempfile.TemporaryDirectory() as temp_dir:
             ydl_opts = {
@@ -389,19 +390,31 @@ def callback_music(call):
                 'quiet': True,
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                file_path = ydl.prepare_filename(info)
+                ydl.extract_info(url, download=True)
             
-            if os.path.exists(file_path):
-                with open(file_path, 'rb') as audio:
-                    bot.send_audio(
-                        chat_id=user_id,
-                        audio=audio,
-                        caption=f"🎵 {title}",
-                        title=title
-                    )
-            else:
-                bot.send_message(user_id, "Не удалось подготовить аудиофайл.")
+            # Надежный поиск скачанного файла по содержимому папки
+            files = os.listdir(temp_dir)
+            if not files:
+                bot.edit_message_text("❌ Не удалось найти скачанный файл.", chat_id=user_id, message_id=processing_msg.message_id)
+                return
+            
+            file_path = os.path.join(temp_dir, files[0])
+            
+            if os.path.getsize(file_path) > 50 * 1024 * 1024:
+                bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ), Telegram не может его отправить.", chat_id=user_id, message_id=processing_msg.message_id)
+                return
+
+            bot.edit_message_text("📤 Отправляю аудио...", chat_id=user_id, message_id=processing_msg.message_id)
+            
+            with open(file_path, 'rb') as audio:
+                bot.send_audio(
+                    chat_id=user_id,
+                    audio=audio,
+                    caption=f"🎵 {title}",
+                    title=title
+                )
+            bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
+            
     except Exception as e:
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)
         bot.send_message(user_id, f"Не удалось отправить трек: {e}")
