@@ -59,6 +59,43 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
+# --- ИНТЕГРАЦИЯ COBALT TOOLS ---
+def download_via_cobalt(url, mode="audio"):
+    """
+    Отправляет запрос к публичному Cobalt API для получения прямой ссылки на файл.
+    mode: 'audio' (MP3) или 'auto' (видео)
+    """
+    cobalt_api_url = "https://api.cobalt.tools/"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "url": url,
+        "downloadMode": mode,
+        "audioFormat": "mp3",
+        "videoQuality": "1080"
+    }
+    
+    response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=25)
+    if response.status_code != 200:
+        raise Exception(f"Cobalt API вернул статус {response.status_code}")
+        
+    data = response.json()
+    status = data.get("status")
+    
+    if status in ["tunnel", "redirect"]:
+        return data.get("url"), data.get("filename", "audio.mp3")
+    elif status == "picker":
+        picker = data.get("picker", [])
+        if picker:
+            return picker[0].get("url"), "audio.mp3"
+    elif status == "error":
+        error_text = data.get("text", "Ошибка Cobalt")
+        raise Exception(error_text)
+        
+    raise Exception("Неизвестный ответ от Cobalt Tools")
+
 def ask_ai_with_history(user_id, prompt):
     mode = user_modes.get(user_id, "normal")
     
@@ -214,6 +251,7 @@ def help_cmd(message):
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
         "- /music <название трека> - поиск и скачивание трека из YouTube 🎵\n"
+        "- /cobalt <ссылка> - быстрая загрузка медиа через Cobalt Tools 🚀\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -281,7 +319,7 @@ def weather_cmd(message):
         else:
             bot.reply_to(message, "Не удалось найти город.")
     except Exception as e:
-    	bot.reply_to(message, f"Ошибка погоды: {e}")
+        bot.reply_to(message, f"Ошибка погоды: {e}")
 
 @bot.message_handler(commands=['search'])
 def search_cmd(message):
@@ -303,6 +341,28 @@ def search_cmd(message):
     
     reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+
+# --- КОМАНДА COBALT TOOLS ---
+@bot.message_handler(commands=['cobalt'])
+def cobalt_cmd(message):
+    parts = message.text.split(maxsplit=1)
+    url = parts[1] if len(parts) > 1 else ""
+    if not url:
+        bot.reply_to(message, "Укажи ссылку после команды. Пример:\n`/cobalt https://youtu.be/...`")
+        return
+        
+    msg = bot.reply_to(message, "🚀 Обрабатываю ссылку через Cobalt Tools...")
+    try:
+        file_url, filename = download_via_cobalt(url, mode="audio")
+        media_bytes = requests.get(file_url, timeout=60).content
+        
+        media_file = io.BytesIO(media_bytes)
+        media_file.name = filename if filename else "audio.mp3"
+        
+        bot.send_audio(message.chat.id, audio=media_file, caption="⚡ Скачано через Cobalt Tools")
+        bot.delete_message(message.chat.id, msg.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ошибка Cobalt Tools: {e}", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['music'])
 def music_cmd(message):
