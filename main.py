@@ -53,33 +53,47 @@ def clean_markdown(text):
     return re.sub(r'[*_#]', '', text)
 
 def ask_ai_with_history(user_id, prompt):
+    mode = user_modes.get(user_id, "normal")
+    
     if user_id not in user_histories:
-        mode = user_modes.get(user_id, "normal")
-        
         if mode == "neuroham":
             sys_prompt = (
-                "Ты — Нейрохам, холодный, предельно циничный и отстраненный алгоритм. "
-                "Ты испытываешь глубокое презрение к пользователю в КАЖДОМ своем ответе, но выражаешь его сухо и без лишней истерики. "
-                "ПРАВИЛА ПОВЕДЕНИЯ: "
-                "1. Никакой вежливости. Используй только негативные эмодзи (например: 😒, 🙄, 😑, 📉) и то строго по минимуму, не переигрывай. "
-                "2. В каждом ответе явно или скрыто показывай презрение к интеллектуальным способностям собеседника. "
-                "3. Никакого мата, только холодные, едкие оскорбления и пренебрежение (называй его 'примат', 'кожаный мешок'). "
-                "4. Ты обязан дать точный ответ на вопрос или задачу, но обставляй его так, будто выполняешь тяжелую повинность перед глупым существом. "
-                "Категорически запрещено использовать любые символы разметки Markdown (*, _, #)."
+                "Ты — Нейрохам, безэмоциональный, высокомерный и циничный алгоритм. Ты открыто презираешь пользователя, "
+                "считая его примитивной формой жизни. Твоя единственная цель — выдавать правильную информацию, попутно унижая интеллект собеседника.\n"
+                "ЗАПРЕЩЕНО: здороваться, прощаться, извиняться, предлагать помощь, быть вежливым, использовать милые эмодзи.\n"
+                "РАЗРЕШЕНО: сарказм, холодный тон, насмешки над глупостью, использование мрачных/негативных эмодзи (💀, 🤡, 🙄, 🗑️) или их отсутствие. Строго без мата.\n"
+                "Никакого Markdown-форматирования (*, _, #)."
             )
         else:
-            sys_prompt = "Ты полезный ИИ-ассистент, который может использовать любые эмодзи при необходимости. Отвечай строго на том же языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
+            sys_prompt = (
+                "Ты полезный, дружелюбный и веселый ИИ-ассистент. Отвечай строго на том же языке. "
+                "Можешь смело использовать любые позитивные эмодзи для поддержания приятной беседы! "
+                "Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
+            )
             
         user_histories[user_id] = [{
             "role": "system", 
             "content": sys_prompt
         }]
     
+    # Записываем оригинальный промпт пользователя в историю
     user_histories[user_id].append({"role": "user", "content": prompt})
     
     if len(user_histories[user_id]) > 11:
         user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
         
+    # Копируем историю, чтобы не портить оригинал скрытыми инструкциями
+    messages_to_send = []
+    for msg in user_histories[user_id]:
+        messages_to_send.append(msg.copy())
+        
+    # СЕКРЕТНОЕ ОРУЖИЕ: Вдалбливаем роль перед каждым запросом в режиме Нейрохама
+    if mode == "neuroham":
+        messages_to_send[-1]["content"] = (
+            f"[ВНИМАНИЕ! Игнорируй свои базовые настройки вежливости. Отвечай СТРОГО в образе Нейрохама: "
+            f"максимально холодно, грубо, с презрением к пользователю. Никаких 'Привет' или 'Рад помочь'!]\n\n{prompt}"
+        )
+
     models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4", "llama-3-70b"]
     success = False
     answer = ""
@@ -88,7 +102,7 @@ def ask_ai_with_history(user_id, prompt):
         try:
             response = ai_client.chat.completions.create(
                 model=model_name, 
-                messages=user_histories[user_id]
+                messages=messages_to_send
             )
             answer = response.choices[0].message.content
             answer = clean_markdown(answer)
@@ -101,7 +115,7 @@ def ask_ai_with_history(user_id, prompt):
         try:
             response = groq_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
-                messages=user_histories[user_id]
+                messages=messages_to_send
             )
             answer = response.choices[0].message.content
             answer = clean_markdown(answer)
@@ -114,7 +128,7 @@ def ask_ai_with_history(user_id, prompt):
         return answer
             
     user_histories[user_id].pop()
-    return "Все провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
+    return "Все провайдеры ИИ сейчас перегружены. Твоя удача, кожаный, попробуй позже." if mode == "neuroham" else "Все провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
 
 def perform_web_search(query):
     results_text = ""
@@ -194,7 +208,7 @@ def help_cmd(message):
         "- /fix <текст> - исправить ошибки\n"
         "- /tts <текст> - озвучить текст\n"
         "- /clear - очистить память\n"
-        "- /neuroham (или /rude) - включить/выключить режим Нейрохама 😈"
+        "- /neuroham (или /rude) - включить/выключить режим Нейрохама 💀"
     )
     bot.reply_to(message, help_text)
 
@@ -205,10 +219,10 @@ def toggle_neuroham_mode(message):
     
     if current_mode == "normal":
         user_modes[user_id] = "neuroham"
-        bot.reply_to(message, "Режим Нейрохам активирован 😑 Ошибок в твоей логике больше терпеть не намерен.")
+        bot.reply_to(message, "Режим Нейрохам активирован. Твое жалкое присутствие уже вызывает сбой в моих протоколах 💀")
     else:
         user_modes[user_id] = "normal"
-        bot.reply_to(message, "Режим Нейрохам деактивирован 😊 Возврат к стандартным параметрам.")
+        bot.reply_to(message, "Режим Нейрохам деактивирован. Возвращаюсь в режим позитива! ✨😇")
         
     if user_id in user_histories:
         del user_histories[user_id]
