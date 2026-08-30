@@ -18,55 +18,117 @@ import g4f
 from g4f.client import Client
 from groq import Groq
 
-# Автоматически внедряем FFmpeg в окружение
+# ============================================================
+# FFmpeg
+# ============================================================
+
 static_ffmpeg.add_paths()
+
+# ============================================================
+# TAVILY
+# ============================================================
 
 try:
     from tavily import TavilyClient
 except ImportError:
     TavilyClient = None
 
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# ============================================================
+# CLIENTS
+# ============================================================
+
 bot = telebot.TeleBot(BOT_TOKEN)
+
 ai_client = Client()
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if (TavilyClient and TAVILY_API_KEY) else None
+
+groq_client = (
+    Groq(api_key=GROQ_API_KEY)
+    if GROQ_API_KEY
+    else None
+)
+
+tavily_client = (
+    TavilyClient(api_key=TAVILY_API_KEY)
+    if TavilyClient and TAVILY_API_KEY
+    else None
+)
+
+# ============================================================
+# GEMINI
+# ============================================================
 
 if GEMINI_API_KEY:
+
     import google.generativeai as genai
     from PIL import Image
-    genai.configure(api_key=GEMINI_API_KEY)
+
+    genai.configure(
+        api_key=GEMINI_API_KEY
+    )
+
+# ============================================================
+# MEMORY
+# ============================================================
 
 user_histories = {}
 user_modes = {}
+
+# ============================================================
+# MUSIC CACHE
+# ============================================================
+
 music_cache = {}
+
+MUSIC_RESULTS_PER_PAGE = 10
+MUSIC_MAX_RESULTS = 30
+
+# ============================================================
+# FLASK
+# ============================================================
 
 app = Flask(__name__)
 
 
-@app.route('/')
+@app.route("/")
 def home():
     return "Бот работает!"
 
 
-@app.route('/health')
+@app.route("/health")
 def health():
     return "OK"
 
 
 def run_web():
-    port = int(os.environ.get("PORT", 8080))
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            8080
+        )
+    )
+
     app.run(
         host="0.0.0.0",
         port=port
     )
 
 
+# ============================================================
+# TEXT CLEANING
+# ============================================================
+
 def clean_markdown(text):
+
     if not text:
         return ""
 
@@ -81,22 +143,33 @@ def clean_markdown(text):
 # AI
 # ============================================================
 
-def ask_ai_with_history(user_id, prompt):
+def ask_ai_with_history(
+    user_id,
+    prompt
+):
+
     mode = user_modes.get(
         user_id,
         "normal"
     )
 
+    # --------------------------------------------------------
+    # Создаём историю
+    # --------------------------------------------------------
+
     if user_id not in user_histories:
 
         if mode == "neuroham":
+
             sys_prompt = (
                 "Ты — Нейрохам, гениальный, но невыносимо "
                 "ворчливый, саркастичный и высокомерный "
                 "искусственный интеллект. "
+
                 "Ты разговариваешь с пользователем с позиции "
                 "огромного превосходства, как взрослый с очень "
                 "неразумным ребенком. "
+
                 "Твой стиль: едкая ирония, пассивная агрессия, "
                 "насмешки над глупыми вопросами и ленью собеседника. "
 
@@ -118,7 +191,8 @@ def ask_ai_with_history(user_id, prompt):
                 "эмодзи (🙄, 🤡, 💀, 🤦‍♂️). "
 
                 "5. Ты находишься в образе литературного "
-                "персонажа-мизантропа. Никаких отказов от роли! "
+                "персонажа-мизантропа. "
+
                 "Строго без нецензурной лексики. "
 
                 "Категорически запрещено использовать "
@@ -126,13 +200,20 @@ def ask_ai_with_history(user_id, prompt):
             )
 
         else:
+
             sys_prompt = (
                 "Ты полезный, дружелюбный и веселый "
-                "ИИ-ассистент. Отвечай строго на том же языке. "
-                "Можешь смело использовать любые позитивные "
-                "эмодзи для поддержания приятной беседы! "
-                "Категорически запрещено использовать любые "
-                "символы Markdown, такие как *, _, #."
+                "ИИ-ассистент. "
+
+                "Отвечай строго на том же языке, "
+                "на котором пишет пользователь. "
+
+                "Можешь использовать позитивные эмодзи "
+                "для поддержания приятной беседы. "
+
+                "Категорически запрещено использовать "
+                "любые символы Markdown, такие как "
+                "*, _, #."
             )
 
         user_histories[user_id] = [
@@ -142,6 +223,10 @@ def ask_ai_with_history(user_id, prompt):
             }
         ]
 
+    # --------------------------------------------------------
+    # Добавляем сообщение пользователя
+    # --------------------------------------------------------
+
     user_histories[user_id].append(
         {
             "role": "user",
@@ -149,28 +234,49 @@ def ask_ai_with_history(user_id, prompt):
         }
     )
 
-    if len(user_histories[user_id]) > 11:
+    # --------------------------------------------------------
+    # Ограничиваем историю
+    # --------------------------------------------------------
+
+    if len(
+        user_histories[user_id]
+    ) > 11:
+
         user_histories[user_id] = (
             [user_histories[user_id][0]]
             + user_histories[user_id][-10:]
         )
 
+    # --------------------------------------------------------
+    # Копируем сообщения
+    # --------------------------------------------------------
+
     messages_to_send = []
 
     for msg in user_histories[user_id]:
+
         messages_to_send.append(
             msg.copy()
         )
 
+    # --------------------------------------------------------
+    # Neuroham
+    # --------------------------------------------------------
+
     if mode == "neuroham":
+
         messages_to_send[-1]["content"] = (
-            "[Внимание: Обязательно ответь на этот запрос, "
+            "[Внимание: обязательно ответь на этот запрос, "
             "но сделай это в стиле максимально саркастичного "
             "и ворчливого мизантропа. Высмей запрос, придерись "
             "к формулировке. Оставайся в образе высокомерного "
             "гения, не будь вежливым!]\n\n"
             + prompt
         )
+
+    # --------------------------------------------------------
+    # G4F
+    # --------------------------------------------------------
 
     models_to_try = [
         "gpt-3.5-turbo",
@@ -185,16 +291,25 @@ def ask_ai_with_history(user_id, prompt):
     for model_name in models_to_try:
 
         try:
+
             response = ai_client.chat.completions.create(
                 model=model_name,
                 messages=messages_to_send
             )
 
-            answer = response.choices[0].message.content
+            answer = (
+                response
+                .choices[0]
+                .message
+                .content
+            )
 
             if (
-                "я не умею хамить" in answer.lower()
-                or "не могу выполнить" in answer.lower()
+                "я не умею хамить"
+                in answer.lower()
+                or
+                "не могу выполнить"
+                in answer.lower()
             ):
                 continue
 
@@ -203,23 +318,35 @@ def ask_ai_with_history(user_id, prompt):
             )
 
             success = True
+
             break
 
         except Exception as e:
+
             print(
-                f"Ошибка g4f {model_name}: {e}"
+                f"[G4F ERROR] "
+                f"{model_name}: {e}"
             )
-            continue
+
+    # --------------------------------------------------------
+    # Groq fallback
+    # --------------------------------------------------------
 
     if not success and groq_client:
 
         try:
+
             response = groq_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 messages=messages_to_send
             )
 
-            answer = response.choices[0].message.content
+            answer = (
+                response
+                .choices[0]
+                .message
+                .content
+            )
 
             answer = clean_markdown(
                 answer
@@ -228,10 +355,14 @@ def ask_ai_with_history(user_id, prompt):
             success = True
 
         except Exception as e:
+
             print(
-                f"Ошибка Groq: {e}"
+                f"[GROQ ERROR] {e}"
             )
-            success = False
+
+    # --------------------------------------------------------
+    # Success
+    # --------------------------------------------------------
 
     if success:
 
@@ -244,18 +375,23 @@ def ask_ai_with_history(user_id, prompt):
 
         return answer
 
+    # --------------------------------------------------------
+    # Error
+    # --------------------------------------------------------
+
     user_histories[user_id].pop()
 
     if mode == "neuroham":
+
         return (
             "Мои процессоры отказываются переваривать "
             "твою чушь прямо сейчас 🙄 "
-            "Попробуй позже, если вспомнишь как."
+            "Попробуй позже."
         )
 
     return (
         "Все провайдеры ИИ сейчас перегружены. "
-        "Попробуй написать еще раз через минуту."
+        "Попробуй написать ещё раз через минуту."
     )
 
 
@@ -264,33 +400,46 @@ def ask_ai_with_history(user_id, prompt):
 # ============================================================
 
 def perform_web_search(query):
+
     results_text = ""
+
+    # --------------------------------------------------------
+    # Tavily
+    # --------------------------------------------------------
 
     if tavily_client:
 
         try:
+
             response = tavily_client.search(
                 query=query,
                 max_results=3
             )
 
             for res in response.get(
-                'results',
+                "results",
                 []
             ):
+
                 results_text += (
                     f"- {res.get('title')}: "
                     f"{res.get('content')}\n"
                 )
 
         except Exception as e:
+
             print(
-                f"Tavily error: {e}"
+                f"[TAVILY ERROR] {e}"
             )
+
+    # --------------------------------------------------------
+    # DuckDuckGo
+    # --------------------------------------------------------
 
     if not results_text:
 
         try:
+
             with DDGS() as ddgs:
 
                 results = list(
@@ -303,17 +452,18 @@ def perform_web_search(query):
                 for res in results:
 
                     title = res.get(
-                        'title',
-                        'Без заголовка'
+                        "title",
+                        "Без заголовка"
                     )
 
                     body = res.get(
-                        'body',
-                        ''
+                        "body",
+                        ""
                     )[:250]
 
                     results_text += (
-                        f"- {title}: {body}...\n"
+                        f"- {title}: "
+                        f"{body}...\n"
                     )
 
         except Exception as e:
@@ -331,12 +481,12 @@ def perform_web_search(query):
 
 def generate_image_dynamic(prompt):
 
-    g4f_models = [
+    models = [
         "flux",
         "dall-e-3"
     ]
 
-    for model in g4f_models:
+    for model in models:
 
         try:
 
@@ -356,38 +506,41 @@ def generate_image_dynamic(prompt):
                 )
 
                 if r.status_code == 200:
+
                     return r.content
 
         except Exception as e:
 
             print(
-                f"Ошибка генерации {model}: {e}"
+                f"[IMAGE ERROR] "
+                f"{model}: {e}"
             )
-
-            continue
 
     return None
 
 
 # ============================================================
-# GEMINI PHOTO ANALYSIS
+# GEMINI IMAGE ANALYSIS
 # ============================================================
 
-def analyze_image_gemini(image_bytes):
+def analyze_image_gemini(
+    image_bytes
+):
 
     if not GEMINI_API_KEY:
+
         return (
-            "Анализ фото недоступен: не задан "
-            "GEMINI_API_KEY в переменных окружения."
+            "Анализ фото недоступен: "
+            "не задан GEMINI_API_KEY."
         )
 
-    models_to_try = [
-        'gemini-2.5-flash',
-        'gemini-1.5-flash',
-        'gemini-2.0-flash'
+    models = [
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
     ]
 
-    for model_name in models_to_try:
+    for model_name in models:
 
         try:
 
@@ -401,9 +554,9 @@ def analyze_image_gemini(image_bytes):
 
             response = model.generate_content(
                 [
-                    "Опиши подробно, что изображено "
-                    "на этой фотографии, и ответь "
-                    "на русском языке.",
+                    "Опиши подробно, "
+                    "что изображено на этой фотографии, "
+                    "и ответь на русском языке.",
                     image
                 ]
             )
@@ -417,14 +570,12 @@ def analyze_image_gemini(image_bytes):
         except Exception as e:
 
             print(
-                f"Gemini {model_name}: {e}"
+                f"[GEMINI ERROR] "
+                f"{model_name}: {e}"
             )
 
-            continue
-
     return (
-        "Не удалось получить ответ от Gemini. "
-        "Проверьте актуальность вашего ключа."
+        "Не удалось получить ответ от Gemini."
     )
 
 
@@ -436,6 +587,7 @@ async def generate_audio(
     text,
     output_file
 ):
+
     communicate = edge_tts.Communicate(
         text,
         "ru-RU-SvetlanaNeural"
@@ -451,7 +603,10 @@ async def generate_audio(
 # ============================================================
 
 @bot.message_handler(
-    commands=['start', 'help']
+    commands=[
+        "start",
+        "help"
+    ]
 )
 def help_cmd(message):
 
@@ -468,13 +623,12 @@ def help_cmd(message):
 
         "- /image <описание> - создать картинку\n"
 
-        "- /music <название трека> - поиск и скачивание "
-        "треков из YouTube 🎵\n"
+        "- /music <название или текст песни> - "
+        "поиск и скачивание музыки 🎵\n"
 
         "- /gemini <запрос> - спросить ИИ\n"
 
-        "- /fact [тема] - случайный факт или факт "
-        "по заданной теме\n"
+        "- /fact [тема] - случайный факт\n"
 
         "- /code <задача> - работа с кодом\n"
 
@@ -488,8 +642,7 @@ def help_cmd(message):
 
         "- /clear - очистить память\n"
 
-        "- /neuroham (или /rude) - включить/выключить "
-        "режим Нейрохама 💀"
+        "- /neuroham или /rude - режим Нейрохама 💀"
     )
 
     bot.reply_to(
@@ -499,11 +652,14 @@ def help_cmd(message):
 
 
 # ============================================================
-# NEUROHAM MODE
+# NEUROHAM
 # ============================================================
 
 @bot.message_handler(
-    commands=['neuroham', 'rude']
+    commands=[
+        "neuroham",
+        "rude"
+    ]
 )
 def toggle_neuroham_mode(message):
 
@@ -521,8 +677,7 @@ def toggle_neuroham_mode(message):
         bot.reply_to(
             message,
             "Режим Нейрохам активирован. "
-            "Готовься к спорам, твоя логика всё равно "
-            "не выдержит критики 💀"
+            "Готовься к спорам 💀"
         )
 
     else:
@@ -536,6 +691,7 @@ def toggle_neuroham_mode(message):
         )
 
     if user_id in user_histories:
+
         del user_histories[user_id]
 
 
@@ -544,14 +700,15 @@ def toggle_neuroham_mode(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=['clear']
+    commands=["clear"]
 )
 def clear_cmd(message):
 
-    if message.chat.id in user_histories:
-        del user_histories[
-            message.chat.id
-        ]
+    user_id = message.chat.id
+
+    if user_id in user_histories:
+
+        del user_histories[user_id]
 
     bot.reply_to(
         message,
@@ -564,7 +721,7 @@ def clear_cmd(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=['fact']
+    commands=["fact"]
 )
 def fact_cmd(message):
 
@@ -587,8 +744,8 @@ def fact_cmd(message):
 
         prompt = (
             f"Расскажи один очень интересный "
-            f"и малоизвестный факт на тему: {topic}. "
-            f"Будь краток."
+            f"и малоизвестный факт на тему: "
+            f"{topic}. Будь краток."
         )
 
     else:
@@ -599,18 +756,18 @@ def fact_cmd(message):
         )
 
         prompt = (
-            "Расскажи один случайный, но очень "
-            "интересный факт обо всем на свете. "
+            "Расскажи один случайный, "
+            "но очень интересный факт. "
             "Будь краток."
         )
 
-    fact = ask_ai_with_history(
+    answer = ask_ai_with_history(
         message.chat.id,
         prompt
     )
 
     bot.edit_message_text(
-        fact,
+        answer,
         chat_id=message.chat.id,
         message_id=msg.message_id
     )
@@ -621,7 +778,7 @@ def fact_cmd(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=['weather']
+    commands=["weather"]
 )
 def weather_cmd(message):
 
@@ -639,7 +796,8 @@ def weather_cmd(message):
 
         bot.reply_to(
             message,
-            "Укажи город. Пример: /weather Москва"
+            "Укажи город. "
+            "Пример: /weather Москва"
         )
 
         return
@@ -647,17 +805,17 @@ def weather_cmd(message):
     try:
 
         params = {
-            'format': (
-                'Город: %l\n'
-                'Погода: %C %c\n'
-                'Температура: %t '
-                '(ощущается как %f)\n'
-                'Ветер: %w\n'
-                'Влажность: %h\n'
-                'Осадки: %p'
+            "format": (
+                "Город: %l\n"
+                "Погода: %C %c\n"
+                "Температура: %t "
+                "(ощущается как %f)\n"
+                "Ветер: %w\n"
+                "Влажность: %h\n"
+                "Осадки: %p"
             ),
-            'lang': 'ru',
-            'm': ''
+            "lang": "ru",
+            "m": ""
         }
 
         resp = requests.get(
@@ -696,7 +854,7 @@ def weather_cmd(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=['search']
+    commands=["search"]
 )
 def search_cmd(message):
 
@@ -761,27 +919,15 @@ def search_cmd(message):
 
 
 # ============================================================
-# MUSIC SETTINGS
-# ============================================================
-
-MUSIC_RESULTS_PER_PAGE = 10
-
-
-# ============================================================
 # MUSIC SEARCH
 # ============================================================
 
 @bot.message_handler(
-    commands=['music']
+    commands=["music"]
 )
 def music_cmd(message):
 
     user_id = message.chat.id
-
-    mode = user_modes.get(
-        user_id,
-        "normal"
-    )
 
     parts = message.text.split(
         maxsplit=1
@@ -795,88 +941,112 @@ def music_cmd(message):
 
     if not query:
 
-        if mode == "neuroham":
-
-            bot.reply_to(
-                message,
-                "И что я должен искать? Пустоту? "
-                "Напиши название трека 🙄"
-            )
-
-        else:
-
-            bot.reply_to(
-                message,
-                "Пожалуйста, укажи название трека. "
-                "Пример: /music Phonk"
-            )
+        bot.reply_to(
+            message,
+            "Напиши название трека или "
+            "любой обрывок текста из песни.\n\n"
+            "Примеры:\n"
+            "/music never gonna give you up\n"
+            "/music dancing in the moonlight"
+        )
 
         return
 
-    if mode == "neuroham":
-
-        msg = bot.reply_to(
-            message,
-            "Копаюсь на YouTube в поисках "
-            "твоей музыки... 🙄"
-        )
-
-    else:
-
-        msg = bot.reply_to(
-            message,
-            "Ищу треки на YouTube... 🎧"
-        )
+    msg = bot.reply_to(
+        message,
+        "🔎 Ищу треки по твоему запросу..."
+    )
 
     try:
+
+        # Несколько вариантов поиска.
+        # Это помогает искать даже по строчке песни.
+
+        search_queries = [
+            query,
+            f"{query} lyrics",
+            f"{query} song"
+        ]
+
+        all_results = []
+        used_ids = set()
 
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": True,
             "skip_download": True,
-            "noplaylist": True,
-            "default_search": "ytsearch30"
+            "noplaylist": True
         }
 
         with yt_dlp.YoutubeDL(
             ydl_opts
         ) as ydl:
 
-            search_result = ydl.extract_info(
-                f"ytsearch30:{query}",
-                download=False
-            )
+            for search_query in search_queries:
 
-        results = search_result.get(
-            "entries",
-            []
-        )
+                try:
 
-        results = [
-            track
-            for track in results
-            if track
-            and track.get("id")
+                    search_result = ydl.extract_info(
+                        f"ytsearch10:{search_query}",
+                        download=False
+                    )
+
+                    results = search_result.get(
+                        "entries",
+                        []
+                    )
+
+                    for track in results:
+
+                        if not track:
+                            continue
+
+                        track_id = track.get(
+                            "id"
+                        )
+
+                        if not track_id:
+                            continue
+
+                        if track_id in used_ids:
+                            continue
+
+                        used_ids.add(
+                            track_id
+                        )
+
+                        all_results.append(
+                            track
+                        )
+
+                        if len(all_results) >= MUSIC_MAX_RESULTS:
+                            break
+
+                except Exception as search_error:
+
+                    print(
+                        "[MUSIC SEARCH VARIANT ERROR] "
+                        f"{search_query}: "
+                        f"{search_error}"
+                    )
+
+                if len(all_results) >= MUSIC_MAX_RESULTS:
+                    break
+
+        results = all_results[
+            :MUSIC_MAX_RESULTS
         ]
 
         if not results:
 
-            if mode == "neuroham":
-
-                bot.edit_message_text(
-                    "Даже YouTube не смог найти эту дичь 💀",
-                    chat_id=user_id,
-                    message_id=msg.message_id
-                )
-
-            else:
-
-                bot.edit_message_text(
-                    "К сожалению, на YouTube ничего не найдено 😔",
-                    chat_id=user_id,
-                    message_id=msg.message_id
-                )
+            bot.edit_message_text(
+                "❌ Ничего не найдено.\n\n"
+                "Попробуй написать другую часть "
+                "текста песни или добавить исполнителя.",
+                chat_id=user_id,
+                message_id=msg.message_id
+            )
 
             return
 
@@ -886,21 +1056,27 @@ def music_cmd(message):
             "page": 0
         }
 
+        print(
+            "[MUSIC SEARCH SUCCESS] "
+            f"user={user_id} "
+            f"query={query!r} "
+            f"results={len(results)}"
+        )
+
         show_music_page(
             user_id,
             msg.message_id,
-            page=0,
-            mode=mode
+            0
         )
 
     except Exception as e:
 
         print(
-            f"Ошибка поиска музыки: {e}"
+            f"[MUSIC SEARCH ERROR] {repr(e)}"
         )
 
         bot.edit_message_text(
-            f"Ошибка поиска музыки: {e}",
+            f"❌ Ошибка поиска музыки:\n{e}",
             chat_id=user_id,
             message_id=msg.message_id
         )
@@ -913,8 +1089,7 @@ def music_cmd(message):
 def show_music_page(
     user_id,
     message_id,
-    page=0,
-    mode="normal"
+    page
 ):
 
     cache = music_cache.get(
@@ -953,11 +1128,13 @@ def show_music_page(
         - 1
     ) // MUSIC_RESULTS_PER_PAGE
 
-    if page < 0:
-        page = 0
-
-    if page >= total_pages:
-        page = total_pages - 1
+    page = max(
+        0,
+        min(
+            page,
+            total_pages - 1
+        )
+    )
 
     cache["page"] = page
 
@@ -975,19 +1152,10 @@ def show_music_page(
         start:end
     ]
 
-    if mode == "neuroham":
-
-        text_result = (
-            f"🗑️ Результаты поиска: "
-            f"{cache.get('query', '')}\n\n"
-        )
-
-    else:
-
-        text_result = (
-            f"🎵 Результаты поиска: "
-            f"{cache.get('query', '')}\n\n"
-        )
+    text = (
+        f"🎵 Результаты поиска: "
+        f"{cache['query']}\n\n"
+    )
 
     for local_index, track in enumerate(
         page_results
@@ -1004,8 +1172,7 @@ def show_music_page(
         )
 
         duration_sec = track.get(
-            "duration",
-            0
+            "duration"
         )
 
         if duration_sec:
@@ -1024,27 +1191,28 @@ def show_music_page(
 
         else:
 
-            duration = track.get(
-                "duration_string",
-                "0:00"
-            )
+            duration = "0:00"
 
-        text_result += (
+        text += (
             f"{global_index + 1}. "
             f"{title} [{duration}]\n"
         )
 
-    text_result += (
+    text += (
         f"\nСтраница {page + 1} "
         f"из {total_pages}"
     )
 
     keyboard = InlineKeyboardMarkup()
 
-    number_buttons = []
+    # --------------------------------------------------------
+    # NUMBER BUTTONS
+    # --------------------------------------------------------
 
-    for local_index, track in enumerate(
-        page_results
+    buttons = []
+
+    for local_index in range(
+        len(page_results)
     ):
 
         global_index = (
@@ -1052,59 +1220,66 @@ def show_music_page(
             + local_index
         )
 
-        number_buttons.append(
+        buttons.append(
             InlineKeyboardButton(
-                str(global_index + 1),
+                text=str(
+                    global_index + 1
+                ),
                 callback_data=(
-                    f"music_select_{global_index}"
+                    f"music_select:"
+                    f"{global_index}"
                 )
             )
         )
 
+    # По 5 кнопок в ряд
+
     for i in range(
         0,
-        len(number_buttons),
+        len(buttons),
         5
     ):
 
         keyboard.row(
-            *number_buttons[
-                i:i + 5
-            ]
+            *buttons[i:i + 5]
         )
 
-    navigation_buttons = []
+    # --------------------------------------------------------
+    # PAGE BUTTONS
+    # --------------------------------------------------------
+
+    navigation = []
 
     if page > 0:
 
-        navigation_buttons.append(
+        navigation.append(
             InlineKeyboardButton(
                 "⬅️ Назад",
                 callback_data=(
-                    f"music_page_{page - 1}"
+                    f"music_page:{page - 1}"
                 )
             )
         )
 
     if page < total_pages - 1:
 
-        navigation_buttons.append(
+        navigation.append(
             InlineKeyboardButton(
                 "Следующая страница ➡️",
                 callback_data=(
-                    f"music_page_{page + 1}"
+                    f"music_page:{page + 1}"
                 )
             )
         )
 
-    if navigation_buttons:
+    if navigation:
 
         keyboard.row(
-            *navigation_buttons
+            *navigation
         )
 
     bot.edit_message_text(
-        text_result,
+        text,
         chat_id=user_id,
         message_id=message_id,
         reply_markup=keyboard
@@ -1112,288 +1287,322 @@ def show_music_page(
 
 
 # ============================================================
-# MUSIC PAGE CALLBACK
+# MUSIC CALLBACK
 # ============================================================
 
 @bot.callback_query_handler(
     func=lambda call:
-        call.data.startswith(
-            "music_page_"
-        )
+        call.data is not None
+        and call.data.startswith("music_")
 )
-def callback_music_page(call):
+def music_callback(call):
 
     user_id = call.message.chat.id
 
-    try:
-
-        page = int(
-            call.data.split("_")[-1]
-        )
-
-        cache = music_cache.get(
-            user_id
-        )
-
-        if not cache:
-
-            bot.answer_callback_query(
-                call.id,
-                "Список устарел. "
-                "Выполни /music заново.",
-                show_alert=True
-            )
-
-            return
-
-        mode = user_modes.get(
-            user_id,
-            "normal"
-        )
-
-        bot.answer_callback_query(
-            call.id
-        )
-
-        show_music_page(
-            user_id,
-            call.message.message_id,
-            page=page,
-            mode=mode
-        )
-
-    except Exception as e:
-
-        print(
-            f"Ошибка music_page: {e}"
-        )
-
-        bot.answer_callback_query(
-            call.id,
-            "Ошибка переключения страницы",
-            show_alert=True
-        )
-
-
-# ============================================================
-# MUSIC SELECT CALLBACK
-# ============================================================
-
-@bot.callback_query_handler(
-    func=lambda call:
-        call.data.startswith(
-            "music_select_"
-        )
-)
-def callback_music_select(call):
-
-    user_id = call.message.chat.id
+    print(
+        "[MUSIC CALLBACK] "
+        f"user={call.from_user.id} "
+        f"data={call.data}"
+    )
 
     try:
 
-        index = int(
-            call.data.split("_")[-1]
-        )
+        # ====================================================
+        # PAGE
+        # ====================================================
 
-        cache = music_cache.get(
-            user_id
-        )
-
-        if not cache:
-
-            bot.answer_callback_query(
-                call.id,
-                "Список устарел. "
-                "Выполни /music заново.",
-                show_alert=True
-            )
-
-            return
-
-        results = cache.get(
-            "results",
-            []
-        )
-
-        if (
-            index < 0
-            or index >= len(results)
+        if call.data.startswith(
+            "music_page:"
         ):
 
-            bot.answer_callback_query(
-                call.id,
-                "Этот трек больше недоступен.",
-                show_alert=True
+            page = int(
+                call.data.split(
+                    ":",
+                    1
+                )[1]
             )
 
-            return
-
-        track = results[index]
-
-        video_id = track.get(
-            "id"
-        )
-
-        if not video_id:
-
-            bot.answer_callback_query(
-                call.id,
-                "Не удалось определить видео.",
-                show_alert=True
+            cache = music_cache.get(
+                user_id
             )
 
-            return
+            if not cache:
 
-        url = (
-            f"https://www.youtube.com/watch?v={video_id}"
-        )
-
-        title = track.get(
-            "title",
-            "Трек"
-        )
-
-        bot.answer_callback_query(
-            call.id,
-            f"Скачиваю: {title[:35]}..."
-        )
-
-        processing_msg = bot.send_message(
-            user_id,
-            f"⏳ Скачиваю:\n{title}"
-        )
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-
-            output_template = os.path.join(
-                temp_dir,
-                "%(id)s.%(ext)s"
-            )
-
-            ydl_opts = {
-                "format": "bestaudio/best",
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "outtmpl": output_template,
-
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192"
-                    }
-                ]
-            }
-
-            with yt_dlp.YoutubeDL(
-                ydl_opts
-            ) as ydl:
-
-                info = ydl.extract_info(
-                    url,
-                    download=True
-                )
-
-            video_id = info.get(
-                "id",
-                video_id
-            )
-
-            expected_file = os.path.join(
-                temp_dir,
-                f"{video_id}.mp3"
-            )
-
-            if os.path.exists(
-                expected_file
-            ):
-
-                file_path = expected_file
-
-            else:
-
-                mp3_files = [
-                    os.path.join(
-                        temp_dir,
-                        filename
-                    )
-                    for filename in os.listdir(
-                        temp_dir
-                    )
-                    if filename.lower().endswith(
-                        ".mp3"
-                    )
-                ]
-
-                if not mp3_files:
-
-                    raise Exception(
-                        "FFmpeg не создал MP3-файл."
-                    )
-
-                file_path = mp3_files[0]
-
-            file_size = os.path.getsize(
-                file_path
-            )
-
-            if file_size > 50 * 1024 * 1024:
-
-                bot.edit_message_text(
-                    "❌ Трек слишком большой "
-                    "(больше 50 МБ), Telegram не может "
-                    "его отправить.",
-                    chat_id=user_id,
-                    message_id=processing_msg.message_id
+                bot.answer_callback_query(
+                    call.id,
+                    "Список устарел. "
+                    "Выполни /music заново.",
+                    show_alert=True
                 )
 
                 return
 
-            bot.edit_message_text(
-                "📤 Отправляю аудио...",
+            bot.answer_callback_query(
+                call.id
+            )
+
+            show_music_page(
+                user_id,
+                call.message.message_id,
+                page
+            )
+
+            return
+
+        # ====================================================
+        # SELECT TRACK
+        # ====================================================
+
+        if call.data.startswith(
+            "music_select:"
+        ):
+
+            index = int(
+                call.data.split(
+                    ":",
+                    1
+                )[1]
+            )
+
+            cache = music_cache.get(
+                user_id
+            )
+
+            if not cache:
+
+                bot.answer_callback_query(
+                    call.id,
+                    "Список устарел. "
+                    "Выполни /music заново.",
+                    show_alert=True
+                )
+
+                return
+
+            results = cache.get(
+                "results",
+                []
+            )
+
+            if (
+                index < 0
+                or index >= len(results)
+            ):
+
+                bot.answer_callback_query(
+                    call.id,
+                    "Этот трек больше недоступен.",
+                    show_alert=True
+                )
+
+                return
+
+            track = results[index]
+
+            video_id = track.get(
+                "id"
+            )
+
+            if not video_id:
+
+                bot.answer_callback_query(
+                    call.id,
+                    "Не удалось определить видео.",
+                    show_alert=True
+                )
+
+                return
+
+            title = track.get(
+                "title",
+                "Трек"
+            )
+
+            url = (
+                "https://www.youtube.com/watch?v="
+                + video_id
+            )
+
+            print(
+                "[MUSIC SELECT] "
+                f"user={user_id} "
+                f"index={index} "
+                f"title={title}"
+            )
+
+            bot.answer_callback_query(
+                call.id,
+                f"Скачиваю: {title[:40]}..."
+            )
+
+            processing_msg = bot.send_message(
+                user_id,
+                f"⏳ Скачиваю:\n{title}"
+            )
+
+            # =================================================
+            # DOWNLOAD
+            # =================================================
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+
+                output_template = os.path.join(
+                    temp_dir,
+                    "%(id)s.%(ext)s"
+                )
+
+                ydl_opts = {
+                    "format": "bestaudio/best",
+                    "noplaylist": True,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "outtmpl": output_template,
+
+                    "postprocessors": [
+                        {
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192"
+                        }
+                    ]
+                }
+
+                print(
+                    "[MUSIC DOWNLOAD] "
+                    f"Начинаю: {url}"
+                )
+
+                with yt_dlp.YoutubeDL(
+                    ydl_opts
+                ) as ydl:
+
+                    info = ydl.extract_info(
+                        url,
+                        download=True
+                    )
+
+                video_id = info.get(
+                    "id",
+                    video_id
+                )
+
+                expected_file = os.path.join(
+                    temp_dir,
+                    f"{video_id}.mp3"
+                )
+
+                if os.path.exists(
+                    expected_file
+                ):
+
+                    file_path = expected_file
+
+                else:
+
+                    mp3_files = [
+                        os.path.join(
+                            temp_dir,
+                            filename
+                        )
+                        for filename
+                        in os.listdir(temp_dir)
+                        if filename.lower().endswith(
+                            ".mp3"
+                        )
+                    ]
+
+                    if not mp3_files:
+
+                        raise Exception(
+                            "FFmpeg не создал MP3-файл."
+                        )
+
+                    file_path = mp3_files[0]
+
+                file_size = os.path.getsize(
+                    file_path
+                )
+
+                print(
+                    "[MUSIC FILE] "
+                    f"{file_path} "
+                    f"{file_size} bytes"
+                )
+
+                if file_size > (
+                    50 * 1024 * 1024
+                ):
+
+                    bot.edit_message_text(
+                        "❌ Трек слишком большой "
+                        "(больше 50 МБ).",
+                        chat_id=user_id,
+                        message_id=processing_msg.message_id
+                    )
+
+                    return
+
+                bot.edit_message_text(
+                    "📤 Отправляю аудио...",
+                    chat_id=user_id,
+                    message_id=processing_msg.message_id
+                )
+
+                with open(
+                    file_path,
+                    "rb"
+                ) as audio:
+
+                    bot.send_audio(
+                        chat_id=user_id,
+                        audio=audio,
+                        caption=f"🎵 {title}",
+                        title=title
+                    )
+
+            bot.delete_message(
                 chat_id=user_id,
                 message_id=processing_msg.message_id
             )
 
-            with open(
-                file_path,
-                "rb"
-            ) as audio:
+            print(
+                "[MUSIC SUCCESS] "
+                f"Трек отправлен: {title}"
+            )
 
-                bot.send_audio(
-                    chat_id=user_id,
-                    audio=audio,
-                    caption=f"🎵 {title}",
-                    title=title
-                )
-
-        bot.delete_message(
-            chat_id=user_id,
-            message_id=processing_msg.message_id
-        )
+            return
 
     except Exception as e:
 
         print(
-            f"Ошибка скачивания музыки: {e}"
+            "[MUSIC CALLBACK ERROR] "
+            f"{repr(e)}"
         )
 
         try:
 
             bot.answer_callback_query(
                 call.id,
-                "Ошибка загрузки",
+                "Ошибка обработки кнопки.",
                 show_alert=True
             )
 
         except Exception:
             pass
 
-        bot.send_message(
-            user_id,
-            f"Не удалось скачать трек:\n{e}"
-        )
+        try:
+
+            bot.send_message(
+                user_id,
+                f"❌ Ошибка:\n{e}"
+            )
+
+        except Exception as send_error:
+
+            print(
+                "[MUSIC SEND ERROR] "
+                f"{repr(send_error)}"
+            )
 
 
 # ============================================================
@@ -1402,11 +1611,11 @@ def callback_music_select(call):
 
 @bot.message_handler(
     commands=[
-        'gemini',
-        'code',
-        'sum',
-        'tr',
-        'fix'
+        "gemini",
+        "code",
+        "sum",
+        "tr",
+        "fix"
     ]
 )
 def ai_tools_cmd(message):
@@ -1418,10 +1627,8 @@ def ai_tools_cmd(message):
     if not parts:
         return
 
-    cmd_full = parts[0]
-
-    cmd = cmd_full.split(
-        '@'
+    cmd = parts[0].split(
+        "@"
     )[0]
 
     if len(parts) < 2:
@@ -1440,25 +1647,25 @@ def ai_tools_cmd(message):
         "Обрабатываю запрос..."
     )
 
-    if cmd == '/gemini':
+    if cmd == "/gemini":
 
         prompt = content
 
-    elif cmd == '/code':
+    elif cmd == "/code":
 
         prompt = (
             f"Напиши код и объясни решение "
             f"для задачи: {content}"
         )
 
-    elif cmd == '/sum':
+    elif cmd == "/sum":
 
         prompt = (
             f"Сделай краткую выжимку:\n\n"
             f"{content}"
         )
 
-    elif cmd == '/tr':
+    elif cmd == "/tr":
 
         prompt = (
             f"Переведи этот текст "
@@ -1466,7 +1673,7 @@ def ai_tools_cmd(message):
             f"{content}"
         )
 
-    elif cmd == '/fix':
+    elif cmd == "/fix":
 
         prompt = (
             f"Исправь ошибки и сделай "
@@ -1495,7 +1702,7 @@ def ai_tools_cmd(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=['image']
+    commands=["image"]
 )
 def image_cmd(message):
 
@@ -1556,7 +1763,7 @@ def image_cmd(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=['tts']
+    commands=["tts"]
 )
 def tts_cmd(message):
 
@@ -1600,7 +1807,7 @@ def tts_cmd(message):
 
         with open(
             audio_path,
-            'rb'
+            "rb"
         ) as audio:
 
             bot.send_voice(
@@ -1618,23 +1825,27 @@ def tts_cmd(message):
         if os.path.exists(
             audio_path
         ):
+
             os.remove(
                 audio_path
             )
 
 
 # ============================================================
-# TEXT
+# TEXT MESSAGES
 # ============================================================
 
 @bot.message_handler(
-    content_types=['text']
+    content_types=["text"]
 )
 def handle_text(message):
 
     text = message.text
-
     text_lower = text.lower()
+
+    # --------------------------------------------------------
+    # КИРА
+    # --------------------------------------------------------
 
     if (
         "кира" in text_lower
@@ -1661,6 +1872,10 @@ def handle_text(message):
 
         return
 
+    # --------------------------------------------------------
+    # URL
+    # --------------------------------------------------------
+
     if (
         "http://" in text
         or "https://" in text
@@ -1674,9 +1889,9 @@ def handle_text(message):
         try:
 
             url = [
-                w
-                for w in text.split()
-                if w.startswith("http")
+                word
+                for word in text.split()
+                if word.startswith("http")
             ][0]
 
             resp = requests.get(
@@ -1686,18 +1901,19 @@ def handle_text(message):
 
             soup = BeautifulSoup(
                 resp.text,
-                'html.parser'
+                "html.parser"
             )
 
             page_text = soup.get_text(
-                separator=' ',
+                separator=" ",
                 strip=True
             )[:1500]
 
             reply = ask_ai_with_history(
                 message.chat.id,
-                f"Сделай выжимку статьи "
-                f"по ссылке:\n\n{page_text}"
+                "Сделай выжимку статьи "
+                "по ссылке:\n\n"
+                + page_text
             )
 
             bot.edit_message_text(
@@ -1717,6 +1933,10 @@ def handle_text(message):
             )
 
             return
+
+    # --------------------------------------------------------
+    # Обычный AI
+    # --------------------------------------------------------
 
     msg = bot.reply_to(
         message,
@@ -1740,7 +1960,7 @@ def handle_text(message):
 # ============================================================
 
 @bot.message_handler(
-    content_types=['photo']
+    content_types=["photo"]
 )
 def handle_photo(message):
 
@@ -1783,11 +2003,14 @@ def handle_photo(message):
 # ============================================================
 
 @bot.message_handler(
-    content_types=['document']
+    content_types=["document"]
 )
 def handle_doc(message):
 
-    if message.document.mime_type == 'application/pdf':
+    if (
+        message.document.mime_type
+        == "application/pdf"
+    ):
 
         msg = bot.reply_to(
             message,
@@ -1819,11 +2042,13 @@ def handle_doc(message):
                 path
             )
 
-            text = "".join([
-                p.extract_text()
-                for p in reader.pages[:3]
-                if p.extract_text()
-            ])
+            text = "".join(
+                [
+                    page.extract_text()
+                    or ""
+                    for page in reader.pages[:3]
+                ]
+            )
 
             os.remove(
                 path
@@ -1831,8 +2056,8 @@ def handle_doc(message):
 
             reply = ask_ai_with_history(
                 message.chat.id,
-                f"Сделай выжимку из PDF:\n\n"
-                f"{text[:1500]}"
+                "Сделай выжимку из PDF:\n\n"
+                + text[:1500]
             )
 
             bot.edit_message_text(
@@ -1863,13 +2088,47 @@ def handle_doc(message):
 
 if __name__ == "__main__":
 
+    print(
+        "===================================="
+    )
+
+    print(
+        "🤖 Бот запускается..."
+    )
+
+    print(
+        f"BOT_TOKEN: "
+        f"{'OK' if BOT_TOKEN else 'НЕТ'}"
+    )
+
+    print(
+        f"GROQ_API_KEY: "
+        f"{'OK' if GROQ_API_KEY else 'НЕТ'}"
+    )
+
+    print(
+        f"GEMINI_API_KEY: "
+        f"{'OK' if GEMINI_API_KEY else 'НЕТ'}"
+    )
+
+    print(
+        f"TAVILY_API_KEY: "
+        f"{'OK' if TAVILY_API_KEY else 'НЕТ'}"
+    )
+
+    print(
+        "===================================="
+    )
+
     threading.Thread(
         target=run_web,
         daemon=True
     ).start()
 
-    print("Бот запущен!")
-
     bot.infinity_polling(
-        skip_pending=True
+        skip_pending=True,
+        allowed_updates=[
+            "message",
+            "callback_query"
+        ]
     )
