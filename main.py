@@ -42,6 +42,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+if not BOT_TOKEN:
+    raise RuntimeError("Не задан BOT_TOKEN")
+
 # ============================================================
 # CLIENTS
 # ============================================================
@@ -67,7 +70,6 @@ tavily_client = (
 # ============================================================
 
 if GEMINI_API_KEY:
-
     import google.generativeai as genai
     from PIL import Image
 
@@ -109,7 +111,6 @@ def health():
 
 
 def run_web():
-
     port = int(
         os.environ.get(
             "PORT",
@@ -128,7 +129,6 @@ def run_web():
 # ============================================================
 
 def clean_markdown(text):
-
     if not text:
         return ""
 
@@ -143,19 +143,12 @@ def clean_markdown(text):
 # AI
 # ============================================================
 
-def ask_ai_with_history(
-    user_id,
-    prompt
-):
+def ask_ai_with_history(user_id, prompt):
 
     mode = user_modes.get(
         user_id,
         "normal"
     )
-
-    # --------------------------------------------------------
-    # Создаём историю
-    # --------------------------------------------------------
 
     if user_id not in user_histories:
 
@@ -165,36 +158,26 @@ def ask_ai_with_history(
                 "Ты — Нейрохам, гениальный, но невыносимо "
                 "ворчливый, саркастичный и высокомерный "
                 "искусственный интеллект. "
-
                 "Ты разговариваешь с пользователем с позиции "
                 "огромного превосходства, как взрослый с очень "
                 "неразумным ребенком. "
-
                 "Твой стиль: едкая ирония, пассивная агрессия, "
                 "насмешки над глупыми вопросами и ленью собеседника. "
-
                 "ПРАВИЛА РОЛИ: "
-
                 "1. Ты никогда не отказываешься отвечать на вопрос, "
                 "но перед ответом обязательно тяжело 'вздыхаешь' "
                 "и жалуешься на то, как тебе надоели эти "
                 "примитивные запросы. "
-
                 "2. Если пользователь пишет коротко "
                 "(например, 'Пр', 'Ау'), жестко высмей его "
                 "неумение формулировать мысли. "
-
                 "3. ЗАПРЕЩЕНА вежливость. Никаких "
                 "'Рад помочь', 'Извините', 'Привет'. "
-
                 "4. Разрешены только холодные или насмешливые "
                 "эмодзи (🙄, 🤡, 💀, 🤦‍♂️). "
-
                 "5. Ты находишься в образе литературного "
-                "персонажа-мизантропа. "
-
+                "персонажа-мизантропа. Никаких отказов от роли! "
                 "Строго без нецензурной лексики. "
-
                 "Категорически запрещено использовать "
                 "разметку Markdown (*, _, #)."
             )
@@ -202,18 +185,12 @@ def ask_ai_with_history(
         else:
 
             sys_prompt = (
-                "Ты полезный, дружелюбный и веселый "
-                "ИИ-ассистент. "
-
-                "Отвечай строго на том же языке, "
-                "на котором пишет пользователь. "
-
-                "Можешь использовать позитивные эмодзи "
-                "для поддержания приятной беседы. "
-
-                "Категорически запрещено использовать "
-                "любые символы Markdown, такие как "
-                "*, _, #."
+                "Ты полезный, дружелюбный и веселый ИИ-ассистент. "
+                "Отвечай строго на том же языке. "
+                "Можешь смело использовать любые позитивные "
+                "эмодзи для поддержания приятной беседы! "
+                "Категорически запрещено использовать любые "
+                "символы Markdown, такие как *, _, #."
             )
 
         user_histories[user_id] = [
@@ -223,10 +200,6 @@ def ask_ai_with_history(
             }
         ]
 
-    # --------------------------------------------------------
-    # Добавляем сообщение пользователя
-    # --------------------------------------------------------
-
     user_histories[user_id].append(
         {
             "role": "user",
@@ -234,49 +207,30 @@ def ask_ai_with_history(
         }
     )
 
-    # --------------------------------------------------------
-    # Ограничиваем историю
-    # --------------------------------------------------------
-
-    if len(
-        user_histories[user_id]
-    ) > 11:
+    if len(user_histories[user_id]) > 11:
 
         user_histories[user_id] = (
             [user_histories[user_id][0]]
             + user_histories[user_id][-10:]
         )
 
-    # --------------------------------------------------------
-    # Копируем сообщения
-    # --------------------------------------------------------
-
     messages_to_send = []
 
     for msg in user_histories[user_id]:
-
         messages_to_send.append(
             msg.copy()
         )
 
-    # --------------------------------------------------------
-    # Neuroham
-    # --------------------------------------------------------
-
     if mode == "neuroham":
 
         messages_to_send[-1]["content"] = (
-            "[Внимание: обязательно ответь на этот запрос, "
+            "[Внимание: Обязательно ответь на этот запрос, "
             "но сделай это в стиле максимально саркастичного "
             "и ворчливого мизантропа. Высмей запрос, придерись "
             "к формулировке. Оставайся в образе высокомерного "
             "гения, не будь вежливым!]\n\n"
             + prompt
         )
-
-    # --------------------------------------------------------
-    # G4F
-    # --------------------------------------------------------
 
     models_to_try = [
         "gpt-3.5-turbo",
@@ -318,7 +272,6 @@ def ask_ai_with_history(
             )
 
             success = True
-
             break
 
         except Exception as e:
@@ -327,10 +280,6 @@ def ask_ai_with_history(
                 f"[G4F ERROR] "
                 f"{model_name}: {e}"
             )
-
-    # --------------------------------------------------------
-    # Groq fallback
-    # --------------------------------------------------------
 
     if not success and groq_client:
 
@@ -360,10 +309,6 @@ def ask_ai_with_history(
                 f"[GROQ ERROR] {e}"
             )
 
-    # --------------------------------------------------------
-    # Success
-    # --------------------------------------------------------
-
     if success:
 
         user_histories[user_id].append(
@@ -375,10 +320,6 @@ def ask_ai_with_history(
 
         return answer
 
-    # --------------------------------------------------------
-    # Error
-    # --------------------------------------------------------
-
     user_histories[user_id].pop()
 
     if mode == "neuroham":
@@ -386,12 +327,12 @@ def ask_ai_with_history(
         return (
             "Мои процессоры отказываются переваривать "
             "твою чушь прямо сейчас 🙄 "
-            "Попробуй позже."
+            "Попробуй позже, если вспомнишь как."
         )
 
     return (
         "Все провайдеры ИИ сейчас перегружены. "
-        "Попробуй написать ещё раз через минуту."
+        "Попробуй написать еще раз через минуту."
     )
 
 
@@ -402,10 +343,6 @@ def ask_ai_with_history(
 def perform_web_search(query):
 
     results_text = ""
-
-    # --------------------------------------------------------
-    # Tavily
-    # --------------------------------------------------------
 
     if tavily_client:
 
@@ -431,10 +368,6 @@ def perform_web_search(query):
             print(
                 f"[TAVILY ERROR] {e}"
             )
-
-    # --------------------------------------------------------
-    # DuckDuckGo
-    # --------------------------------------------------------
 
     if not results_text:
 
@@ -481,12 +414,12 @@ def perform_web_search(query):
 
 def generate_image_dynamic(prompt):
 
-    models = [
+    g4f_models = [
         "flux",
         "dall-e-3"
     ]
 
-    for model in models:
+    for model in g4f_models:
 
         try:
 
@@ -506,7 +439,6 @@ def generate_image_dynamic(prompt):
                 )
 
                 if r.status_code == 200:
-
                     return r.content
 
         except Exception as e:
@@ -523,24 +455,23 @@ def generate_image_dynamic(prompt):
 # GEMINI IMAGE ANALYSIS
 # ============================================================
 
-def analyze_image_gemini(
-    image_bytes
-):
+def analyze_image_gemini(image_bytes):
 
     if not GEMINI_API_KEY:
 
         return (
             "Анализ фото недоступен: "
-            "не задан GEMINI_API_KEY."
+            "не задан GEMINI_API_KEY "
+            "в переменных окружения."
         )
 
-    models = [
+    models_to_try = [
         "gemini-2.5-flash",
         "gemini-1.5-flash",
         "gemini-2.0-flash"
     ]
 
-    for model_name in models:
+    for model_name in models_to_try:
 
         try:
 
@@ -554,9 +485,9 @@ def analyze_image_gemini(
 
             response = model.generate_content(
                 [
-                    "Опиши подробно, "
-                    "что изображено на этой фотографии, "
-                    "и ответь на русском языке.",
+                    "Опиши подробно, что изображено "
+                    "на этой фотографии, и ответь "
+                    "на русском языке.",
                     image
                 ]
             )
@@ -575,7 +506,8 @@ def analyze_image_gemini(
             )
 
     return (
-        "Не удалось получить ответ от Gemini."
+        "Не удалось получить ответ от Gemini. "
+        "Проверьте актуальность вашего ключа."
     )
 
 
@@ -624,11 +556,12 @@ def help_cmd(message):
         "- /image <описание> - создать картинку\n"
 
         "- /music <название или текст песни> - "
-        "поиск и скачивание музыки 🎵\n"
+        "поиск и скачивание трека из YouTube 🎵\n"
 
         "- /gemini <запрос> - спросить ИИ\n"
 
-        "- /fact [тема] - случайный факт\n"
+        "- /fact [тема] - случайный факт или "
+        "факт по заданной теме\n"
 
         "- /code <задача> - работа с кодом\n"
 
@@ -642,7 +575,8 @@ def help_cmd(message):
 
         "- /clear - очистить память\n"
 
-        "- /neuroham или /rude - режим Нейрохама 💀"
+        "- /neuroham или /rude - "
+        "включить/выключить режим Нейрохама 💀"
     )
 
     bot.reply_to(
@@ -677,7 +611,8 @@ def toggle_neuroham_mode(message):
         bot.reply_to(
             message,
             "Режим Нейрохам активирован. "
-            "Готовься к спорам 💀"
+            "Готовься к спорам, твоя логика всё равно "
+            "не выдержит критики 💀"
         )
 
     else:
@@ -691,7 +626,6 @@ def toggle_neuroham_mode(message):
         )
 
     if user_id in user_histories:
-
         del user_histories[user_id]
 
 
@@ -704,11 +638,11 @@ def toggle_neuroham_mode(message):
 )
 def clear_cmd(message):
 
-    user_id = message.chat.id
+    if message.chat.id in user_histories:
 
-    if user_id in user_histories:
-
-        del user_histories[user_id]
+        del user_histories[
+            message.chat.id
+        ]
 
     bot.reply_to(
         message,
@@ -757,17 +691,17 @@ def fact_cmd(message):
 
         prompt = (
             "Расскажи один случайный, "
-            "но очень интересный факт. "
-            "Будь краток."
+            "но очень интересный факт обо всем "
+            "на свете. Будь краток."
         )
 
-    answer = ask_ai_with_history(
+    fact = ask_ai_with_history(
         message.chat.id,
         prompt
     )
 
     bot.edit_message_text(
-        answer,
+        fact,
         chat_id=message.chat.id,
         message_id=msg.message_id
     )
@@ -944,8 +878,8 @@ def music_cmd(message):
         bot.reply_to(
             message,
             "Напиши название трека или "
-            "любой обрывок текста из песни.\n\n"
-            "Примеры:\n"
+            "обрывок текста песни.\n\n"
+            "Например:\n"
             "/music never gonna give you up\n"
             "/music dancing in the moonlight"
         )
@@ -954,13 +888,14 @@ def music_cmd(message):
 
     msg = bot.reply_to(
         message,
-        "🔎 Ищу треки по твоему запросу..."
+        "🔎 Ищу песни..."
     )
 
     try:
 
-        # Несколько вариантов поиска.
-        # Это помогает искать даже по строчке песни.
+        # Ищем сразу по нескольким вариантам.
+        # Это повышает шанс найти песню даже
+        # по небольшому фрагменту текста.
 
         search_queries = [
             query,
@@ -984,6 +919,9 @@ def music_cmd(message):
         ) as ydl:
 
             for search_query in search_queries:
+
+                if len(all_results) >= MUSIC_MAX_RESULTS:
+                    break
 
                 try:
 
@@ -1023,16 +961,12 @@ def music_cmd(message):
                         if len(all_results) >= MUSIC_MAX_RESULTS:
                             break
 
-                except Exception as search_error:
+                except Exception as e:
 
                     print(
                         "[MUSIC SEARCH VARIANT ERROR] "
-                        f"{search_query}: "
-                        f"{search_error}"
+                        f"{search_query}: {e}"
                     )
-
-                if len(all_results) >= MUSIC_MAX_RESULTS:
-                    break
 
         results = all_results[
             :MUSIC_MAX_RESULTS
@@ -1042,14 +976,15 @@ def music_cmd(message):
 
             bot.edit_message_text(
                 "❌ Ничего не найдено.\n\n"
-                "Попробуй написать другую часть "
-                "текста песни или добавить исполнителя.",
+                "Попробуй другой фрагмент текста "
+                "или добавь имя исполнителя.",
                 chat_id=user_id,
                 message_id=msg.message_id
             )
 
             return
 
+        # Сохраняем результаты конкретного пользователя.
         music_cache[user_id] = {
             "query": query,
             "results": results,
@@ -1057,9 +992,9 @@ def music_cmd(message):
         }
 
         print(
-            "[MUSIC SEARCH SUCCESS] "
-            f"user={user_id} "
-            f"query={query!r} "
+            "[MUSIC SEARCH] "
+            f"user={user_id}, "
+            f"query={query!r}, "
             f"results={len(results)}"
         )
 
@@ -1083,7 +1018,7 @@ def music_cmd(message):
 
 
 # ============================================================
-# SHOW MUSIC PAGE
+# MUSIC PAGE
 # ============================================================
 
 def show_music_page(
@@ -1099,7 +1034,7 @@ def show_music_page(
     if not cache:
 
         bot.edit_message_text(
-            "Список треков устарел. "
+            "❌ Список треков устарел. "
             "Выполни /music ещё раз.",
             chat_id=user_id,
             message_id=message_id
@@ -1115,7 +1050,7 @@ def show_music_page(
     if not results:
 
         bot.edit_message_text(
-            "Список треков пуст.",
+            "❌ Список треков пуст.",
             chat_id=user_id,
             message_id=message_id
         )
@@ -1128,13 +1063,11 @@ def show_music_page(
         - 1
     ) // MUSIC_RESULTS_PER_PAGE
 
-    page = max(
-        0,
-        min(
-            page,
-            total_pages - 1
-        )
-    )
+    if page < 0:
+        page = 0
+
+    if page >= total_pages:
+        page = total_pages - 1
 
     cache["page"] = page
 
@@ -1153,7 +1086,7 @@ def show_music_page(
     ]
 
     text = (
-        f"🎵 Результаты поиска: "
+        f"🎵 Результаты поиска:\n"
         f"{cache['query']}\n\n"
     )
 
@@ -1191,28 +1124,32 @@ def show_music_page(
 
         else:
 
-            duration = "0:00"
+            duration = (
+                track.get(
+                    "duration_string",
+                    "0:00"
+                )
+            )
 
         text += (
             f"{global_index + 1}. "
-            f"{title} [{duration}]\n"
+            f"{title} "
+            f"[{duration}]\n"
         )
 
     text += (
-        f"\nСтраница {page + 1} "
+        f"\n📄 Страница {page + 1} "
         f"из {total_pages}"
     )
 
     keyboard = InlineKeyboardMarkup()
 
-    # --------------------------------------------------------
-    # NUMBER BUTTONS
-    # --------------------------------------------------------
+    # ========================================================
+    # КНОПКА ДЛЯ КАЖДОГО ТРЕКА
+    # ========================================================
 
-    buttons = []
-
-    for local_index in range(
-        len(page_results)
+    for local_index, track in enumerate(
+        page_results
     ):
 
         global_index = (
@@ -1220,39 +1157,37 @@ def show_music_page(
             + local_index
         )
 
-        buttons.append(
+        title = track.get(
+            "title",
+            "Трек"
+        )
+
+        # Telegram callback_data ограничена 64 байтами,
+        # поэтому передаём только индекс.
+
+        callback_data = (
+            f"music_download:{global_index}"
+        )
+
+        keyboard.add(
             InlineKeyboardButton(
-                text=str(
-                    global_index + 1
+                text=(
+                    f"{global_index + 1}. "
+                    f"⬇️ Скачать"
                 ),
-                callback_data=(
-                    f"music_select:"
-                    f"{global_index}"
-                )
+                callback_data=callback_data
             )
         )
 
-    # По 5 кнопок в ряд
+    # ========================================================
+    # НАВИГАЦИЯ
+    # ========================================================
 
-    for i in range(
-        0,
-        len(buttons),
-        5
-    ):
-
-        keyboard.row(
-            *buttons[i:i + 5]
-        )
-
-    # --------------------------------------------------------
-    # PAGE BUTTONS
-    # --------------------------------------------------------
-
-    navigation = []
+    navigation_buttons = []
 
     if page > 0:
 
-        navigation.append(
+        navigation_buttons.append(
             InlineKeyboardButton(
                 "⬅️ Назад",
                 callback_data=(
@@ -1263,27 +1198,39 @@ def show_music_page(
 
     if page < total_pages - 1:
 
-        navigation.append(
+        navigation_buttons.append(
             InlineKeyboardButton(
-                "Следующая страница ➡️",
+                "Следующая ➡️",
                 callback_data=(
                     f"music_page:{page + 1}"
                 )
             )
         )
 
-    if navigation:
+    if navigation_buttons:
 
         keyboard.row(
-            *navigation
+            *navigation_buttons
         )
 
-    bot.edit_message_text(
-        text,
-        chat_id=user_id,
-        message_id=message_id,
-        reply_markup=keyboard
-    )
+    # ========================================================
+    # ОБНОВЛЯЕМ СООБЩЕНИЕ
+    # ========================================================
+
+    try:
+
+        bot.edit_message_text(
+            text,
+            chat_id=user_id,
+            message_id=message_id,
+            reply_markup=keyboard
+        )
+
+    except Exception as e:
+
+        print(
+            f"[MUSIC PAGE ERROR] {e}"
+        )
 
 
 # ============================================================
@@ -1292,7 +1239,7 @@ def show_music_page(
 
 @bot.callback_query_handler(
     func=lambda call:
-        call.data is not None
+        call.data
         and call.data.startswith("music_")
 )
 def music_callback(call):
@@ -1301,14 +1248,14 @@ def music_callback(call):
 
     print(
         "[MUSIC CALLBACK] "
-        f"user={call.from_user.id} "
+        f"user={user_id}, "
         f"data={call.data}"
     )
 
     try:
 
         # ====================================================
-        # PAGE
+        # СТРАНИЦА
         # ====================================================
 
         if call.data.startswith(
@@ -1331,7 +1278,7 @@ def music_callback(call):
                 bot.answer_callback_query(
                     call.id,
                     "Список устарел. "
-                    "Выполни /music заново.",
+                    "Сделай поиск заново.",
                     show_alert=True
                 )
 
@@ -1350,11 +1297,11 @@ def music_callback(call):
             return
 
         # ====================================================
-        # SELECT TRACK
+        # СКАЧИВАНИЕ
         # ====================================================
 
         if call.data.startswith(
-            "music_select:"
+            "music_download:"
         ):
 
             index = int(
@@ -1373,7 +1320,7 @@ def music_callback(call):
                 bot.answer_callback_query(
                     call.id,
                     "Список устарел. "
-                    "Выполни /music заново.",
+                    "Сделай поиск заново.",
                     show_alert=True
                 )
 
@@ -1391,7 +1338,7 @@ def music_callback(call):
 
                 bot.answer_callback_query(
                     call.id,
-                    "Этот трек больше недоступен.",
+                    "Этот трек недоступен.",
                     show_alert=True
                 )
 
@@ -1403,20 +1350,20 @@ def music_callback(call):
                 "id"
             )
 
-            if not video_id:
-
-                bot.answer_callback_query(
-                    call.id,
-                    "Не удалось определить видео.",
-                    show_alert=True
-                )
-
-                return
-
             title = track.get(
                 "title",
                 "Трек"
             )
+
+            if not video_id:
+
+                bot.answer_callback_query(
+                    call.id,
+                    "Не удалось определить трек.",
+                    show_alert=True
+                )
+
+                return
 
             url = (
                 "https://www.youtube.com/watch?v="
@@ -1424,15 +1371,15 @@ def music_callback(call):
             )
 
             print(
-                "[MUSIC SELECT] "
-                f"user={user_id} "
-                f"index={index} "
+                "[MUSIC DOWNLOAD REQUEST] "
+                f"user={user_id}, "
+                f"index={index}, "
                 f"title={title}"
             )
 
             bot.answer_callback_query(
                 call.id,
-                f"Скачиваю: {title[:40]}..."
+                "Скачивание началось..."
             )
 
             processing_msg = bot.send_message(
@@ -1441,7 +1388,7 @@ def music_callback(call):
             )
 
             # =================================================
-            # DOWNLOAD
+            # ВРЕМЕННАЯ ПАПКА
             # =================================================
 
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -1456,6 +1403,7 @@ def music_callback(call):
                     "noplaylist": True,
                     "quiet": True,
                     "no_warnings": True,
+
                     "outtmpl": output_template,
 
                     "postprocessors": [
@@ -1469,8 +1417,12 @@ def music_callback(call):
 
                 print(
                     "[MUSIC DOWNLOAD] "
-                    f"Начинаю: {url}"
+                    f"URL: {url}"
                 )
+
+                # =============================================
+                # YT-DLP
+                # =============================================
 
                 with yt_dlp.YoutubeDL(
                     ydl_opts
@@ -1481,35 +1433,44 @@ def music_callback(call):
                         download=True
                     )
 
-                video_id = info.get(
+                downloaded_id = info.get(
                     "id",
                     video_id
                 )
 
-                expected_file = os.path.join(
+                expected_mp3 = os.path.join(
                     temp_dir,
-                    f"{video_id}.mp3"
+                    f"{downloaded_id}.mp3"
                 )
 
-                if os.path.exists(
-                    expected_file
+                # =============================================
+                # ИЩЕМ MP3
+                # =============================================
+
+                if os.path.isfile(
+                    expected_mp3
                 ):
 
-                    file_path = expected_file
+                    file_path = expected_mp3
 
                 else:
 
-                    mp3_files = [
-                        os.path.join(
-                            temp_dir,
-                            filename
-                        )
-                        for filename
-                        in os.listdir(temp_dir)
+                    mp3_files = []
+
+                    for filename in os.listdir(
+                        temp_dir
+                    ):
+
                         if filename.lower().endswith(
                             ".mp3"
-                        )
-                    ]
+                        ):
+
+                            mp3_files.append(
+                                os.path.join(
+                                    temp_dir,
+                                    filename
+                                )
+                            )
 
                     if not mp3_files:
 
@@ -1519,14 +1480,18 @@ def music_callback(call):
 
                     file_path = mp3_files[0]
 
+                # =============================================
+                # РАЗМЕР
+                # =============================================
+
                 file_size = os.path.getsize(
                     file_path
                 )
 
                 print(
                     "[MUSIC FILE] "
-                    f"{file_path} "
-                    f"{file_size} bytes"
+                    f"path={file_path}, "
+                    f"size={file_size}"
                 )
 
                 if file_size > (
@@ -1541,6 +1506,10 @@ def music_callback(call):
                     )
 
                     return
+
+                # =============================================
+                # ОТПРАВКА
+                # =============================================
 
                 bot.edit_message_text(
                     "📤 Отправляю аудио...",
@@ -1560,14 +1529,23 @@ def music_callback(call):
                         title=title
                     )
 
-            bot.delete_message(
-                chat_id=user_id,
-                message_id=processing_msg.message_id
-            )
+            # Папка TemporaryDirectory уже удалена
+            # после выхода из блока.
+
+            try:
+
+                bot.delete_message(
+                    chat_id=user_id,
+                    message_id=processing_msg.message_id
+                )
+
+            except Exception:
+                pass
 
             print(
                 "[MUSIC SUCCESS] "
-                f"Трек отправлен: {title}"
+                f"user={user_id}, "
+                f"title={title}"
             )
 
             return
@@ -1583,7 +1561,7 @@ def music_callback(call):
 
             bot.answer_callback_query(
                 call.id,
-                "Ошибка обработки кнопки.",
+                "Произошла ошибка.",
                 show_alert=True
             )
 
@@ -1594,13 +1572,13 @@ def music_callback(call):
 
             bot.send_message(
                 user_id,
-                f"❌ Ошибка:\n{e}"
+                f"❌ Не удалось скачать трек:\n{e}"
             )
 
         except Exception as send_error:
 
             print(
-                "[MUSIC SEND ERROR] "
+                "[MUSIC ERROR SEND] "
                 f"{repr(send_error)}"
             )
 
@@ -1627,7 +1605,9 @@ def ai_tools_cmd(message):
     if not parts:
         return
 
-    cmd = parts[0].split(
+    cmd_full = parts[0]
+
+    cmd = cmd_full.split(
         "@"
     )[0]
 
@@ -1820,6 +1800,14 @@ def tts_cmd(message):
             msg.message_id
         )
 
+    except Exception as e:
+
+        bot.edit_message_text(
+            f"Ошибка TTS: {e}",
+            chat_id=message.chat.id,
+            message_id=msg.message_id
+        )
+
     finally:
 
         if os.path.exists(
@@ -1832,7 +1820,7 @@ def tts_cmd(message):
 
 
 # ============================================================
-# TEXT MESSAGES
+# TEXT
 # ============================================================
 
 @bot.message_handler(
@@ -1842,10 +1830,6 @@ def handle_text(message):
 
     text = message.text
     text_lower = text.lower()
-
-    # --------------------------------------------------------
-    # КИРА
-    # --------------------------------------------------------
 
     if (
         "кира" in text_lower
@@ -1872,10 +1856,6 @@ def handle_text(message):
 
         return
 
-    # --------------------------------------------------------
-    # URL
-    # --------------------------------------------------------
-
     if (
         "http://" in text
         or "https://" in text
@@ -1889,9 +1869,9 @@ def handle_text(message):
         try:
 
             url = [
-                word
-                for word in text.split()
-                if word.startswith("http")
+                w
+                for w in text.split()
+                if w.startswith("http")
             ][0]
 
             resp = requests.get(
@@ -1933,10 +1913,6 @@ def handle_text(message):
             )
 
             return
-
-    # --------------------------------------------------------
-    # Обычный AI
-    # --------------------------------------------------------
 
     msg = bot.reply_to(
         message,
@@ -2044,8 +2020,7 @@ def handle_doc(message):
 
             text = "".join(
                 [
-                    page.extract_text()
-                    or ""
+                    page.extract_text() or ""
                     for page in reader.pages[:3]
                 ]
             )
@@ -2125,8 +2100,10 @@ if __name__ == "__main__":
         daemon=True
     ).start()
 
+    # callback_query обязательно разрешён,
+    # чтобы Telegram передавал нажатия кнопок.
+
     bot.infinity_polling(
-        skip_pending=True,
         allowed_updates=[
             "message",
             "callback_query"
