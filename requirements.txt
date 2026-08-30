@@ -10,3 +10,4 @@ google-generativeai
 Pillow
 tavily-python
 groq
+yt-dlp
