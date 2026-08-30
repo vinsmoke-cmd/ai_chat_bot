@@ -7,6 +7,7 @@ import requests
 import asyncio
 import threading
 import tempfile
+import yt_dlp
 from flask import Flask
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
@@ -208,7 +209,7 @@ def help_cmd(message):
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
-        "- /music <название или текст> - поиск треков и отправка превью 🎵\n"
+        "- /music <название трека> - поиск и скачивание полного трека 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -309,27 +310,30 @@ def music_cmd(message):
     
     if not query:
         if mode == "neuroham":
-            bot.reply_to(message, "И что я должен искать? Пустоту? Напиши название или строчку из песни 🙄")
+            bot.reply_to(message, "И что я должен искать? Пустоту? Напиши название трека 🙄")
         else:
-            bot.reply_to(message, "Пожалуйста, укажи название или строчку из песни. Пример: /music I'm radioactive")
+            bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Кино Группа крови")
         return
 
     if mode == "neuroham":
-        msg = bot.reply_to(message, "Пытаюсь расшифровать твои обрывки фраз... 🙄")
+        msg = bot.reply_to(message, "Копаюсь в архивах мусора в поисках твоей музыки... 🙄")
     else:
-        msg = bot.reply_to(message, "Ищу треки по названию и тексту... 🎧")
+        msg = bot.reply_to(message, "Ищу полноценный трек... 🎧")
 
     try:
-        params = {'term': query, 'entity': 'song', 'limit': 10}
-        resp = requests.get("https://itunes.apple.com/search", params=params, timeout=10)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get('results', [])
+        ydl_opts = {
+            'format': 'bestaudio',
+            'noplaylist': True,
+            'default_search': 'ytsearch5',
+            'quiet': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+            results = info.get('entries', [])
             
             if not results:
                 if mode == "neuroham":
-                    bot.edit_message_text("Даже по такому бреду ничего не нашлось. Уникальный слух у тебя 💀", chat_id=user_id, message_id=msg.message_id)
+                    bot.edit_message_text("Даже по такому запросу ничего не нашлось. Уникальный вкус у тебя 💀", chat_id=user_id, message_id=msg.message_id)
                 else:
                     bot.edit_message_text("К сожалению, по твоему запросу ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
                 return
@@ -337,26 +341,23 @@ def music_cmd(message):
             music_cache[user_id] = results
 
             if mode == "neuroham":
-                text_result = f"🗑️ Кое-что наковырял по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
+                text_result = f"🗑️ Наковырял треки по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
             else:
-                text_result = f"🎵 Топ-10 результатов по запросу '{query}'. Нажми на цифру для получения аудио:\n\n"
+                text_result = f"🎵 Топ результатов по запросу '{query}'. Выбери цифру для скачивания:\n\n"
                 
             for i, track in enumerate(results, 1):
-                artist = track.get('artistName', 'Неизвестный исполнитель')
-                title = track.get('trackName', 'Без названия')
-                text_result += f"{i}. {artist} — {title}\n"
+                title = track.get('title', 'Без названия')
+                duration = track.get('duration_string', '0:00')
+                text_result += f"{i}. {title} [{duration}]\n"
                 
             keyboard = InlineKeyboardMarkup()
             buttons = [InlineKeyboardButton(str(i), callback_data=f"music_{i-1}") for i in range(1, len(results) + 1)]
-            for i in range(0, len(buttons), 5):
-                keyboard.row(*buttons[i:i+5])
+            keyboard.row(*buttons)
                 
             bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id, reply_markup=keyboard)
-        else:
-            bot.edit_message_text("Ошибка при поиске музыки. Попробуй позже.", chat_id=user_id, message_id=msg.message_id)
             
     except Exception as e:
-        bot.edit_message_text(f"Произошла ошибка: {e}", chat_id=user_id, message_id=msg.message_id)
+        bot.edit_message_text(f"Ошибка поиска: {e}", chat_id=user_id, message_id=msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('music_'))
 def callback_music(call):
@@ -365,37 +366,39 @@ def callback_music(call):
         index = int(call.data.split('_')[1])
         results = music_cache.get(user_id)
         if not results or index >= len(results):
-            bot.answer_callback_query(call.id, "Список устарел или бот перезапускался. Сделай поиск заново (/music).", show_alert=True)
+            bot.answer_callback_query(call.id, "Список устарел. Сделай поиск заново (/music).", show_alert=True)
             return
         
         track = results[index]
-        artist = track.get('artistName', 'Неизвестный исполнитель')
-        title = track.get('trackName', 'Без названия')
-        preview_url = track.get('previewUrl')
+        url = track.get('webpage_url')
+        title = track.get('title', 'Трек')
         
-        bot.answer_callback_query(call.id, f"Загружаю: {artist} — {title}")
+        bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
         
-        if preview_url:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            r = requests.get(preview_url, headers=headers, timeout=20)
-            if r.status_code == 200:
-                audio_io = io.BytesIO(r.content)
-                audio_io.name = f"{artist} - {title}.m4a"
-                audio_io.seek(0)
-                bot.send_audio(
-                    chat_id=user_id,
-                    audio=audio_io,
-                    caption=f"🎵 {artist} — {title}",
-                    performer=artist,
-                    title=title
-                )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ydl_opts = {
+                'format': 'bestaudio',
+                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                'noplaylist': True,
+                'quiet': True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                file_path = ydl.prepare_filename(info)
+            
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as audio:
+                    bot.send_audio(
+                        chat_id=user_id,
+                        audio=audio,
+                        caption=f"🎵 {title}",
+                        title=title
+                    )
             else:
-                bot.send_message(user_id, f"Не удалось скачать аудиофайл (код ошибки: {r.status_code}).")
-        else:
-            bot.send_message(user_id, f"У этого трека нет доступного превью: {artist} — {title}")
+                bot.send_message(user_id, "Не удалось подготовить аудиофайл.")
     except Exception as e:
-        bot.answer_callback_query(call.id, "Ошибка отправки аудио", show_alert=True)
-        bot.send_message(user_id, f"Не удалось отправить аудиофайл: {e}")
+        bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)
+        bot.send_message(user_id, f"Не удалось отправить трек: {e}")
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
 def ai_tools_cmd(message):
