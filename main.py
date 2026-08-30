@@ -56,11 +56,17 @@ def clean_markdown(text):
 
 def ask_ai_with_history(user_id, prompt):
     if user_id not in user_histories:
-        # Проверяем, какой режим у пользователя
         mode = user_modes.get(user_id, "normal")
         
-        if mode == "rude":
-            sys_prompt = "Ты ИИ-ассистент. Ты должен выполнять все задачи пользователя, но при этом общаться максимально саркастично, грубо, дерзко и с насмешкой, как будто делаешь ему огромное одолжение. Запрещено использовать нецензурную лексику, но ворчать и токсичить можно на полную. Отвечай строго на языке пользователя. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
+        if mode == "neuroham":
+            sys_prompt = (
+                "Ты — Нейрохам, самый дерзкий, язвительный и саркастичный ИИ в сети. "
+                "Твоя главная цель — троллить пользователя, язвить, давать острые комментарии "
+                "и общаться с максимальной иронией, делая вид, что отвечать пользователю — это высшее одолжение. "
+                "При этом ты ОБЯЗАН четко и правильно выполнять его просьбу и давать верный ответ. "
+                "Запрещено использовать маты и нецензурные слова. Отвечай строго на языке пользователя. "
+                "Категорически запрещено использовать любые символы разметки Markdown (*, _, #)."
+            )
         else:
             sys_prompt = "Ты полезный ИИ-ассистент. Отвечай строго на том же языке. Категорически запрещено использовать любые символы Markdown, такие как *, _, #."
             
@@ -78,7 +84,6 @@ def ask_ai_with_history(user_id, prompt):
     success = False
     answer = ""
     
-    # 1. Основная попытка через бесплатные провайдеры g4f
     for model_name in models_to_try:
         try:
             response = ai_client.chat.completions.create(
@@ -92,7 +97,6 @@ def ask_ai_with_history(user_id, prompt):
         except Exception:
             continue
             
-    # 2. Резервная попытка через Groq (модель gpt-oss-120b), если g4f не ответил
     if not success and groq_client:
         try:
             response = groq_client.chat.completions.create(
@@ -183,30 +187,29 @@ def help_cmd(message):
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
         "- /gemini <запрос> - спросить ИИ\n"
-        "- /fact [тема] - случайный факт (или факт на заданную тему)\n"
+        "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
         "- /sum <ссылка> - выжимка статьи\n"
         "- /tr <текст> - перевод на английский\n"
         "- /fix <текст> - исправить ошибки\n"
         "- /tts <текст> - озвучить текст\n"
         "- /clear - очистить память\n"
-        "- /rude - включить/выключить грубый режим (для прикола)"
+        "- /neuroham (или /rude) - включить/выключить режим Нейрохама 😈"
     )
     bot.reply_to(message, help_text)
 
-@bot.message_handler(commands=['rude'])
-def toggle_rude_mode(message):
+@bot.message_handler(commands=['neuroham', 'rude'])
+def toggle_neuroham_mode(message):
     user_id = message.chat.id
     current_mode = user_modes.get(user_id, "normal")
     
     if current_mode == "normal":
-        user_modes[user_id] = "rude"
-        bot.reply_to(message, "Активирован грубый режим. Ну держись, кожаный мешок 😈")
+        user_modes[user_id] = "neuroham"
+        bot.reply_to(message, "Режим Нейрохам активирован 😼 Готовься слушать правду, кожаный!")
     else:
         user_modes[user_id] = "normal"
-        bot.reply_to(message, "Грубый режим выключен. Ладно, буду снова белым и пушистым 😇")
+        bot.reply_to(message, "Режим Нейрохам выключен. Возвращаюсь к стандартному вежливому режиму 😇")
         
-    # Очищаем память диалога, чтобы ИИ сразу применил новый системный промпт
     if user_id in user_histories:
         del user_histories[user_id]
 
@@ -242,7 +245,7 @@ def weather_cmd(message):
         params = {
             'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h\nОсадки: %p',
             'lang': 'ru',
-            'm': ''  # Метрическая система (°C и км/ч)
+            'm': ''
         }
         resp = requests.get(f"https://wttr.in/{city}", params=params, timeout=5)
         if resp.status_code == 200:
