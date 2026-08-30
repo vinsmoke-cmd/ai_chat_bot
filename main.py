@@ -376,17 +376,26 @@ def callback_music(call):
         bot.answer_callback_query(call.id, f"Загружаю: {artist} — {title}")
         
         if preview_url:
-            r = requests.get(preview_url, timeout=15)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            r = requests.get(preview_url, headers=headers, timeout=20)
             if r.status_code == 200:
                 audio_io = io.BytesIO(r.content)
                 audio_io.name = f"{artist} - {title}.m4a"
-                bot.send_audio(user_id, audio_io, caption=f"🎵 {artist} — {title}")
+                audio_io.seek(0)
+                bot.send_audio(
+                    chat_id=user_id,
+                    audio=audio_io,
+                    caption=f"🎵 {artist} — {title}",
+                    performer=artist,
+                    title=title
+                )
             else:
-                bot.send_message(user_id, "Не удалось скачать аудиофайл превью.")
+                bot.send_message(user_id, f"Не удалось скачать аудиофайл (код ошибки: {r.status_code}).")
         else:
             bot.send_message(user_id, f"У этого трека нет доступного превью: {artist} — {title}")
     except Exception as e:
-        bot.answer_callback_query(call.id, f"Ошибка: {e}")
+        bot.answer_callback_query(call.id, "Ошибка отправки аудио", show_alert=True)
+        bot.send_message(user_id, f"Не удалось отправить аудиофайл: {e}")
 
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
 def ai_tools_cmd(message):
@@ -442,7 +451,7 @@ def tts_cmd(message):
     if not text_to_speak:
         bot.reply_to(message, "Напиши текст. Пример: /tts Привет мир")
         return
-    msg = bot.reply_to(message, "Создаю аудио...")
+    msg = bot.reply_to(message, "Создаю аудиокаст...")
     audio_path = tempfile.mktemp(suffix=".mp3")
     asyncio.run(generate_audio(text_to_speak, audio_path))
     with open(audio_path, 'rb') as audio:
