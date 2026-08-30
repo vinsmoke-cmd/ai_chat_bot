@@ -346,10 +346,8 @@ def music_cmd(message):
                 title = track.get('trackName', 'Без названия')
                 text_result += f"{i}. {artist} — {title}\n"
                 
-            # Создаем клавиатуру с кнопками от 1 до len(results)
             keyboard = InlineKeyboardMarkup()
             buttons = [InlineKeyboardButton(str(i), callback_data=f"music_{i-1}") for i in range(1, len(results) + 1)]
-            # Располагаем по 5 кнопок в ряд для компактности
             for i in range(0, len(buttons), 5):
                 keyboard.row(*buttons[i:i+5])
                 
@@ -367,7 +365,7 @@ def callback_music(call):
         index = int(call.data.split('_')[1])
         results = music_cache.get(user_id)
         if not results or index >= len(results):
-            bot.answer_callback_query(call.id, "Список устарел или не найден. Сделайте поиск заново.")
+            bot.answer_callback_query(call.id, "Бот уснул или память очистилась. Сделай поиск заново (/music).", show_alert=True)
             return
         
         track = results[index]
