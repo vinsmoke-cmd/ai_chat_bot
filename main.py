@@ -59,37 +59,48 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ИНТЕГРАЦИЯ COBALT TOOLS ---
+# --- УНИВЕРСАЛЬНЫЙ ЗАГРУЗЧИК (COBALT TOOLS) ---
 def download_via_cobalt(url, mode="audio"):
     """
-    Отправляет запрос к публичному Cobalt API для получения прямой ссылки на файл.
-    mode: 'audio' (MP3) или 'auto' (видео)
+    Скачивает медиа через Cobalt Tools API.
+    mode: 'audio' (MP3) или 'auto' (Видео MP4)
     """
     cobalt_api_url = "https://api.cobalt.tools/"
     headers = {
         "Accept": "application/json",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    
     payload = {
-        "url": url,
-        "downloadMode": mode,
-        "audioFormat": "mp3",
-        "videoQuality": "1080"
+        "url": url
     }
+    
+    if mode == "audio":
+        payload["downloadMode"] = "audio"
+        payload["audioFormat"] = "mp3"
+    else:
+        payload["downloadMode"] = "auto"
+        payload["videoQuality"] = "720"
     
     response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=25)
     if response.status_code != 200:
-        raise Exception(f"Cobalt API вернул статус {response.status_code}")
+        try:
+            err_data = response.json()
+            err_msg = err_data.get("text") or err_data.get("error") or response.text
+        except Exception:
+            err_msg = response.text
+        raise Exception(f"Cobalt API {response.status_code}: {err_msg}")
         
     data = response.json()
     status = data.get("status")
     
     if status in ["tunnel", "redirect"]:
-        return data.get("url"), data.get("filename", "audio.mp3")
+        return data.get("url"), data.get("filename", "media.mp3" if mode == "audio" else "video.mp4")
     elif status == "picker":
         picker = data.get("picker", [])
         if picker:
-            return picker[0].get("url"), "audio.mp3"
+            return picker[0].get("url"), "media.mp3" if mode == "audio" else "video.mp4"
     elif status == "error":
         error_text = data.get("text", "Ошибка Cobalt")
         raise Exception(error_text)
@@ -244,23 +255,18 @@ async def generate_audio(text, output_file):
 @bot.message_handler(commands=['start', 'help'])
 def help_cmd(message):
     help_text = (
-        "Привет! Я ИИ-ассистент.\n\n"
-        "Список команд:\n"
-        "- Просто пиши текст для общения\n"
-        "- /search <запрос> - поиск в интернете\n"
-        "- /weather <город> - подробная погода\n"
-        "- /image <описание> - создать картинку\n"
-        "- /music <название трека> - поиск и скачивание трека из YouTube 🎵\n"
-        "- /cobalt <ссылка> - быстрая загрузка медиа через Cobalt Tools 🚀\n"
-        "- /gemini <запрос> - спросить ИИ\n"
-        "- /fact [тема] - случайный факт или факт по заданной теме\n"
-        "- /code <задача> - работа с кодом\n"
-        "- /sum <ссылка> - выжимка статьи\n"
-        "- /tr <текст> - перевод на английский\n"
-        "- /fix <текст> - исправить ошибки\n"
-        "- /tts <текст> - озвучить текст\n"
-        "- /clear - очистить память\n"
-        "- /neuroham (или /rude) - включить/выключить режим Нейрохама 💀"
+        "Привет! Я ИИ-ассистент и медиа-загрузчик (аналог Yuklaydi Bot).\n\n"
+        "⚡ **Музыка и Видео:**\n"
+        "- `/music <название или текст песни>` — Найти песню по названию или строчкам из текста 🎵\n"
+        "- **Просто отправь ссылку** на TikTok, Instagram (Reels), YouTube или Pinterest — я сам скачаю видео или аудио! 📥\n\n"
+        "🧠 **ИИ и Другие команды:**\n"
+        "- Общайся со мной обычными сообщениями\n"
+        "- `/search <запрос>` - поиск в интернете\n"
+        "- `/weather <город>` - погода\n"
+        "- `/image <описание>` - создать картинку\n"
+        "- `/tts <текст>` - озвучить текст\n"
+        "- `/clear` - очистить диалог\n"
+        "- `/neuroham` - включить режим Нейрохама 💀"
     )
     bot.reply_to(message, help_text)
 
@@ -271,10 +277,10 @@ def toggle_neuroham_mode(message):
     
     if current_mode == "normal":
         user_modes[user_id] = "neuroham"
-        bot.reply_to(message, "Режим Нейрохам активирован. Готовься к спорам, твоя логика всё равно не выдержит критики 💀")
+        bot.reply_to(message, "Режим Нейрохам активирован. Готовься к спорам 💀")
     else:
         user_modes[user_id] = "normal"
-        bot.reply_to(message, "Режим Нейрохам деактивирован. Возвращаюсь в режим позитива! ✨😇")
+        bot.reply_to(message, "Режим Нейрохам деактивирован! ✨😇")
         
     if user_id in user_histories:
         del user_histories[user_id]
@@ -289,16 +295,9 @@ def clear_cmd(message):
 def fact_cmd(message):
     parts = message.text.split(maxsplit=1)
     topic = parts[1] if len(parts) > 1 else ""
-    
-    if topic:
-        msg = bot.reply_to(message, f"Ищу интересный факт на тему: {topic}...")
-        prompt = f"Расскажи один очень интересный и малоизвестный факт на тему: {topic}. Будь краток."
-    else:
-        msg = bot.reply_to(message, "Ищу случайный интересный факт...")
-        prompt = "Расскажи один случайный, но очень интересный факт обо всем на свете. Будь краток."
-        
+    prompt = f"Расскажи интересный короткий факт на тему: {topic}" if topic else "Расскажи один случайный интересный факт."
     fact = ask_ai_with_history(message.chat.id, prompt)
-    bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
+    bot.reply_to(message, fact)
 
 @bot.message_handler(commands=['weather'])
 def weather_cmd(message):
@@ -308,16 +307,8 @@ def weather_cmd(message):
         bot.reply_to(message, "Укажи город. Пример: /weather Москва")
         return
     try:
-        params = {
-            'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h\nОсадки: %p',
-            'lang': 'ru',
-            'm': ''
-        }
-        resp = requests.get(f"https://wttr.in/{city}", params=params, timeout=5)
-        if resp.status_code == 200:
-            bot.reply_to(message, f"Текущая сводка:\n\n{clean_markdown(resp.text.strip())}")
-        else:
-            bot.reply_to(message, "Не удалось найти город.")
+        resp = requests.get(f"https://wttr.in/{city}?format=3", timeout=5)
+        bot.reply_to(message, resp.text)
     except Exception as e:
         bot.reply_to(message, f"Ошибка погоды: {e}")
 
@@ -326,197 +317,138 @@ def search_cmd(message):
     parts = message.text.split(maxsplit=1)
     query = parts[1] if len(parts) > 1 else ""
     if not query:
-        bot.reply_to(message, "Напиши запрос. Пример: /search новости науки")
         return
-    
-    msg = bot.reply_to(message, f"Ищу в интернете: {query}")
+    msg = bot.reply_to(message, f"Ищу: {query}...")
     data = perform_web_search(query)
-    
-    if "Не удалось выполнить" in data:
-        bot.edit_message_text(data, chat_id=message.chat.id, message_id=msg.message_id)
-        return
-        
-    safe_data = data[:1000]
-    prompt = f"Пользователь ищет: '{query}'. На основе этих данных дай короткий и понятный ответ на языке запроса:\n\n{safe_data}"
-    
-    reply = ask_ai_with_history(message.chat.id, prompt)
+    reply = ask_ai_with_history(message.chat.id, f"Пользователь ищет: '{query}'. Дай краткий ответ:\n\n{data[:1000]}")
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
-# --- КОМАНДА COBALT TOOLS ---
-@bot.message_handler(commands=['cobalt'])
-def cobalt_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    url = parts[1] if len(parts) > 1 else ""
-    if not url:
-        bot.reply_to(message, "Укажи ссылку после команды. Пример:\n`/cobalt https://youtu.be/...`")
-        return
-        
-    msg = bot.reply_to(message, "🚀 Обрабатываю ссылку через Cobalt Tools...")
-    try:
-        file_url, filename = download_via_cobalt(url, mode="audio")
-        media_bytes = requests.get(file_url, timeout=60).content
-        
-        media_file = io.BytesIO(media_bytes)
-        media_file.name = filename if filename else "audio.mp3"
-        
-        bot.send_audio(message.chat.id, audio=media_file, caption="⚡ Скачано через Cobalt Tools")
-        bot.delete_message(message.chat.id, msg.message_id)
-    except Exception as e:
-        bot.edit_message_text(f"❌ Ошибка Cobalt Tools: {e}", chat_id=message.chat.id, message_id=msg.message_id)
-
+# --- ПОИСК МУЗЫКИ И ТЕКСТА (YUKLAYDI СТИЛЬ) ---
 @bot.message_handler(commands=['music'])
 def music_cmd(message):
     user_id = message.chat.id
-    mode = user_modes.get(user_id, "normal")
-    
     parts = message.text.split(maxsplit=1)
     query = parts[1] if len(parts) > 1 else ""
     
     if not query:
-        if mode == "neuroham":
-            bot.reply_to(message, "И что я должен искать? Пустоту? Напиши название трека 🙄")
-        else:
-            bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Phonk")
+        bot.reply_to(message, "Напиши название песни или слова из текста. Пример:\n`/music Cadillac Morgenstern` или `/music эй цепь на мне`")
         return
 
-    if mode == "neuroham":
-        msg = bot.reply_to(message, "Копаюсь на YouTube в поисках твоей музыки... 🙄")
-    else:
-        msg = bot.reply_to(message, "Ищу трек на YouTube... 🎧")
+    msg = bot.reply_to(message, "🔍 Ищу песню по названию/тексту...")
 
     try:
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
-            'default_search': 'ytsearch5',  # Поиск через YouTube (без проблем с DRM)
+            'default_search': 'ytsearch5',
             'quiet': True,
+            'extract_flat': 'in_playlist',
+            'nocheckcertificate': True
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(query, download=False)
             results = info.get('entries', [])
             
             if not results:
-                if mode == "neuroham":
-                    bot.edit_message_text("Даже YouTube не смог найти эту дичь 💀", chat_id=user_id, message_id=msg.message_id)
-                else:
-                    bot.edit_message_text("К сожалению, на YouTube ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
+                bot.edit_message_text("Ничего не найдено 😔 Попробуй уточнить название.", chat_id=user_id, message_id=msg.message_id)
                 return
 
             music_cache[user_id] = results
-
-            if mode == "neuroham":
-                text_result = f"🗑️ Нарыл треки на YouTube по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
-            else:
-                text_result = f"🎵 Треки с YouTube по запросу '{query}'. Выбери цифру:\n\n"
-                
-            for i, track in enumerate(results, 1):
-                title = track.get('title', 'Без названия')
-                duration_sec = track.get('duration', 0)
-                if duration_sec:
-                    minutes = int(duration_sec // 60)
-                    seconds = int(duration_sec % 60)
-                    duration = f"{minutes}:{seconds:02d}"
-                else:
-                    duration = track.get('duration_string', '0:00')
-                text_result += f"{i}. {title} [{duration}]\n"
+            text_result = f"🎵 Результаты поиска по запросу **'{query}'**:\n\n"
                 
             keyboard = InlineKeyboardMarkup()
-            buttons = [InlineKeyboardButton(str(i), callback_data=f"music_{i-1}") for i in range(1, len(results) + 1)]
-            keyboard.row(*buttons)
+            for i, track in enumerate(results, 1):
+                title = track.get('title', 'Без названия')
+                text_result += f"{i}. {title}\n"
+                btn_mp3 = InlineKeyboardButton(f"🎵 {i} MP3", callback_data=f"dl_mp3_{i-1}")
+                btn_mp4 = InlineKeyboardButton(f"🎬 {i} Video", callback_data=f"dl_mp4_{i-1}")
+                keyboard.row(btn_mp3, btn_mp4)
                 
             bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id, reply_markup=keyboard)
             
     except Exception as e:
         bot.edit_message_text(f"Ошибка поиска: {e}", chat_id=user_id, message_id=msg.message_id)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('music_'))
-def callback_music(call):
+@bot.callback_query_handler(func=lambda call: call.data.startswith(('dl_mp3_', 'dl_mp4_')))
+def callback_download_media(call):
     user_id = call.message.chat.id
+    action, index_str = call.data.rsplit('_', 1)
+    index = int(index_str)
+    
+    results = music_cache.get(user_id)
+    if not results or index >= len(results):
+        bot.answer_callback_query(call.id, "Результаты устарели. Сделай новый поиск /music", show_alert=True)
+        return
+        
+    track = results[index]
+    url = track.get('url') or track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id')}"
+    title = track.get('title', 'Медиа')
+    
+    bot.answer_callback_query(call.id, f"Скачиваю {title[:20]}...")
+    processing_msg = bot.send_message(user_id, f"⏳ Загружаю **{title}**...")
+    
+    mode = "audio" if action == "dl_mp3" else "auto"
+    
     try:
-        index = int(call.data.split('_')[1])
-        results = music_cache.get(user_id)
-        if not results or index >= len(results):
-            bot.answer_callback_query(call.id, "Список устарел. Сделай поиск заново (/music).", show_alert=True)
-            return
+        # Быстрое скачивание через Cobalt Tools API
+        file_url, filename = download_via_cobalt(url, mode=mode)
+        media_bytes = requests.get(file_url, timeout=60).content
         
-        track = results[index]
-        url = track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id')}"
-        title = track.get('title', 'Трек')
+        media_file = io.BytesIO(media_bytes)
+        media_file.name = filename
         
-        bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Скачиваю и конвертирую трек через FFmpeg...")
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-                'noplaylist': True,
-                'quiet': True,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.extract_info(url, download=True)
+        if mode == "audio":
+            bot.send_audio(user_id, audio=media_file, caption=f"🎵 {title}", title=title)
+        else:
+            bot.send_video(user_id, video=media_file, caption=f"🎬 {title}")
             
-            files = os.listdir(temp_dir)
-            if not files:
-                bot.edit_message_text("❌ Не удалось найти скачанный файл.", chat_id=user_id, message_id=processing_msg.message_id)
-                return
-            
-            file_path = os.path.join(temp_dir, files[0])
-            
-            if os.path.getsize(file_path) > 50 * 1024 * 1024:
-                bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ), Telegram не может его отправить.", chat_id=user_id, message_id=processing_msg.message_id)
-                return
+        bot.delete_message(user_id, processing_msg.message_id)
+    except Exception:
+        # Резервный метод через FFmpeg / yt-dlp
+        bot.edit_message_text("⚙️ Cobalt занят, скачиваю напрямую через FFmpeg...", chat_id=user_id, message_id=processing_msg.message_id)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                if mode == "audio":
+                    ydl_opts = {
+                        'format': 'bestaudio/best',
+                        'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
+                        'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                        'quiet': True,
+                        'nocheckcertificate': True
+                    }
+                else:
+                    ydl_opts = {
+                        'format': 'best[ext=mp4]/best',
+                        'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                        'quiet': True,
+                        'nocheckcertificate': True
+                    }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.extract_info(url, download=True)
+                
+                files = os.listdir(temp_dir)
+                if files:
+                    file_path = os.path.join(temp_dir, files[0])
+                    with open(file_path, 'rb') as f:
+                        if mode == "audio":
+                            bot.send_audio(user_id, audio=f, caption=f"🎵 {title}", title=title)
+                        else:
+                            bot.send_video(user_id, video=f, caption=f"🎬 {title}")
+                    bot.delete_message(user_id, processing_msg.message_id)
+                else:
+                    bot.edit_message_text("❌ Не удалось сохранить файл.", chat_id=user_id, message_id=processing_msg.message_id)
+        except Exception as err:
+            bot.send_message(user_id, f"❌ Не удалось скачать файл: {err}")
 
-            bot.edit_message_text("📤 Отправляю аудио...", chat_id=user_id, message_id=processing_msg.message_id)
-            
-            with open(file_path, 'rb') as audio:
-                bot.send_audio(
-                    chat_id=user_id,
-                    audio=audio,
-                    caption=f"🎵 {title}",
-                    title=title
-                )
-            bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
-            
-    except Exception as e:
-        bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)
-        bot.send_message(user_id, f"Не удалось отправить трек: {e}")
-
+# --- ОСТАЛЬНЫЕ ИИ ИНСТРУМЕНТЫ ---
 @bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
 def ai_tools_cmd(message):
     parts = message.text.split(maxsplit=1)
-    if not parts:
-        return
-    
-    cmd_full = parts[0]
-    cmd = cmd_full.split('@')[0]
-    
     if len(parts) < 2:
-        bot.reply_to(message, f"Напиши текст после команды {cmd}")
         return
-    
     content = parts[1]
-    msg = bot.reply_to(message, "Обрабатываю запрос...")
-    
-    if cmd == '/gemini':
-        prompt = content
-    elif cmd == '/code':
-        prompt = f"Напиши код и объясни решение для задачи: {content}"
-    elif cmd == '/sum':
-        prompt = f"Сделай краткую выжимку:\n\n{content}"
-    elif cmd == '/tr':
-        prompt = f"Переведи этот текст на английский язык:\n\n{content}"
-    elif cmd == '/fix':
-        prompt = f"Исправь ошибки и сделай текст лучше:\n\n{content}"
-    else:
-        prompt = content
-        
-    reply = ask_ai_with_history(message.chat.id, prompt)
+    msg = bot.reply_to(message, "Думаю...")
+    reply = ask_ai_with_history(message.chat.id, content)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['image'])
@@ -524,31 +456,28 @@ def image_cmd(message):
     parts = message.text.split(maxsplit=1)
     prompt = parts[1] if len(parts) > 1 else ""
     if not prompt:
-        bot.reply_to(message, "Опиши картинку. Пример: /image кот в космосе")
         return
-    msg = bot.reply_to(message, "Генерирую изображение...")
-    img_bytes = generate_image_dynamic(prompt)
-    if img_bytes:
-        bot.send_photo(message.chat.id, img_bytes, caption=f"По запросу: {prompt}")
+    msg = bot.reply_to(message, "Рисую...")
+    img = generate_image_dynamic(prompt)
+    if img:
+        bot.send_photo(message.chat.id, img, caption=f"По запросу: {prompt}")
         bot.delete_message(message.chat.id, msg.message_id)
-    else:
-        bot.edit_message_text("Не удалось сгенерировать картинку. Все сервисы генерации временно заняты.", chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['tts'])
 def tts_cmd(message):
     parts = message.text.split(maxsplit=1)
-    text_to_speak = parts[1] if len(parts) > 1 else ""
-    if not text_to_speak:
-        bot.reply_to(message, "Напиши текст. Пример: /tts Привет мир")
+    text = parts[1] if len(parts) > 1 else ""
+    if not text:
         return
-    msg = bot.reply_to(message, "Создаю аудиокаст...")
-    audio_path = tempfile.mktemp(suffix=".mp3")
-    asyncio.run(generate_audio(text_to_speak, audio_path))
-    with open(audio_path, 'rb') as audio:
-        bot.send_voice(message.chat.id, audio)
+    msg = bot.reply_to(message, "Озвучиваю...")
+    path = tempfile.mktemp(suffix=".mp3")
+    asyncio.run(generate_audio(text, path))
+    with open(path, 'rb') as f:
+        bot.send_voice(message.chat.id, f)
     bot.delete_message(message.chat.id, msg.message_id)
-    os.remove(audio_path)
+    os.remove(path)
 
+# --- АВТОМАТИЧЕСКАЯ ОБРАБОТКА ССЫЛОК И ТЕКСТА ---
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
     text = message.text
@@ -559,18 +488,34 @@ def handle_text(message):
         return
 
     if "http://" in text or "https://" in text:
-        msg = bot.reply_to(message, "Читаю веб-страницу...")
-        try:
-            url = [w for w in text.split() if w.startswith("http")][0]
-            resp = requests.get(url, timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            page_text = soup.get_text(separator=' ', strip=True)[:1500]
-            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
-            bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
-            return
-        except Exception as e:
-            bot.edit_message_text(f"Ошибка чтения ссылки: {e}", chat_id=message.chat.id, message_id=msg.message_id)
-            return
+        urls = [w for w in text.split() if w.startswith("http")]
+        if urls:
+            url = urls[0]
+            msg = bot.reply_to(message, "🚀 Обнаружена ссылка! Скачиваю медиа...")
+            try:
+                file_url, filename = download_via_cobalt(url, mode="auto")
+                media_bytes = requests.get(file_url, timeout=60).content
+                media_file = io.BytesIO(media_bytes)
+                media_file.name = filename
+                
+                if filename.endswith(('.mp3', '.m4a', '.ogg')):
+                    bot.send_audio(message.chat.id, audio=media_file, caption="⚡ Успешно скачано")
+                else:
+                    bot.send_video(message.chat.id, video=media_file, caption="⚡ Успешно скачано")
+                    
+                bot.delete_message(message.chat.id, msg.message_id)
+                return
+            except Exception:
+                try:
+                    resp = requests.get(url, timeout=10)
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    page_text = soup.get_text(separator=' ', strip=True)[:1500]
+                    reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
+                    bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+                    return
+                except Exception as e:
+                    bot.edit_message_text(f"Не удалось обработать ссылку: {e}", chat_id=message.chat.id, message_id=msg.message_id)
+                    return
 
     msg = bot.reply_to(message, "Думаю...")
     reply = ask_ai_with_history(message.chat.id, text)
