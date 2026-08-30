@@ -365,7 +365,7 @@ def callback_music(call):
         index = int(call.data.split('_')[1])
         results = music_cache.get(user_id)
         if not results or index >= len(results):
-            bot.answer_callback_query(call.id, "Бот уснул или память очистилась. Сделай поиск заново (/music).", show_alert=True)
+            bot.answer_callback_query(call.id, "Список устарел или бот перезапускался. Сделай поиск заново (/music).", show_alert=True)
             return
         
         track = results[index]
@@ -373,10 +373,16 @@ def callback_music(call):
         title = track.get('trackName', 'Без названия')
         preview_url = track.get('previewUrl')
         
-        bot.answer_callback_query(call.id, f"Отправляю: {artist} — {title}")
+        bot.answer_callback_query(call.id, f"Загружаю: {artist} — {title}")
         
         if preview_url:
-            bot.send_audio(user_id, preview_url, caption=f"🎵 {artist} — {title}")
+            r = requests.get(preview_url, timeout=15)
+            if r.status_code == 200:
+                audio_io = io.BytesIO(r.content)
+                audio_io.name = f"{artist} - {title}.m4a"
+                bot.send_audio(user_id, audio_io, caption=f"🎵 {artist} — {title}")
+            else:
+                bot.send_message(user_id, "Не удалось скачать аудиофайл превью.")
         else:
             bot.send_message(user_id, f"У этого трека нет доступного превью: {artist} — {title}")
     except Exception as e:
