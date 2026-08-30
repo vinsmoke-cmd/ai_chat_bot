@@ -47,6 +47,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 def clean_markdown(text):
+    """Удаляет символы разметки Markdown (*, _, #) из текста"""
     if not text:
         return ""
     return re.sub(r'[*_#]', '', text)
@@ -67,6 +68,7 @@ def ask_ai_with_history(user_id, prompt):
     success = False
     answer = ""
     
+    # 1. Основная попытка через бесплатные провайдеры g4f
     for model_name in models_to_try:
         try:
             response = ai_client.chat.completions.create(
@@ -80,6 +82,7 @@ def ask_ai_with_history(user_id, prompt):
         except Exception:
             continue
             
+    # 2. Резервная попытка через Groq (модель gpt-oss-120b), если g4f не ответил
     if not success and groq_client:
         try:
             response = groq_client.chat.completions.create(
@@ -201,8 +204,9 @@ def weather_cmd(message):
         return
     try:
         params = {
-            'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %F)\nВетер: %w\nВлажность: %h\nОсадки: %p',
-            'lang': 'ru'
+            'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h\nОсадки: %p',
+            'lang': 'ru',
+            'm': ''  # Метрическая система (°C и км/ч)
         }
         resp = requests.get(f"https://wttr.in/{city}", params=params, timeout=5)
         if resp.status_code == 200:
