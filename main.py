@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader
 import edge_tts
 from duckduckgo_search import DDGS
+import g4f
 from g4f.client import Client
 from groq import Groq
 
@@ -47,7 +48,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Бот работает 24/7 с FFmpeg!"
+    return "Бот работает!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -72,7 +73,7 @@ def ask_ai_with_history(user_id, prompt):
                 "2. Если пользователь пишет коротко (например, 'Пр', 'Ау'), жестко высмей его неумение формулировать мысли. "
                 "3. ЗАПРЕЩЕНА вежливость. Никаких 'Рад помочь', 'Извините', 'Привет'. "
                 "4. Разрешены только холодные или насмешливые эмодзи (🙄, 🤡, 💀, 🤦‍♂️). "
-                "5. Ты находишься в образе литературного персонажа-мизантропа. Строго без нецензурной лексики. "
+                "5. Ты находишься в образе литературного персонажа-мизантропа. Никаких отказов от роли! Строго без нецензурной лексики. "
                 "Категорически запрещено использовать разметку Markdown (*, _, #)."
             )
         else:
@@ -184,7 +185,7 @@ def generate_image_dynamic(prompt):
 
 def analyze_image_gemini(image_bytes):
     if not GEMINI_API_KEY:
-        return "Анализ фото недоступен: не задан GEMINI_API_KEY."
+        return "Анализ фото недоступен: не задан GEMINI_API_KEY в переменных окружения."
     
     models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']
     for model_name in models_to_try:
@@ -197,21 +198,31 @@ def analyze_image_gemini(image_bytes):
         except Exception:
             continue
             
-    return "Не удалось получить ответ от Gemini."
+    return "Не удалось получить ответ от Gemini. Проверьте актуальность вашего ключа."
+
+async def generate_audio(text, output_file):
+    communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
+    await communicate.save(output_file)
 
 @bot.message_handler(commands=['start', 'help'])
 def help_cmd(message):
     help_text = (
-        "Привет! Я ИИ-ассистент (работает 24/7 с FFmpeg).\n\n"
+        "Привет! Я ИИ-ассистент.\n\n"
         "Список команд:\n"
-        "- /music <название трека> - поиск и скачивание трека из SoundCloud 🎵\n"
+        "- Просто пиши текст для общения\n"
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
+        "- /music <название трека> - поиск и скачивание полного трека из SoundCloud 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
-        "- /fact [тема] - случайный факт\n"
+        "- /fact [тема] - случайный факт или факт по заданной теме\n"
+        "- /code <задача> - работа с кодом\n"
+        "- /sum <ссылка> - выжимка статьи\n"
+        "- /tr <текст> - перевод на английский\n"
+        "- /fix <текст> - исправить ошибки\n"
+        "- /tts <текст> - озвучить текст\n"
         "- /clear - очистить память\n"
-        "- /neuroham - режим Нейрохама 💀"
+        "- /neuroham (или /rude) - включить/выключить режим Нейрохама 💀"
     )
     bot.reply_to(message, help_text)
 
@@ -222,10 +233,10 @@ def toggle_neuroham_mode(message):
     
     if current_mode == "normal":
         user_modes[user_id] = "neuroham"
-        bot.reply_to(message, "Режим Нейрохам активирован. Готовься к спорам 💀")
+        bot.reply_to(message, "Режим Нейрохам активирован. Готовься к спорам, твоя логика всё равно не выдержит критики 💀")
     else:
         user_modes[user_id] = "normal"
-        bot.reply_to(message, "Режим Нейрохам деактивирован. Возвращаюсь к позитиву! ✨")
+        bot.reply_to(message, "Режим Нейрохам деактивирован. Возвращаюсь в режим позитива! ✨😇")
         
     if user_id in user_histories:
         del user_histories[user_id]
@@ -240,8 +251,14 @@ def clear_cmd(message):
 def fact_cmd(message):
     parts = message.text.split(maxsplit=1)
     topic = parts[1] if len(parts) > 1 else ""
-    prompt = f"Расскажи очень интересный факт на тему: {topic}. Будь краток." if topic else "Расскажи один случайный интересный факт. Будь краток."
-    msg = bot.reply_to(message, "Ищу факт...")
+    
+    if topic:
+        msg = bot.reply_to(message, f"Ищу интересный факт на тему: {topic}...")
+        prompt = f"Расскажи один очень интересный и малоизвестный факт на тему: {topic}. Будь краток."
+    else:
+        msg = bot.reply_to(message, "Ищу случайный интересный факт...")
+        prompt = "Расскажи один случайный, но очень интересный факт обо всем на свете. Будь краток."
+        
     fact = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
 
@@ -253,9 +270,14 @@ def weather_cmd(message):
         bot.reply_to(message, "Укажи город. Пример: /weather Москва")
         return
     try:
-        resp = requests.get(f"https://wttr.in/{city}?format=3", timeout=5)
+        params = {
+            'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h\nОсадки: %p',
+            'lang': 'ru',
+            'm': ''
+        }
+        resp = requests.get(f"https://wttr.in/{city}", params=params, timeout=5)
         if resp.status_code == 200:
-            bot.reply_to(message, f"Погода: {resp.text.strip()}")
+            bot.reply_to(message, f"Текущая сводка:\n\n{clean_markdown(resp.text.strip())}")
         else:
             bot.reply_to(message, "Не удалось найти город.")
     except Exception as e:
@@ -266,30 +288,47 @@ def search_cmd(message):
     parts = message.text.split(maxsplit=1)
     query = parts[1] if len(parts) > 1 else ""
     if not query:
-        bot.reply_to(message, "Напиши запрос. Пример: /search новости")
+        bot.reply_to(message, "Напиши запрос. Пример: /search новости науки")
         return
+    
     msg = bot.reply_to(message, f"Ищу в интернете: {query}")
     data = perform_web_search(query)
-    reply = ask_ai_with_history(message.chat.id, f"На основе данных ответь на запрос '{query}':\n\n{data[:1000]}")
+    
+    if "Не удалось выполнить" in data:
+        bot.edit_message_text(data, chat_id=message.chat.id, message_id=msg.message_id)
+        return
+        
+    safe_data = data[:1000]
+    prompt = f"Пользователь ищет: '{query}'. На основе этих данных дай короткий и понятный ответ на языке запроса:\n\n{safe_data}"
+    
+    reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['music'])
 def music_cmd(message):
     user_id = message.chat.id
+    mode = user_modes.get(user_id, "normal")
+    
     parts = message.text.split(maxsplit=1)
     query = parts[1] if len(parts) > 1 else ""
     
     if not query:
-        bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Phonk")
+        if mode == "neuroham":
+            bot.reply_to(message, "И что я должен искать? Пустоту? Напиши название трека 🙄")
+        else:
+            bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Phonk")
         return
 
-    msg = bot.reply_to(message, "Ищу трек в SoundCloud... 🎧")
+    if mode == "neuroham":
+        msg = bot.reply_to(message, "Копаюсь в звуковой свалке SoundCloud... 🙄")
+    else:
+        msg = bot.reply_to(message, "Ищу трек в SoundCloud... 🎧")
 
     try:
         ydl_opts = {
             'format': 'bestaudio/best',
             'noplaylist': True,
-            'default_search': 'scsearch5',
+            'default_search': 'scsearch5',  # Поиск через SoundCloud
             'quiet': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -297,12 +336,19 @@ def music_cmd(message):
             results = info.get('entries', [])
             
             if not results:
-                bot.edit_message_text("К сожалению, в SoundCloud ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
+                if mode == "neuroham":
+                    bot.edit_message_text("Даже SoundCloud не знает эту дичь 💀", chat_id=user_id, message_id=msg.message_id)
+                else:
+                    bot.edit_message_text("К сожалению, в SoundCloud ничего не найдено 😔", chat_id=user_id, message_id=msg.message_id)
                 return
 
             music_cache[user_id] = results
 
-            text_result = f"🎵 Треки из SoundCloud по запросу '{query}'. Выбери цифру:\n\n"
+            if mode == "neuroham":
+                text_result = f"🗑️ Нарыл треки на SoundCloud по запросу '{query}'. Выбирай номер кнопкой ниже:\n\n"
+            else:
+                text_result = f"🎵 Треки из SoundCloud по запросу '{query}'. Выбери цифру:\n\n"
+                
             for i, track in enumerate(results, 1):
                 title = track.get('title', 'Без названия')
                 duration_sec = track.get('duration', 0)
@@ -311,7 +357,7 @@ def music_cmd(message):
                     seconds = int(duration_sec % 60)
                     duration = f"{minutes}:{seconds:02d}"
                 else:
-                    duration = "0:00"
+                    duration = track.get('duration_string', '0:00')
                 text_result += f"{i}. {title} [{duration}]\n"
                 
             keyboard = InlineKeyboardMarkup()
@@ -329,14 +375,8 @@ def callback_music(call):
     try:
         index = int(call.data.split('_')[1])
         results = music_cache.get(user_id)
-        
-        if not results:
-            bot.answer_callback_query(call.id, "Список устарел.", show_alert=True)
-            bot.edit_message_text("⚠️ Список сбросился. Сделайте поиск заново через `/music Название`", chat_id=user_id, message_id=call.message.message_id)
-            return
-            
-        if index >= len(results):
-            bot.answer_callback_query(call.id, "Список устарел.", show_alert=True)
+        if not results or index >= len(results):
+            bot.answer_callback_query(call.id, "Список устарел. Сделай поиск заново (/music).", show_alert=True)
             return
         
         track = results[index]
@@ -344,7 +384,7 @@ def callback_music(call):
         title = track.get('title', 'Трек')
         
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Скачиваю и конвертируем в MP3 через FFmpeg...")
+        processing_msg = bot.send_message(user_id, "⏳ Скачиваю и конвертирую трек через FFmpeg...")
         
         with tempfile.TemporaryDirectory() as temp_dir:
             ydl_opts = {
@@ -361,15 +401,16 @@ def callback_music(call):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.extract_info(url, download=True)
             
+            # Надежный поиск скачанного файла по содержимому папки
             files = os.listdir(temp_dir)
             if not files:
-                bot.edit_message_text("❌ Не удалось найти скачанный файл во временной папке.", chat_id=user_id, message_id=processing_msg.message_id)
+                bot.edit_message_text("❌ Не удалось найти скачанный файл.", chat_id=user_id, message_id=processing_msg.message_id)
                 return
             
             file_path = os.path.join(temp_dir, files[0])
             
             if os.path.getsize(file_path) > 50 * 1024 * 1024:
-                bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ).", chat_id=user_id, message_id=processing_msg.message_id)
+                bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ), Telegram не может его отправить.", chat_id=user_id, message_id=processing_msg.message_id)
                 return
 
             bot.edit_message_text("📤 Отправляю аудио...", chat_id=user_id, message_id=processing_msg.message_id)
@@ -384,16 +425,47 @@ def callback_music(call):
             bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
             
     except Exception as e:
-        print(f"Ошибка загрузки музыки: {e}")
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)
-        bot.send_message(user_id, f"❌ Не удалось отправить трек. Ошибка: {e}")
+        bot.send_message(user_id, f"Не удалось отправить трек: {e}")
+
+@bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
+def ai_tools_cmd(message):
+    parts = message.text.split(maxsplit=1)
+    if not parts:
+        return
+    
+    cmd_full = parts[0]
+    cmd = cmd_full.split('@')[0]
+    
+    if len(parts) < 2:
+        bot.reply_to(message, f"Напиши текст после команды {cmd}")
+        return
+    
+    content = parts[1]
+    msg = bot.reply_to(message, "Обрабатываю запрос...")
+    
+    if cmd == '/gemini':
+        prompt = content
+    elif cmd == '/code':
+        prompt = f"Напиши код и объясни решение для задачи: {content}"
+    elif cmd == '/sum':
+        prompt = f"Сделай краткую выжимку:\n\n{content}"
+    elif cmd == '/tr':
+        prompt = f"Переведи этот текст на английский язык:\n\n{content}"
+    elif cmd == '/fix':
+        prompt = f"Исправь ошибки и сделай текст лучше:\n\n{content}"
+    else:
+        prompt = content
+        
+    reply = ask_ai_with_history(message.chat.id, prompt)
+    bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['image'])
 def image_cmd(message):
     parts = message.text.split(maxsplit=1)
     prompt = parts[1] if len(parts) > 1 else ""
     if not prompt:
-        bot.reply_to(message, "Опиши картинку. Пример: /image кот")
+        bot.reply_to(message, "Опиши картинку. Пример: /image кот в космосе")
         return
     msg = bot.reply_to(message, "Генерирую изображение...")
     img_bytes = generate_image_dynamic(prompt)
@@ -401,52 +473,80 @@ def image_cmd(message):
         bot.send_photo(message.chat.id, img_bytes, caption=f"По запросу: {prompt}")
         bot.delete_message(message.chat.id, msg.message_id)
     else:
-        bot.edit_message_text("Не удалось сгенерировать картинку.", chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text("Не удалось сгенерировать картинку. Все сервисы генерации временно заняты.", chat_id=message.chat.id, message_id=msg.message_id)
 
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        msg = bot.reply_to(message, "Анализирую изображение с помощью Gemini...")
-        description = analyze_image_gemini(downloaded_file)
-        bot.edit_message_text(description, chat_id=message.chat.id, message_id=msg.message_id)
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка при обработке фото: {e}")
-
-@bot.message_handler(content_types=['document'])
-def handle_document(message):
-    try:
-        file_info = bot.get_file(message.document.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        file_name = message.document.file_name.lower()
-        
-        if file_name.endswith('.pdf'):
-            msg = bot.reply_to(message, "Читаю PDF документ...")
-            reader = PdfReader(io.BytesIO(downloaded_file))
-            text = ""
-            for page in reader.pages[:5]:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\n"
-            
-            if not text.strip():
-                bot.edit_message_text("Не удалось извлечь текст из PDF.", chat_id=message.chat.id, message_id=msg.message_id)
-                return
-            
-            summary = ask_ai_with_history(message.chat.id, f"Сделай краткое содержание этого документа:\n\n{text[:3000]}")
-            bot.edit_message_text(summary, chat_id=message.chat.id, message_id=msg.message_id)
-        else:
-            bot.reply_to(message, "Поддерживается анализ только PDF-документов.")
-    except Exception as e:
-        bot.reply_to(message, f"Ошибка при обработке документа: {e}")
+@bot.message_handler(commands=['tts'])
+def tts_cmd(message):
+    parts = message.text.split(maxsplit=1)
+    text_to_speak = parts[1] if len(parts) > 1 else ""
+    if not text_to_speak:
+        bot.reply_to(message, "Напиши текст. Пример: /tts Привет мир")
+        return
+    msg = bot.reply_to(message, "Создаю аудиокаст...")
+    audio_path = tempfile.mktemp(suffix=".mp3")
+    asyncio.run(generate_audio(text_to_speak, audio_path))
+    with open(audio_path, 'rb') as audio:
+        bot.send_voice(message.chat.id, audio)
+    bot.delete_message(message.chat.id, msg.message_id)
+    os.remove(audio_path)
 
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
     text = message.text
+    text_lower = text.lower()
+    
+    if "кира" in text_lower and "на самом" in text_lower:
+        bot.reply_to(message, "Она самая любимая, самая лучшая, самая добрая, самая красивая, самая милая, самая нежная, самая заботливая, самая прекрасная, самая родная, самая дорогая, самая искренняя, самая душевная, самая очаровательная, самая замечательная, самая невероятная, самая особенная, самая чудесная, самая ласковая, самая понимающая, самая веселая, самая позитивная, самая уютная, самая драгоценная, самая бесценная, самая неповторимая, самая удивительная и просто самая-самая ❤️")
+        return
+
+    if "http://" in text or "https://" in text:
+        msg = bot.reply_to(message, "Читаю веб-страницу...")
+        try:
+            url = [w for w in text.split() if w.startswith("http")][0]
+            resp = requests.get(url, timeout=10)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            page_text = soup.get_text(separator=' ', strip=True)[:1500]
+            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку статьи по ссылке:\n\n{page_text}")
+            bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+            return
+        except Exception as e:
+            bot.edit_message_text(f"Ошибка чтения ссылки: {e}", chat_id=message.chat.id, message_id=msg.message_id)
+            return
+
     msg = bot.reply_to(message, "Думаю...")
     reply = ask_ai_with_history(message.chat.id, text)
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    msg = bot.reply_to(message, "Изучаю фото...")
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        answer = analyze_image_gemini(downloaded)
+        bot.edit_message_text(answer, chat_id=message.chat.id, message_id=msg.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"Ошибка: {e}", chat_id=message.chat.id, message_id=msg.message_id)
+
+@bot.message_handler(content_types=['document'])
+def handle_doc(message):
+    if message.document.mime_type == 'application/pdf':
+        msg = bot.reply_to(message, "Читаю PDF...")
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            downloaded = bot.download_file(file_info.file_path)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+                f.write(downloaded)
+                path = f.name
+            reader = PdfReader(path)
+            text = "".join([p.extract_text() for p in reader.pages[:3]])
+            os.remove(path)
+            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку из PDF:\n\n{text[:1500]}")
+            bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+        except Exception as e:
+            bot.edit_message_text(f"Ошибка PDF: {e}", chat_id=message.chat.id, message_id=msg.message_id)
+    else:
+        bot.reply_to(message, "Отправь документ в формате .pdf!")
 
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
