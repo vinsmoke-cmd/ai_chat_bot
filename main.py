@@ -7,7 +7,6 @@ import requests
 import asyncio
 import threading
 import tempfile
-import yt_dlp
 import static_ffmpeg
 from flask import Flask
 from bs4 import BeautifulSoup
@@ -59,7 +58,7 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ФУНКЦИИ ПОИСКА МУЗЫКИ ---
+# --- ФУНКЦИИ ПОИСКА МУЗЫКИ (INVIDIOUS API) ---
 
 def search_free_music(query, limit=10):
     """Поиск в базе Free To Use / Royalty Free Music (Jamendo API)"""
@@ -94,33 +93,34 @@ def search_free_music(query, limit=10):
     return []
 
 def search_youtube(query, limit=10):
-    """Поиск через несколько инстансов Piped API + Фоллбек на yt_dlp"""
+    """Поиск музыки через публичные инстансы Invidious API"""
     instances = [
-        "https://pipedapi.kavin.rocks",
-        "https://api.piped.privacydev.net",
-        "https://pipedapi.drgns.space"
+        "https://iv.ggc-project.de",
+        "https://vid.puffyan.us",
+        "https://invidious.nerdvpn.de"
     ]
     
-    # 1. Пробуем быстрый поиск через Piped API
     for api_base in instances:
         try:
-            url = f"{api_base}/search?q={query}&filter=music"
+            url = f"{api_base}/api/v1/search?q={query}&type=video"
             resp = requests.get(url, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
-                items = data.get("items", [])
                 tracks = []
-                for item in items:
-                    if item.get("type") == "stream":
-                        dur = item.get("duration", 0) or 0
-                        minutes = dur // 60
-                        seconds = dur % 60
-                        video_id = item.get("url", "").replace("/watch?v=", "")
+                for item in data:
+                    dur = item.get("lengthSeconds", 0) or 0
+                    minutes = dur // 60
+                    seconds = dur % 60
+                    video_id = item.get("videoId")
+                    
+                    if video_id:
                         tracks.append({
                             "source": "youtube",
                             "title": item.get("title", "Без названия"),
                             "duration": f"{minutes}:{seconds:02d}",
-                            "url": f"https://www.youtube.com/watch?v={video_id}"
+                            "url": f"https://www.youtube.com/watch?v={video_id}",
+                            "video_id": video_id,
+                            "invidious_base": api_base
                         })
                         if len(tracks) >= limit:
                             break
@@ -128,41 +128,7 @@ def search_youtube(query, limit=10):
                     return tracks
         except Exception:
             continue
-
-    # 2. Если Piped не ответил — резервный поиск через yt_dlp
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': 'in_playlist',
-        'skip_download': True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-            results = info.get('entries', [])
-            tracks = []
-            for track in results:
-                if not track:
-                    continue
-                dur = track.get('duration', 0) or 0
-                minutes = int(dur // 60)
-                seconds = int(dur % 60)
-                
-                v_url = track.get('url') or track.get('webpage_url')
-                if not v_url and track.get('id'):
-                    v_url = f"https://www.youtube.com/watch?v={track.get('id')}"
-
-                tracks.append({
-                    "source": "youtube",
-                    "title": track.get('title', 'Без названия'),
-                    "duration": f"{minutes}:{seconds:02d}",
-                    "url": v_url
-                })
-            return tracks
-    except Exception:
-        return []
+    return []
 
 def ask_ai_with_history(user_id, prompt):
     mode = user_modes.get(user_id, "normal")
@@ -362,7 +328,7 @@ def fact_cmd(message):
         prompt = f"Расскажи один очень интересный и малоизвестный факт на тему: {topic}. Будь краток."  
     else:  
         msg = bot.reply_to(message, "Ищу случайный интересный факт...")  
-        prompt = "Расскажи один случайный, но очень интересный факт обо всем на свете. Будь краток."  
+        prompt = f"Расскажи один случайный, но очень интересный факт обо всем на свете. Будь краток."  
           
     fact = ask_ai_with_history(message.chat.id, prompt)  
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
@@ -429,7 +395,7 @@ def music_cmd(message):
     # 1. Поиск во Free Music (Jamendo)
     results = search_free_music(query, limit=10)
     
-    # 2. Если не найдено — ищем через YouTube (Piped API / yt_dlp)
+    # 2. Если не найдено — ищем через Invidious API
     if not results:
         results = search_youtube(query, limit=10)
 
@@ -468,9 +434,11 @@ def callback_music(call):
         track = results[index]
         title = track.get('title', 'Трек')
         source = track.get('source')
+        video_id = track.get('video_id')
+        api_base = track.get('invidious_base', "https://vid.puffyan.us")
 
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Скачиваю и обработаю файл...")
+        processing_msg = bot.send_message(user_id, "⏳ Получаю аудиопоток через Invidious...")
 
         if source == "free_music":
             download_url = track.get('download_url')
@@ -493,45 +461,34 @@ def callback_music(call):
                 bot.edit_message_text("❌ Ошибка при скачивании файла.", chat_id=user_id, message_id=processing_msg.message_id)
 
         elif source == "youtube":
-            url = track.get('url')
-            bot.edit_message_text("⏳ Конвертирую и отправляю трек...", chat_id=user_id, message_id=processing_msg.message_id)
+            stream_info_url = f"{api_base}/api/v1/videos/{video_id}"
+            resp = requests.get(stream_info_url, timeout=10)
             
-            # Скачивание локально через yt_dlp
-            with tempfile.TemporaryDirectory() as temp_dir:
-                ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                    'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-                    'noplaylist': True,
-                    'quiet': True,
-                    'nocheckcertificate': True,
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.extract_info(url, download=True)
+            if resp.status_code == 200:
+                vid_data = resp.json()
+                adaptive_formats = vid_data.get("adaptiveFormats", [])
                 
-                files = os.listdir(temp_dir)
-                if not files:
-                    bot.edit_message_text("❌ Не удалось конвертировать файл.", chat_id=user_id, message_id=processing_msg.message_id)
-                    return
+                audio_url = None
+                for fmt in adaptive_formats:
+                    if "audio" in fmt.get("type", ""):
+                        audio_url = fmt.get("url")
+                        break
                 
-                file_path = os.path.join(temp_dir, files[0])
-                
-                if os.path.getsize(file_path) > 50 * 1024 * 1024:
-                    bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ).", chat_id=user_id, message_id=processing_msg.message_id)
-                    return
-
-                with open(file_path, 'rb') as audio:
+                if audio_url:
+                    audio_data = requests.get(audio_url, timeout=60).content
+                    audio_file = io.BytesIO(audio_data)
+                    audio_file.name = f"{title}.mp3"
+                    
                     bot.send_audio(
                         chat_id=user_id,
-                        audio=audio,
+                        audio=audio_file,
                         caption=f"🎵 {title}",
                         title=title
                     )
-                bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
+                    bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
+                    return
+
+            bot.edit_message_text("❌ Не удалось получить аудиопоток с Invidious.", chat_id=user_id, message_id=processing_msg.message_id)
 
     except Exception as e:  
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
