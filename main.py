@@ -61,7 +61,6 @@ def clean_markdown(text):
 # --- КАСКАДНЫЙ ПОИСК МУЗЫКИ (PIPED -> INVIDIOUS) ---
 
 def search_free_music(query, limit=10):
-    """Поиск в базе Free To Use / Royalty Free Music (Jamendo API)"""
     url = "https://api.jamendo.com/v3.0/tracks/"
     params = {
         "client_id": "56d30c95",
@@ -92,9 +91,6 @@ def search_free_music(query, limit=10):
     return []
 
 def search_youtube(query, limit=10):
-    """Последовательный опрос сервисов Piped, затем Invidious"""
-    
-    # 1. Сервисы Piped API
     piped_instances = [
         "https://pipedapi.kavin.rocks",
         "https://api.piped.privacydev.net",
@@ -131,7 +127,6 @@ def search_youtube(query, limit=10):
         except Exception:
             continue
 
-    # 2. Сервисы Invidious API (если Piped не ответили)
     invidious_instances = [
         "https://iv.ggc-project.de",
         "https://vid.puffyan.us",
@@ -305,7 +300,7 @@ def help_cmd(message):
         "- /search <запрос> - поиск в интернете\n"
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
-        "- /music <название трека> - поиск и скачивание трека 🎵\n"
+        "- /music <название или строчка> - поиск и скачивание трека 🎵\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт\n"
         "- /code <задача> - работа с кодом\n"
@@ -377,23 +372,43 @@ def search_cmd(message):
 def music_cmd(message):
     user_id = message.chat.id
     parts = message.text.split(maxsplit=1)  
-    query = parts[1] if len(parts) > 1 else ""  
-    if not query:  
-        bot.reply_to(message, "Укажи название трека. Пример: /music Phonk")  
+    raw_query = parts[1] if len(parts) > 1 else ""  
+    if not raw_query:  
+        bot.reply_to(message, "Укажи название трека или строчку из него. Пример: /music I'm blue da ba dee")  
         return  
 
-    msg = bot.reply_to(message, "Ищу трек... 🎧")
+    msg = bot.reply_to(message, "Распознаю трек и ищу... 🎧")
 
-    results = search_free_music(query, limit=10)
+    ai_prompt = (
+        f"Пользователь ищет песню по следующему запросу (это может быть неполная фраза, строчка из текста, сленг или с ошибками): '{raw_query}'. "
+        f"Напиши ТОЛЬКО точное название трека и исполнителя (например: 'Artist - Song Title'), без лишних слов, кавычек и пояснений. "
+        f"Если вообще не можешь понять, напиши исходный запрос."
+    )
+    
+    refined_query = raw_query
+    try:
+        response = ai_client.chat.completions.create(
+            model="gpt-4o-mini", 
+            messages=[{"role": "user", "content": ai_prompt}]
+        )
+        refined_query = response.choices[0].message.content.strip()
+    except Exception:
+        pass
+
+    search_query = f"{refined_query} lyrics"
+
+    results = search_free_music(search_query, limit=10)
     if not results:
-        results = search_youtube(query, limit=10)
+        results = search_youtube(search_query, limit=10)
+    if not results:
+        results = search_youtube(refined_query, limit=10)
 
     if not results:
-        bot.edit_message_text("Не удалось найти, попробуйте позже", chat_id=user_id, message_id=msg.message_id)
+        bot.edit_message_text("Не удалось найти трек по такому описанию, попробуй уточнить запрос.", chat_id=user_id, message_id=msg.message_id)
         return
 
     music_cache[user_id] = results  
-    text_result = f"🎵 Результаты по запросу '{query}':\n\n"
+    text_result = f"🎵 Результаты по запросу (распознано как: *{refined_query}*):\n\n"
     keyboard = InlineKeyboardMarkup()
     buttons = []
 
@@ -404,7 +419,7 @@ def music_cmd(message):
     for k in range(0, len(buttons), 2):
         keyboard.row(*buttons[k:k+2])
 
-    bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id, reply_markup=keyboard)
+    bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id, reply_markup=keyboard, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('music_'))
 def callback_music(call):
