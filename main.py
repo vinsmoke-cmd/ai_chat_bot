@@ -59,11 +59,10 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ПОИСК МУЗЫКИ (PIPED -> INVIDIOUS -> YT-DLP) ---
+# --- ПОИСК МУЗЫКИ ---
 
 def search_youtube(query, limit=10):
     tracks = []
-    
     piped_instances = [
         "https://pipedapi.kavin.rocks",
         "https://api.piped.privacydev.net",
@@ -356,7 +355,12 @@ def weather_cmd(message):
         bot.reply_to(message, "Укажи город. Пример: /weather Москва")
         return
     try:
-        resp = requests.get(f"https://wttr.in/{city}", params={'format': 'Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w', 'lang': 'ru'}, timeout=5)
+        # Добавлен параметр ?m для принудительного использования Цельсия
+        resp = requests.get(
+            f"https://wttr.in/{city}", 
+            params={'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h', 'lang': 'ru', 'm': ''}, 
+            timeout=5
+        )
         if resp.status_code == 200:
             bot.reply_to(message, f"Сводка:\n\n{clean_markdown(resp.text.strip())}")
         else:
@@ -373,8 +377,14 @@ def search_cmd(message):
         return
     msg = bot.reply_to(message, f"Ищу: {query}")  
     data = perform_web_search(query)  
-    reply = ask_ai_with_history(message.chat.id, f"Ответь на основе данных:\n\n{data[:1000]}")  
-    bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
+    
+    # Возвращаем прямой и точный ответ без «аналитики» и лишней вводной части
+    if data and not data.startswith("Не удалось"):
+        reply = f"Результаты по запросу *{query}*:\n\n{data}"
+    else:
+        reply = ask_ai_with_history(message.chat.id, f"Ответь на основе данных:\n\n{data[:1000]}")
+        
+    bot.edit_message_text(clean_markdown(reply), chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['music'])
 def music_cmd(message):
