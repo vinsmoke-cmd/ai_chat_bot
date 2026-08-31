@@ -7,6 +7,7 @@ import requests
 import asyncio
 import threading
 import tempfile
+import yt_dlp
 import static_ffmpeg
 from flask import Flask
 from bs4 import BeautifulSoup
@@ -93,31 +94,75 @@ def search_free_music(query, limit=10):
     return []
 
 def search_youtube(query, limit=10):
-    """Безопасный поиск музыки на YouTube через Piped API (без банов IP и без yt_dlp)"""
-    url = f"https://pipedapi.kavin.rocks/search?q={query}&filter=music"
+    """Поиск через несколько инстансов Piped API + Фоллбек на yt_dlp"""
+    instances = [
+        "https://pipedapi.kavin.rocks",
+        "https://api.piped.privacydev.net",
+        "https://pipedapi.drgns.space"
+    ]
+    
+    # 1. Пробуем быстрый поиск через Piped API
+    for api_base in instances:
+        try:
+            url = f"{api_base}/search?q={query}&filter=music"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("items", [])
+                tracks = []
+                for item in items:
+                    if item.get("type") == "stream":
+                        dur = item.get("duration", 0) or 0
+                        minutes = dur // 60
+                        seconds = dur % 60
+                        video_id = item.get("url", "").replace("/watch?v=", "")
+                        tracks.append({
+                            "source": "youtube",
+                            "title": item.get("title", "Без названия"),
+                            "duration": f"{minutes}:{seconds:02d}",
+                            "url": f"https://www.youtube.com/watch?v={video_id}"
+                        })
+                        if len(tracks) >= limit:
+                            break
+                if tracks:
+                    return tracks
+        except Exception:
+            continue
+
+    # 2. Если Piped не ответил — резервный поиск через yt_dlp
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': 'in_playlist',
+        'skip_download': True,
+    }
     try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            items = data.get("items", [])
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            results = info.get('entries', [])
             tracks = []
-            for item in items:
-                if item.get("type") == "stream":
-                    dur = item.get("duration", 0) or 0
-                    minutes = dur // 60
-                    seconds = dur % 60
-                    tracks.append({
-                        "source": "youtube",
-                        "title": item.get("title", "Без названия"),
-                        "duration": f"{minutes}:{seconds:02d}",
-                        "video_id": item.get("url", "").replace("/watch?v=", "")
-                    })
-                    if len(tracks) >= limit:
-                        break
+            for track in results:
+                if not track:
+                    continue
+                dur = track.get('duration', 0) or 0
+                minutes = int(dur // 60)
+                seconds = int(dur % 60)
+                
+                v_url = track.get('url') or track.get('webpage_url')
+                if not v_url and track.get('id'):
+                    v_url = f"https://www.youtube.com/watch?v={track.get('id')}"
+
+                tracks.append({
+                    "source": "youtube",
+                    "title": track.get('title', 'Без названия'),
+                    "duration": f"{minutes}:{seconds:02d}",
+                    "url": v_url
+                })
             return tracks
-    except Exception as e:
-        print(f"Ошибка поиска YouTube: {e}")
-    return []
+    except Exception:
+        return []
 
 def ask_ai_with_history(user_id, prompt):
     mode = user_modes.get(user_id, "normal")
@@ -384,7 +429,7 @@ def music_cmd(message):
     # 1. Поиск во Free Music (Jamendo)
     results = search_free_music(query, limit=10)
     
-    # 2. Если не найдено — ищем через Piped (YouTube)
+    # 2. Если не найдено — ищем через YouTube (Piped API / yt_dlp)
     if not results:
         results = search_youtube(query, limit=10)
 
@@ -425,7 +470,7 @@ def callback_music(call):
         source = track.get('source')
 
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Скачиваю аудио...")
+        processing_msg = bot.send_message(user_id, "⏳ Скачиваю и обработаю файл...")
 
         if source == "free_music":
             download_url = track.get('download_url')
@@ -448,33 +493,45 @@ def callback_music(call):
                 bot.edit_message_text("❌ Ошибка при скачивании файла.", chat_id=user_id, message_id=processing_msg.message_id)
 
         elif source == "youtube":
-            video_id = track.get('video_id')
-            bot.edit_message_text("⏳ Загружаю аудиопоток с YouTube...", chat_id=user_id, message_id=processing_msg.message_id)
+            url = track.get('url')
+            bot.edit_message_text("⏳ Конвертирую и отправляю трек...", chat_id=user_id, message_id=processing_msg.message_id)
             
-            stream_api = f"https://pipedapi.kavin.rocks/streams/{video_id}"
-            resp = requests.get(stream_api, timeout=15)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                audio_streams = data.get("audioStreams", [])
+            # Скачивание локально через yt_dlp
+            with tempfile.TemporaryDirectory() as temp_dir:
+                ydl_opts = {
+                    'format': 'bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
+                    'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+                    'noplaylist': True,
+                    'quiet': True,
+                    'nocheckcertificate': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.extract_info(url, download=True)
                 
-                if audio_streams:
-                    audio_url = audio_streams[0].get("url")
-                    audio_data = requests.get(audio_url, timeout=60).content
-                    
-                    audio_file = io.BytesIO(audio_data)
-                    audio_file.name = f"{title}.mp3"
-                    
+                files = os.listdir(temp_dir)
+                if not files:
+                    bot.edit_message_text("❌ Не удалось конвертировать файл.", chat_id=user_id, message_id=processing_msg.message_id)
+                    return
+                
+                file_path = os.path.join(temp_dir, files[0])
+                
+                if os.path.getsize(file_path) > 50 * 1024 * 1024:
+                    bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ).", chat_id=user_id, message_id=processing_msg.message_id)
+                    return
+
+                with open(file_path, 'rb') as audio:
                     bot.send_audio(
                         chat_id=user_id,
-                        audio=audio_file,
+                        audio=audio,
                         caption=f"🎵 {title}",
                         title=title
                     )
-                    bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
-                    return
-
-            bot.edit_message_text("❌ Не удалось получить аудиопоток. Попробуйте другой трек.", chat_id=user_id, message_id=processing_msg.message_id)
+                bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
 
     except Exception as e:  
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
