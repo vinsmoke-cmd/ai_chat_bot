@@ -59,7 +59,7 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- КАРИСКДНЫЙ ПОИСК МУЗЫКИ (PIPED -> INVIDIOUS -> YT-DLP) ---
+# --- ПОИСК МУЗЫКИ (PIPED -> INVIDIOUS -> YT-DLP) ---
 
 def search_youtube(query, limit=10):
     tracks = []
@@ -447,11 +447,13 @@ def callback_music(call):
         api_base = track.get('api_base')
 
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Получаю аудиопоток...")
+        processing_msg = bot.send_message(user_id, "⏳ Загружаю аудиопоток...")
+
+        audio_data = None
 
         if source == "youtube":
             audio_url = None
-            if service_type == "piped":
+            if service_type == "piped" and api_base:
                 try:
                     resp = requests.get(f"{api_base}/streams/{video_id}", timeout=10)
                     if resp.status_code == 200:
@@ -460,7 +462,7 @@ def callback_music(call):
                             audio_url = streams[0].get("url")
                 except Exception:
                     pass
-            elif service_type == "invidious":
+            elif service_type == "invidious" and api_base:
                 try:
                     resp = requests.get(f"{api_base}/api/v1/videos/{video_id}", timeout=10)
                     if resp.status_code == 200:
@@ -470,24 +472,46 @@ def callback_music(call):
                                 break
                 except Exception:
                     pass
-            elif service_type == "ytdlp":
-                try:
-                    ydl_opts = {'format': 'bestaudio', 'quiet': True}
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-                        audio_url = info.get('url')
-                except Exception:
-                    pass
 
             if audio_url:
-                audio_data = requests.get(audio_url, timeout=60).content
-                audio_file = io.BytesIO(audio_data)
-                audio_file.name = f"{title}.mp3"
-                bot.send_audio(chat_id=user_id, audio=audio_file, caption=f"🎵 {title}", title=title)
-                bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
-                return
+                try:
+                    audio_data = requests.get(audio_url, timeout=60).content
+                except Exception:
+                    audio_data = None
 
-            bot.edit_message_text("❌ Не удалось получить аудиопоток.", chat_id=user_id, message_id=processing_msg.message_id)
+            if not audio_data:
+                try:
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
+                        ydl_opts = {
+                            'format': 'bestaudio/best',
+                            'outtmpl': out_tmpl,
+                            'postprocessors': [{
+                                'key': 'FFmpegExtractAudio',
+                                'preferredcodec': 'mp3',
+                                'preferredquality': '192',
+                            }],
+                            'quiet': True,
+                        }
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+                        
+                        for file in os.listdir(temp_dir):
+                            if file.endswith('.mp3'):
+                                with open(os.path.join(temp_dir, file), 'rb') as f:
+                                    audio_data = f.read()
+                                break
+                except Exception as e:
+                    print(f"YTDLP download error: {e}")
+
+        if audio_data:
+            audio_file = io.BytesIO(audio_data)
+            audio_file.name = f"{title}.mp3"
+            bot.send_audio(chat_id=user_id, audio=audio_file, caption=f"🎵 {title}", title=title)
+            bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
+            return
+
+        bot.edit_message_text("❌ Не удалось получить аудиопоток. Попробуйте другой трек.", chat_id=user_id, message_id=processing_msg.message_id)
 
     except Exception as e:  
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
