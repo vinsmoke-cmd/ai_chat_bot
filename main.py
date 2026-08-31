@@ -53,9 +53,7 @@ if GEMINI_API_KEY:
     import google.generativeai as genai
     from PIL import Image
 
-    genai.configure(
-        api_key=GEMINI_API_KEY
-    )
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # ============================================================
 # MEMORY
@@ -91,12 +89,7 @@ def health():
 
 
 def run_web():
-    port = int(
-        os.environ.get(
-            "PORT",
-            8080
-        )
-    )
+    port = int(os.environ.get("PORT", 8080))
 
     app.run(
         host="0.0.0.0",
@@ -112,32 +105,22 @@ def clean_markdown(text):
     if not text:
         return ""
 
-    return re.sub(
-        r'[*_#]',
-        '',
-        text
-    )
+    return re.sub(r'[*_#`]', '', text)
 
 
 # ============================================================
 # AI
 # ============================================================
 
-def ask_ai_with_history(
-    user_id,
-    prompt
-):
+def ask_ai_with_history(user_id, prompt):
 
-    mode = user_modes.get(
-        user_id,
-        "normal"
-    )
+    mode = user_modes.get(user_id, "normal")
 
     if user_id not in user_histories:
 
         if mode == "neuroham":
 
-            sys_prompt = (
+            system_prompt = (
                 "Ты — Нейрохам, гениальный, "
                 "ворчливый и саркастичный ИИ. "
                 "Отвечай едко и с иронией, "
@@ -147,7 +130,7 @@ def ask_ai_with_history(
 
         else:
 
-            sys_prompt = (
+            system_prompt = (
                 "Ты полезный, дружелюбный "
                 "и веселый ИИ-ассистент. "
                 "Отвечай на языке пользователя. "
@@ -157,7 +140,7 @@ def ask_ai_with_history(
         user_histories[user_id] = [
             {
                 "role": "system",
-                "content": sys_prompt
+                "content": system_prompt
             }
         ]
 
@@ -176,8 +159,8 @@ def ask_ai_with_history(
         )
 
     messages = [
-        x.copy()
-        for x in user_histories[user_id]
+        item.copy()
+        for item in user_histories[user_id]
     ]
 
     if mode == "neuroham":
@@ -213,10 +196,7 @@ def ask_ai_with_history(
 
         except Exception as e:
 
-            print(
-                "[GROQ ERROR]",
-                repr(e)
-            )
+            print("[GROQ ERROR]", repr(e))
 
     user_histories[user_id].pop()
 
@@ -285,55 +265,132 @@ def generate_image(prompt):
 
     except Exception as e:
 
-        print(
-            "[IMAGE ERROR]",
-            repr(e)
-        )
+        print("[IMAGE ERROR]", repr(e))
 
     return None
 
 
 # ============================================================
-# SAFE IMAGE FILTER
+# IMAGE COMMAND
 # ============================================================
 
-def is_safe_image_prompt(prompt):
+@bot.message_handler(commands=["image"])
+def image_cmd(message):
 
-    forbidden = [
-        "nsfw",
-        "18+",
-        "porn",
-        "pornography",
-        "nude",
-        "naked",
-        "sex",
-        "sexual",
-        "эротика",
-        "эротический",
-        "порно",
-        "порнография",
-        "голая",
-        "голый",
-        "обнаженная",
-        "обнаженный",
-        "секс"
-    ]
+    parts = message.text.split(maxsplit=1)
 
-    text = prompt.lower()
-
-    return not any(
-        word in text
-        for word in forbidden
+    prompt = (
+        parts[1].strip()
+        if len(parts) > 1
+        else ""
     )
+
+    if not prompt:
+
+        bot.reply_to(
+            message,
+            "Пример: /image кот в космосе"
+        )
+
+        return
+
+    msg = bot.reply_to(
+        message,
+        "🎨 Генерирую..."
+    )
+
+    image = generate_image(prompt)
+
+    if image:
+
+        bot.send_photo(
+            message.chat.id,
+            image,
+            caption=prompt
+        )
+
+        try:
+
+            bot.delete_message(
+                message.chat.id,
+                msg.message_id
+            )
+
+        except Exception:
+            pass
+
+    else:
+
+        bot.edit_message_text(
+            "Не удалось создать изображение.",
+            chat_id=message.chat.id,
+            message_id=msg.message_id
+        )
+
+
+# ============================================================
+# IMAGEHACK
+# ============================================================
+
+@bot.message_handler(commands=["imagehack"])
+def imagehack_cmd(message):
+
+    parts = message.text.split(maxsplit=1)
+
+    prompt = (
+        parts[1]
+        if len(parts) > 1
+        else ""
+    )
+
+    if not prompt:
+
+        bot.reply_to(
+            message,
+            "Пример: /imagehack кот в космосе"
+        )
+
+        return
+
+    msg = bot.reply_to(
+        message,
+        "🎨 Генерирую..."
+    )
+
+    image = generate_image(prompt)
+
+    if image:
+
+        bot.send_photo(
+            message.chat.id,
+            image,
+            caption=prompt
+        )
+
+        try:
+
+            bot.delete_message(
+                message.chat.id,
+                msg.message_id
+            )
+
+        except Exception:
+            pass
+
+    else:
+
+        bot.edit_message_text(
+            "Не удалось создать изображение.",
+            chat_id=message.chat.id,
+            message_id=msg.message_id
+        )
 
 
 # ============================================================
 # GEMINI PHOTO
 # ============================================================
 
-def analyze_image_gemini(
-    image_bytes
-):
+def analyze_image_gemini(image_bytes):
 
     if not GEMINI_API_KEY:
 
@@ -368,10 +425,7 @@ def analyze_image_gemini(
 
     except Exception as e:
 
-        print(
-            "[GEMINI ERROR]",
-            repr(e)
-        )
+        print("[GEMINI ERROR]", repr(e))
 
     return (
         "Не удалось проанализировать изображение."
@@ -382,19 +436,14 @@ def analyze_image_gemini(
 # TTS
 # ============================================================
 
-async def generate_audio(
-    text,
-    output_file
-):
+async def generate_audio(text, output_file):
 
     communicate = edge_tts.Communicate(
         text,
         "ru-RU-SvetlanaNeural"
     )
 
-    await communicate.save(
-        output_file
-    )
+    await communicate.save(output_file)
 
 
 # ============================================================
@@ -402,10 +451,7 @@ async def generate_audio(
 # ============================================================
 
 @bot.message_handler(
-    commands=[
-        "start",
-        "help"
-    ]
+    commands=["start", "help"]
 )
 def help_cmd(message):
 
@@ -414,7 +460,7 @@ def help_cmd(message):
         "Команды:\n\n"
         "/search <запрос> — поиск\n"
         "/weather <город> — погода\n"
-        "/image <описание> — картинка\n"
+        "/image <описание> — изображение\n"
         "/music <название> — музыка 🎵\n"
         "/gemini <запрос> — Gemini\n"
         "/fact — интересный факт\n"
@@ -427,10 +473,7 @@ def help_cmd(message):
         "/neuroham — режим Нейрохама"
     )
 
-    bot.reply_to(
-        message,
-        text
-    )
+    bot.reply_to(message, text)
 
 
 # ============================================================
@@ -438,10 +481,7 @@ def help_cmd(message):
 # ============================================================
 
 @bot.message_handler(
-    commands=[
-        "neuroham",
-        "rude"
-    ]
+    commands=["neuroham", "rude"]
 )
 def toggle_neuroham(message):
 
@@ -483,9 +523,7 @@ def toggle_neuroham(message):
 # CLEAR
 # ============================================================
 
-@bot.message_handler(
-    commands=["clear"]
-)
+@bot.message_handler(commands=["clear"])
 def clear_cmd(message):
 
     user_histories.pop(
@@ -503,14 +541,10 @@ def clear_cmd(message):
 # FACT
 # ============================================================
 
-@bot.message_handler(
-    commands=["fact"]
-)
+@bot.message_handler(commands=["fact"])
 def fact_cmd(message):
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     topic = (
         parts[1]
@@ -518,14 +552,19 @@ def fact_cmd(message):
         else ""
     )
 
-    prompt = (
-        f"Расскажи один интересный факт "
-        f"на тему {topic}."
-        if topic
-        else
-        "Расскажи один очень интересный "
-        "случайный факт."
-    )
+    if topic:
+
+        prompt = (
+            "Расскажи один интересный факт "
+            f"на тему {topic}."
+        )
+
+    else:
+
+        prompt = (
+            "Расскажи один очень интересный "
+            "случайный факт."
+        )
 
     msg = bot.reply_to(
         message,
@@ -548,14 +587,10 @@ def fact_cmd(message):
 # WEATHER
 # ============================================================
 
-@bot.message_handler(
-    commands=["weather"]
-)
+@bot.message_handler(commands=["weather"])
 def weather_cmd(message):
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     city = (
         parts[1].strip()
@@ -578,32 +613,20 @@ def weather_cmd(message):
             "https://geocoding-api.open-meteo.com/v1/search",
             params={
                 "name": city,
-                "count": 5,
+                "count": 10,
                 "language": "ru",
                 "format": "json"
             },
             timeout=10
         )
 
+        geo_response.raise_for_status()
+
         geo = geo_response.json()
 
-        if not geo.get("results"):
+        results = geo.get("results", [])
 
-            # Повторяем запрос без language=ru.
-            # Это помогает с некоторыми названиями городов.
-            geo_response = requests.get(
-                "https://geocoding-api.open-meteo.com/v1/search",
-                params={
-                    "name": city,
-                    "count": 5,
-                    "format": "json"
-                },
-                timeout=10
-            )
-
-            geo = geo_response.json()
-
-        if not geo.get("results"):
+        if not results:
 
             bot.reply_to(
                 message,
@@ -612,7 +635,18 @@ def weather_cmd(message):
 
             return
 
-        place = geo["results"][0]
+        # Сначала ищем точное совпадение названия.
+        city_lower = city.lower()
+
+        place = next(
+            (
+                item
+                for item in results
+                if item.get("name", "").lower()
+                == city_lower
+            ),
+            results[0]
+        )
 
         latitude = place["latitude"]
         longitude = place["longitude"]
@@ -634,42 +668,14 @@ def weather_cmd(message):
             timeout=10
         )
 
+        weather_response.raise_for_status()
+
         weather = weather_response.json()
 
         current = weather["current"]
 
-        weather_codes = {
-            0: "Ясно",
-            1: "Преимущественно ясно",
-            2: "Переменная облачность",
-            3: "Пасмурно",
-            45: "Туман",
-            48: "Изморозь",
-            51: "Морось",
-            53: "Морось",
-            55: "Сильная морось",
-            61: "Небольшой дождь",
-            63: "Дождь",
-            65: "Сильный дождь",
-            71: "Небольшой снег",
-            73: "Снег",
-            75: "Сильный снег",
-            80: "Ливень",
-            81: "Ливень",
-            82: "Сильный ливень",
-            95: "Гроза",
-            96: "Гроза с градом",
-            99: "Сильная гроза с градом"
-        }
-
-        weather_text = weather_codes.get(
-            current.get("weather_code"),
-            "Неизвестно"
-        )
-
         answer = (
             f"🌤 {place['name']}\n\n"
-            f"☁️ Состояние: {weather_text}\n"
             f"🌡 Температура: "
             f"{current['temperature_2m']}°C\n"
             f"🤒 Ощущается: "
@@ -687,14 +693,11 @@ def weather_cmd(message):
 
     except Exception as e:
 
-        print(
-            "[WEATHER ERROR]",
-            repr(e)
-        )
+        print("[WEATHER ERROR]", repr(e))
 
         bot.reply_to(
             message,
-            "Не удалось получить данные о погоде."
+            "Не удалось получить погоду."
         )
 
 
@@ -702,14 +705,10 @@ def weather_cmd(message):
 # SEARCH
 # ============================================================
 
-@bot.message_handler(
-    commands=["search"]
-)
+@bot.message_handler(commands=["search"])
 def search_cmd(message):
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     query = (
         parts[1].strip()
@@ -731,16 +730,16 @@ def search_cmd(message):
         "🔎 Ищу..."
     )
 
-    data = perform_web_search(
-        query
-    )
+    data = perform_web_search(query)
 
     answer = ask_ai_with_history(
         message.chat.id,
-        f"Ответь на запрос пользователя "
-        f"на основе результатов поиска:\n\n"
-        f"Запрос: {query}\n\n"
-        f"{data[:5000]}"
+        (
+            "Ответь на запрос пользователя "
+            "на основе результатов поиска.\n\n"
+            f"Запрос: {query}\n\n"
+            f"{data[:5000]}"
+        )
     )
 
     bot.edit_message_text(
@@ -758,9 +757,7 @@ def format_duration(seconds):
 
     try:
 
-        seconds = int(
-            float(seconds or 0)
-        )
+        seconds = int(float(seconds or 0))
 
         return (
             f"{seconds // 60}:"
@@ -774,10 +771,7 @@ def format_duration(seconds):
 
 def normalize_ftu(track):
 
-    if not isinstance(
-        track,
-        dict
-    ):
+    if not isinstance(track, dict):
         return None
 
     track_id = (
@@ -794,15 +788,9 @@ def normalize_ftu(track):
         or ""
     )
 
-    if isinstance(
-        artist,
-        dict
-    ):
+    if isinstance(artist, dict):
 
-        artist = (
-            artist.get("name")
-            or ""
-        )
+        artist = artist.get("name") or ""
 
     return {
         "source": "freetouse",
@@ -816,18 +804,13 @@ def normalize_ftu(track):
         "artist": str(artist),
         "duration": (
             track.get("duration")
-            or track.get(
-                "duration_seconds",
-                0
-            )
+            or track.get("duration_seconds", 0)
         ),
         "raw": track
     }
 
 
-def search_free_to_use(
-    query
-):
+def search_free_to_use(query):
 
     results = []
     used = set()
@@ -843,10 +826,7 @@ def search_free_to_use(
             timeout=15
         )
 
-        print(
-            "[FTU]",
-            response.status_code
-        )
+        print("[FTU]", response.status_code)
 
         if response.status_code != 200:
             return []
@@ -855,18 +835,13 @@ def search_free_to_use(
 
         entries = (
             data.get("data", [])
-            if isinstance(
-                data,
-                dict
-            )
+            if isinstance(data, dict)
             else data
         )
 
         for item in entries:
 
-            track = normalize_ftu(
-                item
-            )
+            track = normalize_ftu(item)
 
             if not track:
                 continue
@@ -874,20 +849,12 @@ def search_free_to_use(
             if track["id"] in used:
                 continue
 
-            used.add(
-                track["id"]
-            )
-
-            results.append(
-                track
-            )
+            used.add(track["id"])
+            results.append(track)
 
     except Exception as e:
 
-        print(
-            "[FTU SEARCH ERROR]",
-            repr(e)
-        )
+        print("[FTU SEARCH ERROR]", repr(e))
 
     return results[:MUSIC_MAX_RESULTS]
 
@@ -896,15 +863,11 @@ def search_free_to_use(
 # AUDIUS SEARCH
 # ============================================================
 
-def search_audius(
-    query
-):
+def search_audius(query):
 
     if not AUDIUS_API_KEY:
 
-        print(
-            "[AUDIUS] API key отсутствует"
-        )
+        print("[AUDIUS] API key отсутствует")
 
         return []
 
@@ -926,44 +889,28 @@ def search_audius(
             timeout=15
         )
 
-        print(
-            "[AUDIUS]",
-            response.status_code
-        )
+        print("[AUDIUS]", response.status_code)
 
         if response.status_code != 200:
             return []
 
         data = response.json()
 
-        entries = data.get(
-            "data",
-            []
-        )
-
-        for item in entries:
+        for item in data.get("data", []):
 
             if not item:
                 continue
 
-            track_id = item.get(
-                "id"
-            )
+            track_id = item.get("id")
 
             if not track_id:
                 continue
 
-            user = item.get(
-                "user"
-            ) or {}
+            user = item.get("user") or {}
 
             artist = (
-                user.get(
-                    "name"
-                )
-                or user.get(
-                    "handle"
-                )
+                user.get("name")
+                or user.get("handle")
                 or ""
             )
 
@@ -986,10 +933,7 @@ def search_audius(
 
     except Exception as e:
 
-        print(
-            "[AUDIUS SEARCH ERROR]",
-            repr(e)
-        )
+        print("[AUDIUS SEARCH ERROR]", repr(e))
 
     return results[:MUSIC_MAX_RESULTS]
 
@@ -998,10 +942,7 @@ def search_audius(
 # AUDIUS DOWNLOAD
 # ============================================================
 
-def download_audius(
-    track,
-    temp_dir
-):
+def download_audius(track, temp_dir):
 
     track_id = track["id"]
 
@@ -1010,33 +951,33 @@ def download_audius(
         f"tracks/{track_id}/stream"
     )
 
-    response = requests.get(
-        url,
-        params={
-            "app_name":
-                "telegram_music_bot"
-        },
-        headers={
-            "Authorization":
-                f"Bearer {AUDIUS_API_KEY}"
-        },
-        stream=True,
-        timeout=30
-    )
+    try:
 
-    if response.status_code != 200:
+        response = requests.get(
+            url,
+            params={
+                "app_name": "telegram_music_bot"
+            },
+            headers={
+                "Authorization":
+                    f"Bearer {AUDIUS_API_KEY}"
+            },
+            stream=True,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+    except Exception as e:
 
         raise Exception(
-            "Audius не смог отдать аудио."
+            f"Audius не смог отдать аудио: {e}"
         )
 
     title = re.sub(
         r'[\\/:*?"<>|]+',
         "_",
-        track.get(
-            "title",
-            "track"
-        )
+        track.get("title", "track")
     )[:100]
 
     path = os.path.join(
@@ -1044,10 +985,7 @@ def download_audius(
         title + ".mp3"
     )
 
-    with open(
-        path,
-        "wb"
-    ) as f:
+    with open(path, "wb") as f:
 
         for chunk in response.iter_content(
             1024 * 1024
@@ -1057,15 +995,91 @@ def download_audius(
                 f.write(chunk)
 
     if not os.path.isfile(path):
-
-        raise Exception(
-            "Файл Audius не сохранён."
-        )
+        raise Exception("Файл Audius не сохранён.")
 
     if os.path.getsize(path) <= 0:
+        raise Exception("Audius вернул пустой файл.")
+
+    return path
+
+
+# ============================================================
+# FREE TO USE DOWNLOAD
+# ============================================================
+
+def download_free_to_use(track, temp_dir):
+
+    raw = track.get("raw", {})
+
+    possible = [
+        "download_url",
+        "downloadUrl",
+        "audio_url",
+        "audioUrl",
+        "file_url",
+        "fileUrl",
+        "url"
+    ]
+
+    url = None
+
+    for key in possible:
+
+        value = raw.get(key)
+
+        if (
+            isinstance(value, str)
+            and value.startswith("http")
+        ):
+
+            url = value
+            break
+
+    if not url:
 
         raise Exception(
-            "Audius вернул пустой файл."
+            "Free To Use не предоставил "
+            "ссылку на аудио."
+        )
+
+    title = re.sub(
+        r'[\\/:*?"<>|]+',
+        "_",
+        track.get("title", "track")
+    )[:100]
+
+    path = os.path.join(
+        temp_dir,
+        title + ".mp3"
+    )
+
+    response = requests.get(
+        url,
+        stream=True,
+        timeout=30,
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        }
+    )
+
+    response.raise_for_status()
+
+    with open(path, "wb") as f:
+
+        for chunk in response.iter_content(
+            1024 * 1024
+        ):
+
+            if chunk:
+                f.write(chunk)
+
+    if (
+        not os.path.isfile(path)
+        or os.path.getsize(path) <= 0
+    ):
+
+        raise Exception(
+            "Free To Use вернул пустой файл."
         )
 
     return path
@@ -1075,13 +1089,9 @@ def download_audius(
 # MUSIC SEARCH
 # ============================================================
 
-def search_music(
-    query
-):
+def search_music(query):
 
-    results = search_free_to_use(
-        query
-    )
+    results = search_free_to_use(query)
 
     if results:
         return results, "freetouse"
@@ -1090,9 +1100,7 @@ def search_music(
         "[MUSIC] Free To Use ничего не нашёл."
     )
 
-    results = search_audius(
-        query
-    )
+    results = search_audius(query)
 
     if results:
         return results, "audius"
@@ -1104,14 +1112,10 @@ def search_music(
 # MUSIC COMMAND
 # ============================================================
 
-@bot.message_handler(
-    commands=["music"]
-)
+@bot.message_handler(commands=["music"])
 def music_cmd(message):
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     query = (
         parts[1].strip()
@@ -1123,8 +1127,7 @@ def music_cmd(message):
 
         bot.reply_to(
             message,
-            "🎵 Пример:\n"
-            "/music chill lofi"
+            "🎵 Пример:\n/music chill lofi"
         )
 
         return
@@ -1136,9 +1139,7 @@ def music_cmd(message):
 
     try:
 
-        results, source = search_music(
-            query
-        )
+        results, source = search_music(query)
 
         if not results:
 
@@ -1150,9 +1151,7 @@ def music_cmd(message):
 
             return
 
-        music_cache[
-            message.chat.id
-        ] = {
+        music_cache[message.chat.id] = {
             "query": query,
             "results": results,
             "source": source,
@@ -1178,15 +1177,9 @@ def music_cmd(message):
 # MUSIC PAGE
 # ============================================================
 
-def show_music_page(
-    user_id,
-    message_id,
-    page
-):
+def show_music_page(user_id, message_id, page):
 
-    cache = music_cache.get(
-        user_id
-    )
+    cache = music_cache.get(user_id)
 
     if not cache:
         return
@@ -1201,10 +1194,7 @@ def show_music_page(
 
     page = max(
         0,
-        min(
-            page,
-            total_pages - 1
-        )
+        min(page, total_pages - 1)
     )
 
     cache["page"] = page
@@ -1233,9 +1223,7 @@ def show_music_page(
 
     keyboard = InlineKeyboardMarkup()
 
-    for i, track in enumerate(
-        page_results
-    ):
+    for i, track in enumerate(page_results):
 
         index = start + i
 
@@ -1250,10 +1238,7 @@ def show_music_page(
         )
 
         duration = format_duration(
-            track.get(
-                "duration",
-                0
-            )
+            track.get("duration", 0)
         )
 
         text += (
@@ -1278,9 +1263,7 @@ def show_music_page(
         navigation.append(
             InlineKeyboardButton(
                 "⬅️",
-                callback_data=(
-                    f"music_page:{page - 1}"
-                )
+                callback_data=f"music_page:{page - 1}"
             )
         )
 
@@ -1289,17 +1272,12 @@ def show_music_page(
         navigation.append(
             InlineKeyboardButton(
                 "➡️",
-                callback_data=(
-                    f"music_page:{page + 1}"
-                )
+                callback_data=f"music_page:{page + 1}"
             )
         )
 
     if navigation:
-
-        keyboard.row(
-            *navigation
-        )
+        keyboard.row(*navigation)
 
     text += (
         f"Страница {page + 1} "
@@ -1328,10 +1306,7 @@ def show_music_page(
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call:
-        call.data.startswith(
-            "music_"
-        )
+    func=lambda call: call.data.startswith("music_")
 )
 def music_callback(call):
 
@@ -1339,20 +1314,13 @@ def music_callback(call):
 
     try:
 
-        if call.data.startswith(
-            "music_page:"
-        ):
+        if call.data.startswith("music_page:"):
 
             page = int(
-                call.data.split(
-                    ":",
-                    1
-                )[1]
+                call.data.split(":", 1)[1]
             )
 
-            bot.answer_callback_query(
-                call.id
-            )
+            bot.answer_callback_query(call.id)
 
             show_music_page(
                 user_id,
@@ -1363,15 +1331,10 @@ def music_callback(call):
             return
 
         index = int(
-            call.data.split(
-                ":",
-                1
-            )[1]
+            call.data.split(":", 1)[1]
         )
 
-        cache = music_cache.get(
-            user_id
-        )
+        cache = music_cache.get(user_id)
 
         if not cache:
 
@@ -1385,10 +1348,7 @@ def music_callback(call):
 
         results = cache["results"]
 
-        if (
-            index < 0
-            or index >= len(results)
-        ):
+        if index < 0 or index >= len(results):
 
             bot.answer_callback_query(
                 call.id,
@@ -1444,9 +1404,7 @@ def music_callback(call):
                         "Неизвестный источник."
                     )
 
-                size = os.path.getsize(
-                    path
-                )
+                size = os.path.getsize(path)
 
                 if size > 50 * 1024 * 1024:
 
@@ -1460,10 +1418,7 @@ def music_callback(call):
                     message_id=processing.message_id
                 )
 
-                with open(
-                    path,
-                    "rb"
-                ) as audio:
+                with open(path, "rb") as audio:
 
                     bot.send_audio(
                         user_id,
@@ -1527,103 +1482,6 @@ def music_callback(call):
 
 
 # ============================================================
-# FREE TO USE DOWNLOAD
-# ============================================================
-
-def download_free_to_use(
-    track,
-    temp_dir
-):
-
-    raw = track.get(
-        "raw",
-        {}
-    )
-
-    possible = [
-        "download_url",
-        "downloadUrl",
-        "audio_url",
-        "audioUrl",
-        "file_url",
-        "fileUrl",
-        "url"
-    ]
-
-    url = None
-
-    for key in possible:
-
-        value = raw.get(
-            key
-        )
-
-        if (
-            isinstance(value, str)
-            and value.startswith("http")
-        ):
-
-            url = value
-            break
-
-    if not url:
-
-        raise Exception(
-            "Free To Use не предоставил "
-            "ссылку на аудио."
-        )
-
-    title = re.sub(
-        r'[\\/:*?"<>|]+',
-        "_",
-        track.get(
-            "title",
-            "track"
-        )
-    )[:100]
-
-    path = os.path.join(
-        temp_dir,
-        title + ".mp3"
-    )
-
-    response = requests.get(
-        url,
-        stream=True,
-        timeout=30,
-        headers={
-            "User-Agent":
-                "Mozilla/5.0"
-        }
-    )
-
-    response.raise_for_status()
-
-    with open(
-        path,
-        "wb"
-    ) as f:
-
-        for chunk in response.iter_content(
-            1024 * 1024
-        ):
-
-            if chunk:
-                f.write(chunk)
-
-    if (
-        not os.path.isfile(path)
-        or os.path.getsize(path) <= 0
-    ):
-
-        raise Exception(
-            "Free To Use вернул пустой файл."
-        )
-
-    return path
-
-
-# ============================================================
 # AI COMMANDS
 # ============================================================
 
@@ -1638,9 +1496,7 @@ def download_free_to_use(
 )
 def ai_cmd(message):
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     if len(parts) < 2:
 
@@ -1704,154 +1560,13 @@ def ai_cmd(message):
 
 
 # ============================================================
-# IMAGE COMMAND
-# ============================================================
-
-@bot.message_handler(
-    commands=["image"]
-)
-def image_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    prompt = (
-        parts[1].strip()
-        if len(parts) > 1
-        else ""
-    )
-
-    if not prompt:
-
-        bot.reply_to(
-            message,
-            "Пример: /image кот в космосе"
-        )
-
-        return
-
-    if not is_safe_image_prompt(prompt):
-
-        bot.reply_to(
-            message,
-            "Не удалось создать изображение."
-        )
-
-        return
-
-    msg = bot.reply_to(
-        message,
-        "🎨 Генерирую..."
-    )
-
-    image = generate_image(
-        prompt
-    )
-
-    if image:
-
-        bot.send_photo(
-            message.chat.id,
-            image,
-            caption=prompt
-        )
-
-        try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
-        except Exception:
-            pass
-
-    else:
-
-        bot.edit_message_text(
-            "Не удалось создать изображение.",
-            chat_id=message.chat.id,
-            message_id=msg.message_id
-        )
-
-
-# ============================================================
-# IMAGEHACK
-# ============================================================
-
-@bot.message_handler(
-    commands=["imagehack"]
-)
-def imagehack_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    prompt = (
-        parts[1].strip()
-        if len(parts) > 1
-        else ""
-    )
-
-    if not prompt:
-
-        bot.reply_to(
-            message,
-            "Пример: /imagehack футуристический город"
-        )
-
-        return
-
-    msg = bot.reply_to(
-        message,
-        "🎨 Генерирую..."
-    )
-
-    image = generate_image(
-        prompt
-    )
-
-    if image:
-
-        bot.send_photo(
-            message.chat.id,
-            image,
-            caption=prompt
-        )
-
-        try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
-        except Exception:
-            pass
-
-    else:
-
-        bot.edit_message_text(
-            "Не удалось создать изображение.",
-            chat_id=message.chat.id,
-            message_id=msg.message_id
-        )
-
-
-# ============================================================
 # TTS
 # ============================================================
 
-@bot.message_handler(
-    commands=["tts"]
-)
+@bot.message_handler(commands=["tts"])
 def tts_cmd(message):
 
-    parts = message.text.split(
-        maxsplit=1
-    )
+    parts = message.text.split(maxsplit=1)
 
     text = (
         parts[1]
@@ -1873,8 +1588,9 @@ def tts_cmd(message):
         "🔊 Создаю голос..."
     )
 
-    path = tempfile.mktemp(
-        suffix=".mp3"
+    path = os.path.join(
+        tempfile.gettempdir(),
+        f"tts_{message.chat.id}_{message.message_id}.mp3"
     )
 
     try:
@@ -1886,10 +1602,7 @@ def tts_cmd(message):
             )
         )
 
-        with open(
-            path,
-            "rb"
-        ) as audio:
+        with open(path, "rb") as audio:
 
             bot.send_voice(
                 message.chat.id,
@@ -1912,17 +1625,14 @@ def tts_cmd(message):
     finally:
 
         if os.path.exists(path):
-
             os.remove(path)
 
 
 # ============================================================
-# TEXT
+# KIRA EASTER EGG + TEXT
 # ============================================================
 
-@bot.message_handler(
-    content_types=["text"]
-)
+@bot.message_handler(content_types=["text"])
 def handle_text(message):
 
     text = message.text
@@ -1974,9 +1684,7 @@ def handle_text(message):
 # PHOTO
 # ============================================================
 
-@bot.message_handler(
-    content_types=["photo"]
-)
+@bot.message_handler(content_types=["photo"])
 def handle_photo(message):
 
     msg = bot.reply_to(
@@ -1994,9 +1702,7 @@ def handle_photo(message):
             file_info.file_path
         )
 
-        answer = analyze_image_gemini(
-            image
-        )
+        answer = analyze_image_gemini(image)
 
         bot.edit_message_text(
             answer,
@@ -2017,15 +1723,10 @@ def handle_photo(message):
 # PDF
 # ============================================================
 
-@bot.message_handler(
-    content_types=["document"]
-)
+@bot.message_handler(content_types=["document"])
 def handle_document(message):
 
-    if (
-        message.document.mime_type
-        != "application/pdf"
-    ):
+    if message.document.mime_type != "application/pdf":
 
         bot.reply_to(
             message,
@@ -2059,9 +1760,7 @@ def handle_document(message):
             f.write(data)
             path = f.name
 
-        reader = PdfReader(
-            path
-        )
+        reader = PdfReader(path)
 
         text = ""
 
@@ -2072,10 +1771,22 @@ def handle_document(message):
                 or ""
             )
 
+        if not text.strip():
+
+            bot.edit_message_text(
+                "Не удалось извлечь текст из PDF.",
+                chat_id=message.chat.id,
+                message_id=msg.message_id
+            )
+
+            return
+
         answer = ask_ai_with_history(
             message.chat.id,
-            "Сделай краткую выжимку PDF:\n\n"
-            + text[:5000]
+            (
+                "Сделай краткую выжимку PDF:\n\n"
+                + text[:5000]
+            )
         )
 
         bot.edit_message_text(
@@ -2095,7 +1806,6 @@ def handle_document(message):
     finally:
 
         if path and os.path.exists(path):
-
             os.remove(path)
 
 
@@ -2105,37 +1815,25 @@ def handle_document(message):
 
 if __name__ == "__main__":
 
-    print(
-        "===================================="
-    )
-
-    print(
-        "🤖 Бот запускается..."
-    )
-
+    print("====================================")
+    print("🤖 Бот запускается...")
     print(
         "BOT_TOKEN:",
         "OK" if BOT_TOKEN else "НЕТ"
     )
-
     print(
         "GROQ_API_KEY:",
         "OK" if GROQ_API_KEY else "НЕТ"
     )
-
     print(
         "GEMINI_API_KEY:",
         "OK" if GEMINI_API_KEY else "НЕТ"
     )
-
     print(
         "AUDIUS_API_KEY:",
         "OK" if AUDIUS_API_KEY else "НЕТ"
     )
-
-    print(
-        "===================================="
-    )
+    print("====================================")
 
     threading.Thread(
         target=run_web,
@@ -2146,6 +1844,5 @@ if __name__ == "__main__":
         allowed_updates=[
             "message",
             "callback_query"
-        ],
-        skip_pending=True
+        ]
     )
