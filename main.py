@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader
 import edge_tts
 from duckduckgo_search import DDGS
+import yt_dlp
 import g4f
 from g4f.client import Client
 from groq import Groq
@@ -58,19 +59,17 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- КАСКАДНЫЙ ПОИСК МУЗЫКИ ПО РАСШИРЕННОМУ ПУЛУ СЕРВИСОВ ---
+# --- КАРИСКДНЫЙ ПОИСК МУЗЫКИ (PIPED -> INVIDIOUS -> YT-DLP) ---
 
 def search_youtube(query, limit=10):
     tracks = []
     
-    # Расширенный пул инстансов Piped
+    # 1. Пул инстансов Piped
     piped_instances = [
         "https://pipedapi.kavin.rocks",
         "https://api.piped.privacydev.net",
         "https://pipedapi.drgns.space",
-        "https://pipedapi.tokhmi.xyz",
-        "https://pipedapi.in.projectsegfau.lt",
-        "https://pipedapi.adminforge.de"
+        "https://pipedapi.tokhmi.xyz"
     ]
     
     for api_base in piped_instances:
@@ -103,14 +102,12 @@ def search_youtube(query, limit=10):
         except Exception:
             continue
 
-    # Расширенный пул инстансов Invidious (срабатывает каскадом, если Piped не ответил)
+    # 2. Пул инстансов Invidious (если Piped не ответил)
     invidious_instances = [
         "https://iv.ggc-project.de",
         "https://vid.puffyan.us",
         "https://invidious.nerdvpn.de",
-        "https://invidious.privacyredirect.com",
-        "https://invidious.protagon.space",
-        "https://inv.nadeko.net"
+        "https://invidious.privacyredirect.com"
     ]
     
     for api_base in invidious_instances:
@@ -141,6 +138,40 @@ def search_youtube(query, limit=10):
                     return tracks
         except Exception:
             continue
+
+    # 3. Резервный поиск через yt-dlp напрямую
+    try:
+        ydl_opts = {
+            'extract_flat': True,
+            'skip_download': True,
+            'quiet': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            if info and 'entries' in info:
+                for entry in info['entries']:
+                    if not entry:
+                        continue
+                    video_id = entry.get('id')
+                    title = entry.get('title', 'Без названия')
+                    dur = entry.get('duration', 0) or 0
+                    minutes = int(dur) // 60
+                    seconds = int(dur) % 60
+                    
+                    if video_id and not any(t.get("video_id") == video_id for t in tracks):
+                        tracks.append({
+                            "source": "youtube",
+                            "title": title,
+                            "duration": f"{minutes}:{seconds:02d}",
+                            "url": f"https://www.youtube.com/watch?v={video_id}",
+                            "video_id": video_id,
+                            "service_type": "ytdlp",
+                            "api_base": None
+                        })
+                if tracks:
+                    return tracks
+    except Exception:
+        pass
             
     return []
 
@@ -437,6 +468,14 @@ def callback_music(call):
                             if "audio" in fmt.get("type", ""):
                                 audio_url = fmt.get("url")
                                 break
+                except Exception:
+                    pass
+            elif service_type == "ytdlp":
+                try:
+                    ydl_opts = {'format': 'bestaudio', 'quiet': True}
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+                        audio_url = info.get('url')
                 except Exception:
                     pass
 
