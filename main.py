@@ -58,7 +58,7 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- КАСКАДНЫЙ ПОИСК МУЗЫКИ (PIPED -> INVIDIOUS) ---
+# --- УСТОЙЧИВЫЙ ПОИСК МУЗЫКИ (DUCKDUCKGO VIDEO -> PIPED) ---
 
 def search_free_music(query, limit=10):
     url = "https://api.jamendo.com/v3.0/tracks/"
@@ -91,10 +91,42 @@ def search_free_music(query, limit=10):
     return []
 
 def search_youtube(query, limit=10):
+    tracks = []
+    
+    # 1. Поиск через DuckDuckGo Video Search (стабильно работает без блокировок)
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.videos(query, max_results=limit))
+            for item in results:
+                title = item.get("title", "Без названия")
+                url = item.get("url", "") or item.get("content", "")
+                
+                match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', url)
+                if match:
+                    video_id = match.group(1)
+                    dur_str = item.get("duration", "0:00")
+                    
+                    tracks.append({
+                        "source": "youtube",
+                        "title": title,
+                        "duration": dur_str,
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
+                        "video_id": video_id,
+                        "service_type": "piped",
+                        "api_base": "https://pipedapi.kavin.rocks"
+                    })
+                    if len(tracks) >= limit:
+                        break
+    except Exception:
+        pass
+
+    if tracks:
+        return tracks
+
+    # 2. Резервный вариант через Piped API
     piped_instances = [
         "https://pipedapi.kavin.rocks",
-        "https://api.piped.privacydev.net",
-        "https://pipedapi.drgns.space"
+        "https://api.piped.privacydev.net"
     ]
     
     for api_base in piped_instances:
@@ -104,7 +136,6 @@ def search_youtube(query, limit=10):
             if resp.status_code == 200:
                 data = resp.json()
                 items = data.get("items", [])
-                tracks = []
                 for item in items:
                     if item.get("type") == "stream":
                         dur = item.get("duration", 0) or 0
@@ -118,42 +149,6 @@ def search_youtube(query, limit=10):
                             "url": f"https://www.youtube.com/watch?v={video_id}",
                             "video_id": video_id,
                             "service_type": "piped",
-                            "api_base": api_base
-                        })
-                        if len(tracks) >= limit:
-                            break
-                if tracks:
-                    return tracks
-        except Exception:
-            continue
-
-    invidious_instances = [
-        "https://iv.ggc-project.de",
-        "https://vid.puffyan.us",
-        "https://invidious.nerdvpn.de"
-    ]
-    
-    for api_base in invidious_instances:
-        try:
-            url = f"{api_base}/api/v1/search?q={query}&type=video"
-            resp = requests.get(url, timeout=4)
-            if resp.status_code == 200:
-                data = resp.json()
-                tracks = []
-                for item in data:
-                    dur = item.get("lengthSeconds", 0) or 0
-                    minutes = dur // 60
-                    seconds = dur % 60
-                    video_id = item.get("videoId")
-                    
-                    if video_id:
-                        tracks.append({
-                            "source": "youtube",
-                            "title": item.get("title", "Без названия"),
-                            "duration": f"{minutes}:{seconds:02d}",
-                            "url": f"https://www.youtube.com/watch?v={video_id}",
-                            "video_id": video_id,
-                            "service_type": "invidious",
                             "api_base": api_base
                         })
                         if len(tracks) >= limit:
@@ -460,16 +455,6 @@ def callback_music(call):
                         streams = resp.json().get("audioStreams", [])
                         if streams:
                             audio_url = streams[0].get("url")
-                except Exception:
-                    pass
-            elif service_type == "invidious":
-                try:
-                    resp = requests.get(f"{api_base}/api/v1/videos/{video_id}", timeout=10)
-                    if resp.status_code == 200:
-                        for fmt in resp.json().get("adaptiveFormats", []):
-                            if "audio" in fmt.get("type", ""):
-                                audio_url = fmt.get("url")
-                                break
                 except Exception:
                     pass
 
