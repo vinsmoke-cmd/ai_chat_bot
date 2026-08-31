@@ -64,7 +64,6 @@ def clean_markdown(text):
 def search_youtube(query, limit=10):
     tracks = []
     
-    # 1. Пул инстансов Piped
     piped_instances = [
         "https://pipedapi.kavin.rocks",
         "https://api.piped.privacydev.net",
@@ -102,7 +101,6 @@ def search_youtube(query, limit=10):
         except Exception:
             continue
 
-    # 2. Пул инстансов Invidious (если Piped не ответил)
     invidious_instances = [
         "https://iv.ggc-project.de",
         "https://vid.puffyan.us",
@@ -139,12 +137,12 @@ def search_youtube(query, limit=10):
         except Exception:
             continue
 
-    # 3. Резервный поиск через yt-dlp напрямую
     try:
         ydl_opts = {
             'extract_flat': True,
             'skip_download': True,
             'quiet': True,
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
@@ -486,6 +484,7 @@ def callback_music(call):
                         ydl_opts = {
                             'format': 'bestaudio/best',
                             'outtmpl': out_tmpl,
+                            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
                             'postprocessors': [{
                                 'key': 'FFmpegExtractAudio',
                                 'preferredcodec': 'mp3',
