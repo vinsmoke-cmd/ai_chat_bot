@@ -59,40 +59,6 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ИНТЕГРАЦИЯ COBALT TOOLS ---
-
-def download_via_cobalt(url, mode="audio"):
-    cobalt_api_url = "https://api.cobalt.tools/"
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "url": url,
-        "downloadMode": mode,
-        "audioFormat": "mp3",
-        "videoQuality": "1080"
-    }
-
-    response = requests.post(cobalt_api_url, json=payload, headers=headers, timeout=25)  
-    if response.status_code != 200:  
-        raise Exception(f"Cobalt API вернул статус {response.status_code}")  
-          
-    data = response.json()  
-    status = data.get("status")  
-      
-    if status in ["tunnel", "redirect"]:  
-        return data.get("url"), data.get("filename", "audio.mp3")  
-    elif status == "picker":  
-        picker = data.get("picker", [])  
-        if picker:  
-            return picker[0].get("url"), "audio.mp3"  
-    elif status == "error":  
-        error_text = data.get("text", "Ошибка Cobalt")  
-        raise Exception(error_text)  
-          
-    raise Exception("Неизвестный ответ от Cobalt Tools")
-
 # --- ФУНКЦИИ ПОИСКА МУЗЫКИ ---
 
 def search_free_music(query, limit=10):
@@ -128,34 +94,39 @@ def search_free_music(query, limit=10):
     return []
 
 def search_youtube(query, limit=10):
-    """Резервный поиск музыки на YouTube через yt_dlp"""
+    """Быстрый поиск музыки на YouTube через yt_dlp"""
     ydl_opts = {  
         'format': 'bestaudio/best',  
         'noplaylist': True,  
-        'default_search': f'ytsearch{limit}',  
-        'quiet': True,  
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': True,
     }  
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:  
-            info = ydl.extract_info(query, download=False)  
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)  
             results = info.get('entries', [])  
             tracks = []
             for track in results:
                 if not track:
                     continue
-                duration_sec = track.get('duration', 0)  
+                duration_sec = track.get('duration', 0) or 0
                 if duration_sec:  
                     minutes = int(duration_sec // 60)  
                     seconds = int(duration_sec % 60)  
                     duration_str = f"{minutes}:{seconds:02d}"  
                 else:  
-                    duration_str = track.get('duration_string', '0:00')  
+                    duration_str = "N/A"
                 
+                video_url = track.get('url') or track.get('webpage_url')
+                if not video_url and track.get('id'):
+                    video_url = f"https://www.youtube.com/watch?v={track.get('id')}"
+
                 tracks.append({
                     "source": "youtube",
                     "title": track.get('title', 'Без названия'),
                     "duration": duration_str,
-                    "url": track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id')}"
+                    "url": video_url
                 })
             return tracks
     except Exception:
@@ -180,7 +151,7 @@ def ask_ai_with_history(user_id, prompt):
             )  
         else:  
             sys_prompt = (  
-                "Ты полезный, дружеFriendly и веселый ИИ-ассистент. Отвечай строго на том же языке. "  
+                "Ты полезный, дружелюбный и веселый ИИ-ассистент. Отвечай строго на том же языке. "  
                 "Можешь смело использовать любые позитивные эмодзи для поддержания приятной беседы! "  
                 "Категорически запрещено использовать любые символы Markdown, такие как *, _, #."  
             )  
@@ -316,7 +287,6 @@ def help_cmd(message):
         "- /weather <город> - подробная погода\n"
         "- /image <описание> - создать картинку\n"
         "- /music <название трека> - поиск и скачивание трека 🎵\n"
-        "- /cobalt <ссылка> - быстрая загрузка медиа через Cobalt Tools 🚀\n"
         "- /gemini <запрос> - спросить ИИ\n"
         "- /fact [тема] - случайный факт или факт по заданной теме\n"
         "- /code <задача> - работа с кодом\n"
@@ -407,29 +377,6 @@ def search_cmd(message):
     reply = ask_ai_with_history(message.chat.id, prompt)  
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
-@bot.message_handler(commands=['cobalt'])
-def cobalt_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    url = parts[1] if len(parts) > 1 else ""
-    if not url:
-        bot.reply_to(message, "Укажи ссылку после команды. Пример:\n/cobalt https://youtu.be/...")
-        return
-
-    msg = bot.reply_to(message, "🚀 Обрабатываю ссылку через Cobalt Tools...")  
-    try:  
-        file_url, filename = download_via_cobalt(url, mode="audio")  
-        media_bytes = requests.get(file_url, timeout=60).content  
-          
-        media_file = io.BytesIO(media_bytes)  
-        media_file.name = filename if filename else "audio.mp3"  
-          
-        bot.send_audio(message.chat.id, audio=media_file, caption="⚡ Скачано через Cobalt Tools")  
-        bot.delete_message(message.chat.id, msg.message_id)  
-    except Exception as e:  
-        bot.edit_message_text(f"❌ Ошибка Cobalt Tools: {e}", chat_id=message.chat.id, message_id=msg.message_id)
-
-# --- ОБНОВЛЕННАЯ КОМАНДА /MUSIC ---
-
 @bot.message_handler(commands=['music'])
 def music_cmd(message):
     user_id = message.chat.id
@@ -445,17 +392,16 @@ def music_cmd(message):
             bot.reply_to(message, "Пожалуйста, укажи название трека. Пример: /music Phonk")  
         return  
 
-    msg = bot.reply_to(message, "Ищу трек в библиотеке Free To Use Music... 🎧")
+    msg = bot.reply_to(message, "Ищу трек... 🎧")
 
-    # 1. Сначала ищем в сервисе Free to use music
+    # 1. Поиск во Free Music (Jamendo)
     results = search_free_music(query, limit=10)
     
-    # 2. Если ничего не нашли, переходим на YouTube
+    # 2. Если не найдено — ищем на YouTube
     if not results:
-        bot.edit_message_text("В Free To Use Music ничего не найдено. Ищу на YouTube... 🔎", chat_id=user_id, message_id=msg.message_id)
         results = search_youtube(query, limit=10)
 
-    # 3. Если ничего не найдено в обоих сервисах
+    # 3. Если нигде не найдено
     if not results:
         bot.edit_message_text("Не удалось найти, попробуйте позже", chat_id=user_id, message_id=msg.message_id)
         return
@@ -468,11 +414,10 @@ def music_cmd(message):
 
     for i, track in enumerate(results, 1):  
         title = track.get('title', 'Без названия')  
-        duration = track.get('duration', '0:00')  
+        duration = track.get('duration', 'N/A')  
         text_result += f"{i}. {title} - {duration}\n"  
         buttons.append(InlineKeyboardButton(f"Скачать {i}", callback_data=f"music_{i-1}"))
 
-    # Группируем кнопки по 2 в ряд
     for k in range(0, len(buttons), 2):
         keyboard.row(*buttons[k:k+2])
 
@@ -542,7 +487,7 @@ def callback_music(call):
                 file_path = os.path.join(temp_dir, files[0])  
                   
                 if os.path.getsize(file_path) > 50 * 1024 * 1024:  
-                    bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ), Telegram не может его отправить.", chat_id=user_id, message_id=processing_msg.message_id)  
+                    bot.edit_message_text("❌ Трек слишком большой (больше 50 МБ).", chat_id=user_id, message_id=processing_msg.message_id)  
                     return  
 
                 with open(file_path, 'rb') as audio:  
@@ -626,7 +571,7 @@ def handle_text(message):
     text_lower = text.lower()
 
     if "кира" in text_lower and "на самом" in text_lower:  
-        bot.reply_to(message, "Она самая любимая, самая лучшая, самая добрая, самая красивая, самая милая, самая нежная, самая заботливая, самая прекрасная, самая родная, самая дорогая, самая искренняя, самая душевная, самая очаровательная, самая замечательная, самая невероятная, самая особенная, самая чудесная, самая ласковая, самая понимающая, самая веселая, самая позитивная, самая уютная, самая драгоценная, самая бесценная, самая неповторимая, самая удивительная и просто самая-самая ❤️")  
+        bot.reply_to(message, "Она самая любимая, самая лучшая, самая добрая, самая красивая, самая милая, самая нежная, самая заботливая, самая прекрасная, самая родная, самая дорога, самая искренняя, самая душевная, самая очаровательная, самая замечательная, самая невероятная, самая особенная, самая чудесная, самая ласковая, самая понимающая, самая веселая, самая позитивная, самая уютная, самая драгоценная, самая бесценная, самая неповторимая, самая удивительная и просто самая-самая ❤️")  
         return  
 
     if "http://" in text or "https://" in text:  
