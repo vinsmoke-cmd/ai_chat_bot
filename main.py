@@ -59,7 +59,7 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ПОИСК МУЗЫКИ ---
+# --- УЛУЧШЕННЫЙ ПОИСК МУЗЫКИ (YOUTUBE + SOUNDCLOUD РЕЗЕРВ) ---
 
 def search_youtube(query, limit=10):
     tracks = []
@@ -141,7 +141,7 @@ def search_youtube(query, limit=10):
             'extract_flat': True,
             'skip_download': True,
             'quiet': True,
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+            'extractor_args': {'youtube': {'player_client': ['ios', 'tv_embedded', 'web']}},
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
@@ -170,6 +170,40 @@ def search_youtube(query, limit=10):
     except Exception:
         pass
             
+    # Альтернативный источник (SoundCloud) через yt-dlp, если YouTube полностью недоступен
+    try:
+        ydl_opts = {
+            'extract_flat': True,
+            'skip_download': True,
+            'quiet': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"scsearch{limit}:{query}", download=False)
+            if info and 'entries' in info:
+                for entry in info['entries']:
+                    if not entry:
+                        continue
+                    sc_url = entry.get('url')
+                    title = entry.get('title', 'Без названия (SoundCloud)')
+                    dur = entry.get('duration', 0) or 0
+                    minutes = int(dur) // 60
+                    seconds = int(dur) % 60
+                    
+                    if sc_url:
+                        tracks.append({
+                            "source": "soundcloud",
+                            "title": title,
+                            "duration": f"{minutes}:{seconds:02d}",
+                            "url": sc_url,
+                            "video_id": None,
+                            "service_type": "soundcloud",
+                            "api_base": None
+                        })
+                if tracks:
+                    return tracks
+    except Exception:
+        pass
+
     return []
 
 def ask_ai_with_history(user_id, prompt):
@@ -355,7 +389,6 @@ def weather_cmd(message):
         bot.reply_to(message, "Укажи город. Пример: /weather Москва")
         return
     try:
-        # Добавлен параметр ?m для принудительного использования Цельсия
         resp = requests.get(
             f"https://wttr.in/{city}", 
             params={'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h', 'lang': 'ru', 'm': ''}, 
@@ -376,14 +409,16 @@ def search_cmd(message):
         bot.reply_to(message, "Напиши запрос. Пример: /search новости")
         return
     msg = bot.reply_to(message, f"Ищу: {query}")  
-    data = perform_web_search(query)  
+    raw_data = perform_web_search(query)  
     
-    # Возвращаем прямой и точный ответ без «аналитики» и лишней вводной части
-    if data and not data.startswith("Не удалось"):
-        reply = f"Результаты по запросу *{query}*:\n\n{data}"
-    else:
-        reply = ask_ai_with_history(message.chat.id, f"Ответь на основе данных:\n\n{data[:1000]}")
-        
+    prompt = (
+        f"Вот результаты поиска из интернета по запросу '{query}':\n{raw_data}\n\n"
+        "Сделай краткую, понятную выжимку на русском языке строго по делу. "
+        "Не пиши фразы вроде 'на основе предоставленных данных', 'по вашему запросу выявлено' и т.д. "
+        "Просто ответь на вопрос или дай суть."
+    )
+    
+    reply = ask_ai_with_history(message.chat.id, prompt)
     bot.edit_message_text(clean_markdown(reply), chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['music'])
@@ -450,6 +485,7 @@ def callback_music(call):
         track = results[index]
         title = track.get('title', 'Трек')
         source = track.get('source')
+        url = track.get('url')
         video_id = track.get('video_id')
         service_type = track.get('service_type')
         api_base = track.get('api_base')
@@ -459,7 +495,32 @@ def callback_music(call):
 
         audio_data = None
 
-        if source == "youtube":
+        if source == "soundcloud":
+            try:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
+                    ydl_opts = {
+                        'format': 'bestaudio/best',
+                        'outtmpl': out_tmpl,
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '192',
+                        }],
+                        'quiet': True,
+                    }
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                    
+                    for file in os.listdir(temp_dir):
+                        if file.endswith('.mp3'):
+                            with open(os.path.join(temp_dir, file), 'rb') as f:
+                                audio_data = f.read()
+                            break
+            except Exception as e:
+                print(f"SoundCloud download error: {e}")
+
+        elif source == "youtube":
             audio_url = None
             if service_type == "piped" and api_base:
                 try:
@@ -494,7 +555,11 @@ def callback_music(call):
                         ydl_opts = {
                             'format': 'bestaudio/best',
                             'outtmpl': out_tmpl,
-                            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                            'extractor_args': {
+                                'youtube': {
+                                    'player_client': ['ios', 'tv_embedded', 'web']
+                                }
+                            },
                             'postprocessors': [{
                                 'key': 'FFmpegExtractAudio',
                                 'preferredcodec': 'mp3',
