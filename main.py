@@ -210,7 +210,7 @@ def music_search_web(query, page=0):
         f'"{query}" mp3',
         f'"{query}" free music',
         f'"{query}" creative commons',
-        f'"{query}" public domain"
+        f'"{query}" public domain'
     ]
 
     results_all = []
