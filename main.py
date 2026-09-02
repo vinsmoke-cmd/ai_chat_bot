@@ -69,13 +69,13 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ПОИСК С БЕСКОНЕЧНЫМИ ПОПЫТКАМИ ---
+# --- ПОИСК С БЫСТРЫМИ ПОПЫТКАМИ ---
 
 def search_youtube_with_cookies(query, limit=5):
     tracks = []
     attempt = 1
     
-    while not tracks:
+    while not tracks and attempt <= 10:
         print(f"🔍 Попытка поиска №{attempt} для запроса: {query}")
         search_query = f"{query} site:youtube.com/watch"
         try:
@@ -105,7 +105,7 @@ def search_youtube_with_cookies(query, limit=5):
             break
             
         attempt += 1
-        time.sleep(2)
+        time.sleep(0.5)
         
     return tracks
 
@@ -334,7 +334,7 @@ def music_cmd(message):
         bot.reply_to(message, "Укажи название трека, строчку из него или транслит.\nПример: `/music айм блу да ба ди`", parse_mode="Markdown")  
         return  
 
-    msg = bot.reply_to(message, "🧠 Анализирую текст и запускаю поиск (буду пробовать до победного)... 🎧")
+    msg = bot.reply_to(message, "🧠 Анализирую текст и запускаю быстрый поиск... 🎧")
 
     ai_prompt = (
         f"Пользователь ищет песню по следующему запросу: '{raw_query}'. "
@@ -392,7 +392,7 @@ def callback_music(call):
         url = track.get('url')
 
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Пробую скачать (авто-повтор при сбоях)...")
+        processing_msg = bot.send_message(user_id, "⏳ Быстрая загрузка (высокая частота попыток)...")
 
         audio_data = None
         download_attempts = 0
@@ -437,7 +437,7 @@ def callback_music(call):
                             break
             except Exception as e:
                 print(f"⚠️ Ошибка скачивания (попытка {download_attempts}/{max_download_attempts}): {e}")
-                time.sleep(3)
+                time.sleep(0.5)
 
         if audio_data:
             audio_file = io.BytesIO(audio_data)
@@ -446,7 +446,7 @@ def callback_music(call):
             bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
             return
 
-        bot.edit_message_text("❌ Не удалось скачать трек после нескольких попыток защиты YouTube. Попробуйте выбрать другой вариант из списка.", chat_id=user_id, message_id=processing_msg.message_id)
+        bot.edit_message_text("❌ Не удалось скачать трек после быстрых попыток обхода защиты YouTube.", chat_id=user_id, message_id=processing_msg.message_id)
 
     except Exception as e:  
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
