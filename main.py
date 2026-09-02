@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import time
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import requests
@@ -68,36 +69,45 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ГИБРИДНЫЙ ПОИСК МУЗЫКИ ЧЕРЕЗ WEBSEARCH С ИСПРАВЛЕННЫМИ КЛЮЧАМИ ---
+# --- ПОИСК С БЕСКОНЕЧНЫМИ ПОПЫТКАМИ ---
 
 def search_youtube_with_cookies(query, limit=5):
     tracks = []
-    print(f"🔍 Ищем через веб-поиск ссылку на YouTube для: {query}")
+    attempt = 1
     
-    search_query = f"{query} site:youtube.com/watch"
-    try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(search_query, max_results=limit))
-            for res in results:
-                href = res.get('href') or res.get('link') or res.get('url', '')
-                title = res.get('title', 'Без названия')
-                
-                match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', href)
-                if match:
-                    video_id = match.group(1)
-                    url = f"https://www.youtube.com/watch?v={video_id}"
+    # Бот будет циклично пытаться найти трек, пока список не заполнится
+    while not tracks:
+        print(f"🔍 Попытка поиска №{attempt} для запроса: {query}")
+        search_query = f"{query} site:youtube.com/watch"
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(search_query, max_results=limit))
+                for res in results:
+                    href = res.get('href') or res.get('link') or res.get('url', '')
+                    title = res.get('title', 'Без названия')
                     
-                    if not any(t.get("video_id") == video_id for t in tracks):
-                        tracks.append({
-                            "title": title.replace(" - YouTube", ""),
-                            "duration": "--:--",
-                            "url": url,
-                            "video_id": video_id
-                        })
-    except Exception as e:
-        print(f"❌ Ошибка веб-поиска: {e}")
+                    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', href)
+                    if match:
+                        video_id = match.group(1)
+                        url = f"https://www.youtube.com/watch?v={video_id}"
+                        
+                        if not any(t.get("video_id") == video_id for t in tracks):
+                            tracks.append({
+                                "title": title.replace(" - YouTube", ""),
+                                "duration": "--:--",
+                                "url": url,
+                                "video_id": video_id
+                            })
+        except Exception as e:
+            print(f"❌ Ошибка веб-поиска (попытка {attempt}): {e}")
 
-    print(f"✅ Найдено треков через обходной поиск: {len(tracks)}")
+        if tracks:
+            print(f"✅ Успешно найдено треков: {len(tracks)}")
+            break
+            
+        attempt += 1
+        time.sleep(2) # Пауза перед следующей попыткой поиска
+        
     return tracks
 
 def ask_ai_with_history(user_id, prompt):
@@ -325,7 +335,7 @@ def music_cmd(message):
         bot.reply_to(message, "Укажи название трека, строчку из него или транслит.\nПример: `/music айм блу да ба ди`", parse_mode="Markdown")  
         return  
 
-    msg = bot.reply_to(message, "🧠 Анализирую текст и ищу трек... 🎧")
+    msg = bot.reply_to(message, "🧠 Анализирую текст и запускаю поиск (буду пробовать до победного)... 🎧")
 
     ai_prompt = (
         f"Пользователь ищет песню по следующему запросу: '{raw_query}'. "
@@ -383,36 +393,48 @@ def callback_music(call):
         url = track.get('url')
 
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Конвертирую аудиопоток...")
+        processing_msg = bot.send_message(user_id, "⏳ Пробую скачать (авто-повтор при сбоях)...")
 
         audio_data = None
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
-            ydl_opts = {
-                'format': 'ba/b',
-                'outtmpl': out_tmpl,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'quiet': True,
-                'no_warnings': True,
-                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-            }
-            
-            if os.path.exists("cookies.txt"):
-                ydl_opts['cookiefile'] = "cookies.txt"
+        download_attempts = 0
+        max_download_attempts = 10  # До 10 попыток скачивания с авто-переподключением
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            
-            for file in os.listdir(temp_dir):
-                if file.endswith('.mp3'):
-                    with open(os.path.join(temp_dir, file), 'rb') as f:
-                        audio_data = f.read()
-                    break
+        while download_attempts < max_download_attempts and not audio_data:
+            download_attempts += 1
+            try:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
+                    
+                    # Чередуем форматы и настройки при разных попытках обхода защиты
+                    formats_to_try = ['best', 'ba/b', 'bestaudio']
+                    chosen_format = formats_to_try[(download_attempts - 1) % len(formats_to_try)]
+                    
+                    ydl_opts = {
+                        'format': chosen_format,
+                        'outtmpl': out_tmpl,
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '192',
+                        }],
+                        'quiet': True,
+                        'no_warnings': True,
+                    }
+                    
+                    if os.path.exists("cookies.txt"):
+                        ydl_opts['cookiefile'] = "cookies.txt"
+
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
+                    
+                    for file in os.listdir(temp_dir):
+                        if file.endswith('.mp3'):
+                            with open(os.path.join(temp_dir, file), 'rb') as f:
+                                audio_data = f.read()
+                            break
+            except Exception as e:
+                print(f"⚠️ Ошибка скачивания (попытка {download_attempts}/{max_download_attempts}): {e}")
+                time.sleep(3) # Пауза перед следующей попыткой скачать
 
         if audio_data:
             audio_file = io.BytesIO(audio_data)
@@ -421,7 +443,7 @@ def callback_music(call):
             bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
             return
 
-        bot.edit_message_text("❌ Не удалось получить файл. Попробуйте другой вариант.", chat_id=user_id, message_id=processing_msg.message_id)
+        bot.edit_message_text("❌ Не удалось скачать трек после нескольких попыток защиты YouTube. Попробуйте выбрать другой вариант из списка.", chat_id=user_id, message_id=processing_msg.message_id)
 
     except Exception as e:  
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
