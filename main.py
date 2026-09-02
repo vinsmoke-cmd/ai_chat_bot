@@ -69,7 +69,7 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ПОИСК С БЫСТРЫМИ ПОПЫТКАМИ ---
+# --- ПОИСК МУЗЫКИ С ПРИНУДИТЕЛЬНЫМ УТОЧНЕНИЕМ SONG ---
 
 def search_youtube_with_cookies(query, limit=5):
     tracks = []
@@ -77,7 +77,7 @@ def search_youtube_with_cookies(query, limit=5):
     
     while not tracks and attempt <= 10:
         print(f"🔍 Попытка поиска №{attempt} для запроса: {query}")
-        search_query = f"{query} site:youtube.com/watch"
+        search_query = f"{query} song site:youtube.com/watch"
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(search_query, max_results=limit))
@@ -337,8 +337,7 @@ def music_cmd(message):
     msg = bot.reply_to(message, "🧠 Анализирую текст и запускаю быстрый поиск... 🎧")
 
     ai_prompt = (
-        f"Пользователь ищет песню по следующему запросу: '{raw_query}'. "
-        f"Это может быть отрывок текста (строчка из песни), русский транслит или название. "
+        f"Пользователь ищет музыкальную песню по запросу: '{raw_query}'. "
         f"Определи точное название песни и исполнителя. Выведи ТОЛЬКО в формате: 'Исполнитель - Название трека'. "
         f"Без кавычек, пояснений и лишних слов."
     )
