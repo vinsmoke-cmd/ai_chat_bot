@@ -68,7 +68,7 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ГИБРИДНЫЙ ПОИСК МУЗЫКИ ЧЕРЕЗ WEBSEARCH И ОБХОД БЛОКИРОВОК ---
+# --- ГИБРИДНЫЙ ПОИСК МУЗЫКИ ЧЕРЕЗ WEBSEARCH С ИСПРАВЛЕННЫМИ КЛЮЧАМИ ---
 
 def search_youtube_with_cookies(query, limit=5):
     tracks = []
@@ -79,7 +79,7 @@ def search_youtube_with_cookies(query, limit=5):
         with DDGS() as ddgs:
             results = list(ddgs.text(search_query, max_results=limit))
             for res in results:
-                href = res.get('href', '')
+                href = res.get('href') or res.get('link') or res.get('url', '')
                 title = res.get('title', 'Без названия')
                 
                 match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', href)
