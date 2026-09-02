@@ -13,7 +13,6 @@ from flask import Flask
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 import edge_tts
-from duckduckgo_search import DDGS
 import yt_dlp
 import g4f
 from g4f.client import Client
@@ -27,7 +26,6 @@ COOKIES_PATH = "cookies.txt"
 if os.path.exists(COOKIES_PATH):
     print(f"✅ Найден локальный файл {COOKIES_PATH} в директории проекта!")
 else:
-    # Запасной вариант: если файла нет, проверяем переменную окружения
     COOKIES_DATA = os.getenv("YOUTUBE_COOKIES")
     if COOKIES_DATA:
         with open(COOKIES_PATH, "w", encoding="utf-8") as f:
@@ -74,42 +72,38 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
+# --- ПРЯМОЙ ПОИСК ПЕСЕН ЧЕРЕЗ YT-DLP ---
+
 def search_youtube_with_cookies(query, limit=5):
     tracks = []
-    attempt = 1
+    search_query = f"ytsearch{limit}:{query} song"
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': True,
+    }
     
-    while not tracks and attempt <= 10:
-        print(f"🔍 Попытка поиска №{attempt} для запроса: {query}")
-        search_query = f"{query} song site:youtube.com/watch"
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(search_query, max_results=limit))
-                for res in results:
-                    href = res.get('href') or res.get('link') or res.get('url', '')
-                    title = res.get('title', 'Без названия')
-                    
-                    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', href)
-                    if match:
-                        video_id = match.group(1)
-                        url = f"https://www.youtube.com/watch?v={video_id}"
-                        
-                        if not any(t.get("video_id") == video_id for t in tracks):
-                            tracks.append({
-                                "title": title.replace(" - YouTube", ""),
-                                "duration": "--:--",
-                                "url": url,
-                                "video_id": video_id
-                            })
-        except Exception as e:
-            print(f"❌ Ошибка веб-поиска (попытка {attempt}): {e}")
+    if os.path.exists(COOKIES_PATH):
+        ydl_opts['cookiefile'] = COOKIES_PATH
 
-        if tracks:
-            print(f"✅ Успешно найдено треков: {len(tracks)}")
-            break
-            
-        attempt += 1
-        time.sleep(0.5)
-        
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(search_query, download=False)
+            if 'entries' in info:
+                for entry in info['entries']:
+                    if entry:
+                        video_id = entry.get('id')
+                        title = entry.get('title', 'Без названия')
+                        url = f"https://www.youtube.com/watch?v={video_id}"
+                        tracks.append({
+                            "title": title,
+                            "duration": "--:--",
+                            "url": url,
+                            "video_id": video_id
+                        })
+    except Exception as e:
+        print(f"❌ Ошибка поиска через yt_dlp: {e}")
+
     return tracks
 
 def ask_ai_with_history(user_id, prompt):
@@ -199,6 +193,7 @@ def perform_web_search(query):
 
     if not results_text:  
         try:  
+            from duckduckgo_search import DDGS
             with DDGS() as ddgs:  
                 results = list(ddgs.text(query, max_results=3))  
                 for res in results:  
@@ -337,7 +332,7 @@ def music_cmd(message):
         bot.reply_to(message, "Укажи название трека, строчку из него или транслит.\nПример: `/music айм блу да ба ди`", parse_mode="Markdown")  
         return  
 
-    msg = bot.reply_to(message, "🧠 Анализирую текст и запускаю быстрый поиск... 🎧")
+    msg = bot.reply_to(message, "🧠 Анализирую текст и запускаю поиск музыки... 🎧")
 
     ai_prompt = (
         f"Пользователь ищет музыкальную песню по запросу: '{raw_query}'. "
@@ -394,7 +389,7 @@ def callback_music(call):
         url = track.get('url')
 
         bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
-        processing_msg = bot.send_message(user_id, "⏳ Быстрая загрузка (высокая частота попыток)...")
+        processing_msg = bot.send_message(user_id, "⏳ Загружаю аудиофайл...")
 
         audio_data = None
         download_attempts = 0
@@ -426,8 +421,8 @@ def callback_music(call):
                         'no_warnings': True,
                     }
                     
-                    if os.path.exists("cookies.txt"):
-                        ydl_opts['cookiefile'] = "cookies.txt"
+                    if os.path.exists(COOKIES_PATH):
+                        ydl_opts['cookiefile'] = COOKIES_PATH
 
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([url])
@@ -448,7 +443,7 @@ def callback_music(call):
             bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
             return
 
-        bot.edit_message_text("❌ Не удалось скачать трек после быстрых попыток обхода защиты YouTube.", chat_id=user_id, message_id=processing_msg.message_id)
+        bot.edit_message_text("❌ Не удалось скачать трек.", chat_id=user_id, message_id=processing_msg.message_id)
 
     except Exception as e:  
         bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
