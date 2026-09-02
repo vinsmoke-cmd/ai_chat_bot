@@ -231,7 +231,6 @@ def music_soundalike_transliterate(value):
     if full_result:
         results.append(full_result)
 
-    # Варианты с заменой каждого отдельного слова
     for i, token in enumerate(tokens):
         replacement = SOUNDALIKE_WORDS.get(token)
         if replacement:
@@ -241,12 +240,10 @@ def music_soundalike_transliterate(value):
             if result not in results:
                 results.append(result)
 
-    # Обычная транслитерация
     transliterated = music_transliterate(value)
     if transliterated:
         results.append(transliterated)
 
-    # Уникальные варианты
     unique = []
     for result in results:
         result = music_normalize(result)
@@ -297,25 +294,18 @@ def music_query_variants(query):
         if value and value not in variants:
             variants.append(value)
 
-    # Оригинал
     add(query)
-    # Нормализованный вариант
     add(music_normalize(query))
-    # Без пунктуации
     add(re.sub(r"[^\w\s-]", " ", query, flags=re.UNICODE))
-    # Перевод на английский
     translated = music_translate_query(query)
     if translated:
         add(translated)
-    # Транслитерация
     transliterated = music_transliterate(query)
     if transliterated:
         add(transliterated)
-    # Запись "на слух"
     for result in music_soundalike_transliterate(query):
         add(result)
 
-    # Ограничиваем количество запросов
     return variants[:12]
 
 
@@ -471,15 +461,10 @@ def music_similarity(query, candidate):
     return min(1.0, score)
 
 
-# ============================================================
-# ЛУЧШЕЕ СОВПАДЕНИЕ С УЧЁТОМ ВСЕХ ВАРИАНТОВ
-# ============================================================
-
 def music_best_similarity(query, title):
     variants = music_query_variants(query)
     title_variants = [title]
     
-    # Убираем содержимое скобок: Remix, Radio Edit, Live и т.п.
     simplified = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", title)
     title_variants.append(simplified)
 
@@ -497,7 +482,7 @@ def music_best_similarity(query, title):
 
 
 # ============================================================
-# ГЛАВНЫЙ ПОИСК
+# ГЛАВНЫЙ ПОИСК (ИСПРАВЛЕННЫЙ ПОРОГ)
 # ============================================================
 
 def music_search_web(query, page=0):
@@ -512,7 +497,6 @@ def music_search_web(query, page=0):
     candidates = []
     seen = set()
 
-    # Ищем каждый вариант отдельно
     for variant in variants:
         items = _mp3party_search_page(variant)
         for item in items:
@@ -521,7 +505,6 @@ def music_search_web(query, page=0):
             seen.add(item["url"])
             candidates.append(item)
 
-    # Если обычный поиск ничего не дал
     if not candidates:
         fallback = _mp3party_fallback_from_home(query)
         for item in fallback:
@@ -531,15 +514,12 @@ def music_search_web(query, page=0):
             candidates.append(item)
 
     scored = []
-    normalized_query = music_normalize(query)
-    long_query = len(normalized_query) >= 5 or len(normalized_query.split()) >= 2
-
     for item in candidates:
         title = item.get("title", "")
         score, matched_variant = music_best_similarity(query, title)
-        min_score = 0.36 if long_query else 0.56
         
-        if score < min_score:
+        # Смягченный порог для смешанных запросов
+        if score < 0.15:
             continue
 
         scored.append({
@@ -549,7 +529,6 @@ def music_search_web(query, page=0):
             "matched_variant": matched_variant,
         })
 
-    # Сначала наиболее похожие
     scored.sort(
         key=lambda item: (item["score"], len(music_normalize(item["title"]))),
         reverse=True
@@ -629,18 +608,15 @@ def music_cmd(message):
         bot.reply_to(
             message,
             "🎵 Напиши исполнителя, название или строчку из песни.\n\n"
-            "Я понимаю английские слова «на слух».\n\n"
             "Примеры:\n"
-            "/music never gonna give you up\n"
-            "/music невер гонна гив ю ап\n"
-            "/music белив ин юрсэлф"
+            "/music Tanin Jazz Виртуальная любовь\n"
+            "/music never gonna give you up"
         )
         return
 
     msg = bot.reply_to(
         message,
-        "🔎 Ищу на MP3Party...\n"
-        "🧠 Понимаю перевод, транслитерацию и запись «на слух»..."
+        "🔎 Ищу на MP3Party..."
     )
 
     try:
@@ -648,10 +624,7 @@ def music_cmd(message):
         if not tracks:
             bot.edit_message_text(
                 "❌ На MP3Party ничего подходящего не найдено.\n\n"
-                "Попробуй:\n"
-                "• добавить исполнителя;\n"
-                "• написать больше слов;\n"
-                "• попробовать английское написание.",
+                "Попробуй изменить поисковый запрос.",
                 chat_id=user_id,
                 message_id=msg.message_id
             )
@@ -677,10 +650,6 @@ def music_cmd(message):
         except Exception:
             pass
 
-
-# ============================================================
-# ПЕРЕКЛЮЧЕНИЕ СТРАНИЦ
-# ============================================================
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("music_page:"))
 def callback_music_page(call):
@@ -725,10 +694,6 @@ def callback_music_page(call):
         except Exception:
             pass
 
-
-# ============================================================
-# ОТКРЫТИЕ ТРЕКА
-# ============================================================
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("music_get:"))
 def callback_music_get(call):
