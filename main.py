@@ -62,1205 +62,338 @@ def clean_markdown(text):
 
 # ============================================================
 # МУЗЫКА
-# Поиск через интернет
-# 10 результатов + ◀️ ▶️
-# Проверка аудио и разрешения на распространение
-# только после выбора результата
+# Поиск только на Sefon: sefon.pro
+# Многоступенчатый поиск + fuzzy matching + опечатки
 # ============================================================
 
-MUSIC_PER_PAGE = 10
+from difflib import SequenceMatcher
+from urllib.parse import urljoin, urlparse, quote_plus
+
+MUSIC_SITE = "https://sefon.pro"
+MUSIC_START_URL = f"{MUSIC_SITE}/best/"
+MUSIC_PER_PAGE = 8
+MUSIC_MAX_RESULTS = 40
+MUSIC_MAX_SCAN_PAGES = 8
 music_searches = {}
 
-AUDIO_EXTENSIONS = (
-    ".mp3",
-    ".ogg",
-    ".wav",
-    ".m4a",
-    ".flac",
-    ".opus"
-)
-
+AUDIO_EXTENSIONS = (".mp3", ".ogg", ".wav", ".m4a", ".flac", ".opus", ".aac", ".webm")
 MAX_AUDIO_SIZE = 50 * 1024 * 1024
-
-FREE_LICENSE_PHRASES = (
-    "creative commons",
-    "creativecommons",
-    "cc0",
-    "public domain",
-    "public-domain",
-    "free to use",
-    "free music",
-    "free download",
-    "royalty free",
-    "royalty-free",
-    "copyright free",
-    "copyright-free",
-    "free license",
-    "free licence",
-    "open license",
-    "open licence"
-)
+MUSIC_HEADERS = {"User-Agent": "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36", "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"}
 
 
-def page_allows_download(url):
-    """
-    Проверяет страницу на признаки свободной лицензии.
+def music_normalize(text):
+    text = str(text or "").lower().replace("ё", "е")
+    text = re.sub(r"[^a-zа-я0-9]+", " ", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
 
-    Поиск НЕ фильтруется по лицензии.
-    Проверка выполняется только после выбора
-    конкретного результата.
-    """
 
+def music_similarity(query, candidate):
+    q, c = music_normalize(query), music_normalize(candidate)
+    if not q or not c:
+        return 0.0
+    if q == c:
+        return 1.0
+    if q in c:
+        return 0.95
+    q_tokens, c_tokens = q.split(), c.split()
+    base = SequenceMatcher(None, q, c).ratio()
+    token_scores = []
+    for qt in q_tokens:
+        token_scores.append(max(SequenceMatcher(None, qt, ct).ratio() for ct in c_tokens))
+    token_score = sum(token_scores) / len(token_scores) if token_scores else 0.0
+    overlap = len(set(q_tokens) & set(c_tokens)) / max(1, len(set(q_tokens)))
+    return min(1.0, base * 0.35 + token_score * 0.45 + overlap * 0.20)
+
+
+def _same_music_site(url):
     try:
-        response = requests.get(
-            url,
-            timeout=20,
-            headers={
-                "User-Agent":
-                    "Mozilla/5.0 "
-                    "(Linux; Android 15) "
-                    "AppleWebKit/537.36 "
-                    "Chrome/140 Mobile Safari/537.36"
-            },
-            allow_redirects=True
-        )
-
-        if response.status_code >= 400:
-            response.close()
-            return False
-
-        content_type = (
-            response.headers.get(
-                "Content-Type",
-                ""
-            ).lower()
-        )
-
-        if (
-            "text/html" not in content_type
-            and "application/xhtml" not in content_type
-        ):
-            response.close()
-            return False
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        text = soup.get_text(
-            " ",
-            strip=True
-        ).lower()
-
-        # Проверяем текст страницы
-        for phrase in FREE_LICENSE_PHRASES:
-            if phrase in text:
-                response.close()
-                return True
-
-        # Проверяем meta-информацию
-        for meta in soup.find_all("meta"):
-            values = []
-
-            for attr in (
-                "content",
-                "property",
-                "name"
-            ):
-                value = meta.get(attr)
-
-                if value:
-                    values.append(
-                        str(value).lower()
-                    )
-
-            combined = " ".join(values)
-
-            for phrase in FREE_LICENSE_PHRASES:
-                if phrase in combined:
-                    response.close()
-                    return True
-
-        response.close()
-
-    except Exception as e:
-        print(
-            "[MUSIC LICENSE CHECK ERROR]",
-            repr(e)
-        )
-
-    return False
+        return urlparse(url).netloc.lower().split(":")[0] in {"sefon.pro", "www.sefon.pro"}
+    except Exception:
+        return False
 
 
-def music_search_web(query, page=0):
-    """
-    Ищет музыкальные страницы через DuckDuckGo.
-
-    Здесь НЕ проверяется наличие MP3 и лицензии.
-    Сначала пользователь получает результаты.
-    Реальная проверка выполняется после выбора.
-    """
-
-    queries = [
-        f'"{query}" song',
-        f'"{query}" music',
-        f'"{query}" audio',
-        f'"{query}" track',
-        f'"{query}" mp3',
-        f'"{query}" free music',
-        f'"{query}" creative commons',
-        f'"{query}" public domain'
-    ]
-
-    results_all = []
-    seen = set()
-
-    try:
-        with DDGS() as ddgs:
-
-            for search_query in queries:
-
-                try:
-                    results = ddgs.text(
-                        search_query,
-                        region="wt-wt",
-                        safesearch="moderate",
-                        max_results=20
-                    )
-
-                    for item in results:
-
-                        title = item.get(
-                            "title"
-                        )
-
-                        url = item.get(
-                            "href"
-                        )
-
-                        description = item.get(
-                            "body",
-                            ""
-                        )
-
-                        if not title or not url:
-                            continue
-
-                        if url in seen:
-                            continue
-
-                        lower_url = url.lower()
-
-                        bad_domains = (
-                            "google.com",
-                            "facebook.com",
-                            "instagram.com",
-                            "twitter.com",
-                            "x.com",
-                            "wikipedia.org",
-                            "pinterest.com"
-                        )
-
-                        if any(
-                            domain in lower_url
-                            for domain in bad_domains
-                        ):
-                            continue
-
-                        seen.add(url)
-
-                        results_all.append({
-                            "title": str(title),
-                            "url": str(url),
-                            "description": str(
-                                description or ""
-                            )
-                        })
-
-                        if len(results_all) >= 100:
-                            break
-
-                except Exception as e:
-                    print(
-                        "[MUSIC SEARCH PART ERROR]",
-                        repr(e)
-                    )
-
-                if len(results_all) >= 100:
-                    break
-
-    except Exception as e:
-        print(
-            "[MUSIC SEARCH ERROR]",
-            repr(e)
-        )
-
-    start = page * MUSIC_PER_PAGE
-    end = start + MUSIC_PER_PAGE
-
-    return (
-        results_all[start:end],
-        len(results_all)
-    )
+def _looks_like_audio_url(url):
+    return bool(url) and any(ext in str(url).lower() for ext in AUDIO_EXTENSIONS)
 
 
 def check_audio_url(url):
-    """
-    Проверяет, что URL действительно
-    отдаёт аудиофайл.
-    """
-
     if not url:
         return False
-
     try:
-        response = requests.get(
-            url,
-            stream=True,
-            timeout=15,
-            headers={
-                "User-Agent":
-                    "Mozilla/5.0"
-            },
-            allow_redirects=True
-        )
-
-        if response.status_code >= 400:
-            response.close()
-            return False
-
-        content_type = (
-            response.headers
-            .get("Content-Type", "")
-            .lower()
-        )
-
-        final_url = response.url.lower()
-
-        result = (
-            content_type.startswith("audio/")
-            or any(
-                ext in final_url
-                for ext in AUDIO_EXTENSIONS
-            )
-            or any(
-                ext in url.lower()
-                for ext in AUDIO_EXTENSIONS
-            )
-        )
-
-        response.close()
-
-        return result
-
-    except Exception as e:
-        print(
-            "[MUSIC AUDIO CHECK ERROR]",
-            repr(e)
-        )
-
+        r = requests.get(url, stream=True, timeout=15, headers=MUSIC_HEADERS, allow_redirects=True)
+        ok = r.status_code < 400 and ((r.headers.get("Content-Type") or "").lower().startswith("audio/") or _looks_like_audio_url(r.url))
+        r.close()
+        return ok
+    except Exception:
         return False
 
 
 def find_audio_on_page(url):
-    """
-    Открывает страницу и ищет реально доступный
-    аудиофайл.
-
-    Проверяет:
-    - <audio>
-    - <source>
-    - прямые ссылки на аудио
-    - data-src
-    - data-audio
-    - data-audio-url
-    - data-url
-    - og:audio
-    - meta audio
-    """
-
+    if not url or not _same_music_site(url):
+        return None
     try:
-        response = requests.get(
-            url,
-            timeout=20,
-            headers={
-                "User-Agent":
-                    "Mozilla/5.0 "
-                    "(Linux; Android 15) "
-                    "AppleWebKit/537.36 "
-                    "Chrome/140 Mobile Safari/537.36"
-            },
-            allow_redirects=True
-        )
-
-        if response.status_code >= 400:
-            response.close()
-            return None
-
-        final_url = response.url
-
-        content_type = (
-            response.headers
-            .get("Content-Type", "")
-            .lower()
-        )
-
-        # Если сама ссылка ведёт на аудио
-        if (
-            content_type.startswith("audio/")
-            or any(
-                ext in final_url.lower()
-                for ext in AUDIO_EXTENSIONS
-            )
-        ):
-            response.close()
-
-            if check_audio_url(final_url):
-                return final_url
-
-            return None
-
-        if (
-            "text/html" not in content_type
-            and "application/xhtml" not in content_type
-        ):
-            response.close()
-            return None
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        response.close()
-
+        r = requests.get(url, timeout=20, headers=MUSIC_HEADERS, allow_redirects=True)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
         candidates = []
-
-        # <audio>
-        for audio in soup.find_all("audio"):
-
-            src = audio.get("src")
-
-            if src:
-                candidates.append(
-                    requests.compat.urljoin(
-                        final_url,
-                        src
-                    )
-                )
-
-            for source in audio.find_all("source"):
-
-                src = source.get("src")
-
-                if src:
-                    candidates.append(
-                        requests.compat.urljoin(
-                            final_url,
-                            src
-                        )
-                    )
-
-        # <source>
-        for source in soup.find_all("source"):
-
-            src = source.get("src")
-
-            if src:
-                candidates.append(
-                    requests.compat.urljoin(
-                        final_url,
-                        src
-                    )
-                )
-
-        # <a href="...mp3">
-        for link in soup.find_all(
-            "a",
-            href=True
-        ):
-
-            href = link.get("href")
-
-            audio_url = requests.compat.urljoin(
-                final_url,
-                href
-            )
-
-            if any(
-                ext in audio_url.lower()
-                for ext in AUDIO_EXTENSIONS
-            ):
-                candidates.append(
-                    audio_url
-                )
-
-        # data-атрибуты
+        for tag in soup.find_all(["audio", "source"]):
+            for attr in ("src", "data-src", "data-url"):
+                if tag.get(attr):
+                    candidates.append(urljoin(r.url, tag.get(attr)))
+        for tag in soup.find_all("a", href=True):
+            href = urljoin(r.url, tag["href"])
+            label = tag.get_text(" ", strip=True).lower()
+            if _looks_like_audio_url(href) or "скач" in label or "download" in label:
+                candidates.append(href)
         for tag in soup.find_all(True):
-
-            for attr in (
-                "data-src",
-                "data-audio",
-                "data-audio-url",
-                "data-url"
-            ):
-
-                value = tag.get(attr)
-
-                if not value:
+            for attr, value in tag.attrs.items():
+                if not str(attr).startswith("data-"):
                     continue
-
-                lower_value = value.lower()
-
-                if any(
-                    ext in lower_value
-                    for ext in AUDIO_EXTENSIONS
-                ):
-                    candidates.append(
-                        requests.compat.urljoin(
-                            final_url,
-                            value
-                        )
-                    )
-
-        # og:audio / meta audio
-        for meta in soup.find_all("meta"):
-
-            prop = (
-                meta.get(
-                    "property",
-                    ""
-                )
-                or ""
-            ).lower()
-
-            name = (
-                meta.get(
-                    "name",
-                    ""
-                )
-                or ""
-            ).lower()
-
-            if (
-                prop in (
-                    "og:audio",
-                    "og:audio:url",
-                    "og:audio:secure_url"
-                )
-                or name in (
-                    "audio",
-                    "music:audio"
-                )
-            ):
-
-                content = meta.get("content")
-
-                if content:
-                    candidates.append(
-                        requests.compat.urljoin(
-                            final_url,
-                            content
-                        )
-                    )
-
-        # Удаляем дубликаты
-        unique = []
-
+                value = " ".join(value) if isinstance(value, list) else str(value)
+                if ".mp3" in value.lower() or "audio" in value.lower():
+                    candidates.append(urljoin(r.url, value.strip(" '\"")))
+        seen = set()
         for candidate in candidates:
-
-            if (
-                candidate
-                and candidate not in unique
-            ):
-                unique.append(candidate)
-
-        # Проверяем реальные URL
-        for audio_url in unique:
-
-            if check_audio_url(audio_url):
-                return audio_url
-
+            candidate = str(candidate).strip()
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                if check_audio_url(candidate):
+                    return candidate
     except Exception as e:
-        print(
-            "[MUSIC PAGE ERROR]",
-            repr(e)
-        )
-
+        print("[MUSIC AUDIO PAGE ERROR]", repr(e))
     return None
 
 
 def download_music_audio(url):
-    """
-    Скачивает настоящий аудиофайл.
-    Максимальный размер — 50 MB.
-    """
-
     try:
-        response = requests.get(
-            url,
-            stream=True,
-            timeout=60,
-            headers={
-                "User-Agent":
-                    "Mozilla/5.0"
-            },
-            allow_redirects=True
-        )
-
-        response.raise_for_status()
-
-        content_type = (
-            response.headers
-            .get("Content-Type", "")
-            .lower()
-        )
-
-        final_url = response.url.lower()
-
-        is_audio = (
-            content_type.startswith("audio/")
-            or any(
-                ext in final_url
-                for ext in AUDIO_EXTENSIONS
-            )
-            or any(
-                ext in url.lower()
-                for ext in AUDIO_EXTENSIONS
-            )
-        )
-
-        if not is_audio:
-            response.close()
-            return None
-
-        content_length = response.headers.get(
-            "Content-Length"
-        )
-
-        if content_length:
-
-            try:
-                if int(content_length) > MAX_AUDIO_SIZE:
-                    response.close()
-                    return None
-            except ValueError:
-                pass
-
-        data = bytearray()
-
-        for chunk in response.iter_content(
-            chunk_size=256 * 1024
-        ):
-
-            if not chunk:
-                continue
-
-            data.extend(chunk)
-
-            if len(data) > MAX_AUDIO_SIZE:
-                response.close()
-                return None
-
-        response.close()
-
-        if not data:
-            return None
-
-        return bytes(data)
-
+        r = requests.get(url, stream=True, timeout=30, headers=MUSIC_HEADERS, allow_redirects=True)
+        r.raise_for_status()
+        ct = (r.headers.get("Content-Type") or "").lower()
+        if not ct.startswith("audio/") and not _looks_like_audio_url(r.url):
+            r.close(); return None
+        size = r.headers.get("Content-Length")
+        if size and int(size) > MAX_AUDIO_SIZE:
+            r.close(); return None
+        buf, total = io.BytesIO(), 0
+        for chunk in r.iter_content(64 * 1024):
+            if chunk:
+                total += len(chunk)
+                if total > MAX_AUDIO_SIZE:
+                    r.close(); return None
+                buf.write(chunk)
+        r.close()
+        return buf.getvalue()
     except Exception as e:
-        print(
-            "[MUSIC DOWNLOAD ERROR]",
-            repr(e)
-        )
-
+        print("[MUSIC DOWNLOAD ERROR]", repr(e))
         return None
 
 
+def get_audio_extension(url, content_type=""):
+    mapping = {"audio/mpeg":".mp3", "audio/mp3":".mp3", "audio/mp4":".m4a", "audio/x-m4a":".m4a", "audio/ogg":".ogg", "audio/wav":".wav", "audio/x-wav":".wav", "audio/flac":".flac", "audio/opus":".opus", "audio/aac":".aac", "audio/webm":".webm"}
+    ct = (content_type or "").lower().split(";", 1)[0].strip()
+    if ct in mapping:
+        return mapping[ct]
+    for ext in AUDIO_EXTENSIONS:
+        if ext in (url or "").lower():
+            return ext
+    return ".mp3"
+
+
+def _extract_sefon_links(page_url):
+    links = []
+    try:
+        r = requests.get(page_url, timeout=20, headers=MUSIC_HEADERS, allow_redirects=True)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = urljoin(r.url, a["href"])
+            if _same_music_site(href) and urlparse(href).path.lower().rstrip("/").startswith("/mp3/") and href not in links:
+                links.append(href)
+                if len(links) >= MUSIC_MAX_RESULTS * 3:
+                    break
+    except Exception as e:
+        print("[MUSIC LINKS ERROR]", repr(e))
+    return links
+
+
+def _parse_sefon_track(url):
+    try:
+        r = requests.get(url, timeout=20, headers=MUSIC_HEADERS, allow_redirects=True)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        h1 = soup.find("h1")
+        title = h1.get_text(" ", strip=True) if h1 else ""
+        if not title:
+            og = soup.find("meta", attrs={"property":"og:title"})
+            title = og.get("content", "") if og else ""
+        if not title and soup.title:
+            title = soup.title.get_text(" ", strip=True)
+        meta = soup.find("meta", attrs={"name":"description"})
+        description = meta.get("content", "") if meta else ""
+        return {"title": title or url, "description": description or "", "text": soup.get_text(" ", strip=True)[:30000], "url": url}
+    except Exception as e:
+        print("[MUSIC TRACK PARSE ERROR]", repr(e))
+        return {"title": url, "description": "", "text": "", "url": url}
+
+
+def _sefon_candidate_pages(query):
+    """Собирает только страницы треков Sefon. Несколько вариантов URL поиска используются как запасные."""
+    encoded = quote_plus(query)
+    index_pages = [MUSIC_START_URL]
+    index_pages += [f"{MUSIC_SITE}/best/page/{n}/" for n in range(2, MUSIC_MAX_SCAN_PAGES + 1)]
+    index_pages += [f"{MUSIC_SITE}/search/?q={encoded}", f"{MUSIC_SITE}/search/?query={encoded}", f"{MUSIC_SITE}/search/{encoded}/"]
+    links, seen = [], set()
+    for page_url in index_pages:
+        for link in _extract_sefon_links(page_url):
+            if link not in seen:
+                seen.add(link); links.append(link)
+            if len(links) >= MUSIC_MAX_RESULTS * 3:
+                return links
+    return links
+
+
+def music_search_web(query, page=0):
+    query = (query or "").strip()
+    if not query:
+        return [], 0
+    links, seen = [], set()
+    for variant in (query, music_normalize(query)):
+        if not variant:
+            continue
+        for link in _sefon_candidate_pages(variant):
+            if link not in seen:
+                seen.add(link); links.append(link)
+            if len(links) >= MUSIC_MAX_RESULTS * 3:
+                break
+    scored = []
+    for link in links:
+        info = _parse_sefon_track(link)
+        title, desc, text = info["title"], info["description"], info["text"]
+        title_score = music_similarity(query, title)
+        desc_score = music_similarity(query, desc)
+        text_score = music_similarity(query, text)
+        score = max(title_score * .75 + desc_score * .15 + text_score * .10, title_score * .60 + music_similarity(query, title + " " + desc) * .40)
+        if score >= .36:
+            scored.append({"title": title, "url": link, "description": desc, "score": score})
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    unique, used = [], set()
+    for item in scored:
+        if item["url"] in used: continue
+        used.add(item["url"]); unique.append(item)
+        if len(unique) >= MUSIC_MAX_RESULTS: break
+    start, end = page * MUSIC_PER_PAGE, (page + 1) * MUSIC_PER_PAGE
+    return unique[start:end], len(unique)
+
+
 def music_results_text(tracks, page):
-
-    text = (
-        "🎵 Результаты поиска\n"
-        f"Страница {page + 1}\n\n"
-    )
-
-    for i, track in enumerate(
-        tracks,
-        start=1
-    ):
-
-        title = track.get(
-            "title",
-            "Без названия"
-        )
-
-        text += f"{i}. {title}\n"
-
-    text += "\n👇 Выбери трек:"
-
-    return text
+    text = f"🎵 Результаты поиска на Sefon\nСтраница {page + 1}\n\n"
+    for i, track in enumerate(tracks, 1):
+        text += f"{i}. {track.get('title', 'Без названия')} • {int(round(track.get('score', 0) * 100))}%\n"
+    return text + "\n👇 Выбери подходящий трек:"
 
 
 def music_keyboard(user_id, page, total):
-
-    keyboard = InlineKeyboardMarkup(
-        row_width=1
-    )
-
-    search = music_searches.get(
-        user_id
-    )
-
-    if not search:
-        return keyboard
-
-    tracks = search.get(
-        "tracks",
-        []
-    )
-
-    for i, track in enumerate(tracks):
-
-        title = track.get(
-            "title",
-            "Без названия"
-        )
-
-        button_text = (
-            f"{i + 1}. {title}"
-        )
-
-        if len(button_text) > 50:
-            button_text = (
-                button_text[:47]
-                + "..."
-            )
-
-        keyboard.add(
-            InlineKeyboardButton(
-                button_text,
-                callback_data=(
-                    f"music_get:"
-                    f"{user_id}:"
-                    f"{i}"
-                )
-            )
-        )
-
-    navigation = []
-
-    if page > 0:
-        navigation.append(
-            InlineKeyboardButton(
-                "◀️",
-                callback_data=(
-                    f"music_page:"
-                    f"{user_id}:"
-                    f"{page - 1}"
-                )
-            )
-        )
-
-    if total > (
-        (page + 1) * MUSIC_PER_PAGE
-    ):
-        navigation.append(
-            InlineKeyboardButton(
-                "▶️",
-                callback_data=(
-                    f"music_page:"
-                    f"{user_id}:"
-                    f"{page + 1}"
-                )
-            )
-        )
-
-    if navigation:
-        keyboard.row(*navigation)
-
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    search = music_searches.get(user_id)
+    if not search: return keyboard
+    for i, track in enumerate(search.get("tracks", [])):
+        title = track.get("title", "Без названия")
+        score = int(round(track.get("score", 0) * 100))
+        label = f"{i + 1}. {title} ({score}%)"
+        keyboard.add(InlineKeyboardButton(label[:50], callback_data=f"music_get:{user_id}:{i}"))
+    nav = []
+    if page > 0: nav.append(InlineKeyboardButton("◀️", callback_data=f"music_page:{user_id}:{page - 1}"))
+    if total > (page + 1) * MUSIC_PER_PAGE: nav.append(InlineKeyboardButton("▶️", callback_data=f"music_page:{user_id}:{page + 1}"))
+    if nav: keyboard.row(*nav)
     return keyboard
 
 
-@bot.message_handler(
-    commands=['music']
-)
+@bot.message_handler(commands=["music"])
 def music_cmd(message):
-
     user_id = message.chat.id
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    raw_query = (
-        parts[1].strip()
-        if len(parts) > 1
-        else ""
-    )
-
-    if not raw_query:
-
-        bot.reply_to(
-            message,
-            "🎵 Укажи исполнителя и название.\n\n"
-            "Пример:\n"
-            "/music Alan Walker Faded"
-        )
-
+    parts = message.text.split(maxsplit=1)
+    query = parts[1].strip() if len(parts) > 1 else ""
+    if not query:
+        bot.reply_to(message, "🎵 Напиши исполнителя, название или фрагмент текста.\n\nПример:\n/music виртуалная любв")
         return
-
-    msg = bot.reply_to(
-        message,
-        "🌐 Ищу трек в интернете... 🎧"
-    )
-
+    msg = bot.reply_to(message, "🔎 Ищу только на Sefon... 🎵")
     try:
-
-        refined_query = raw_query
-
-        # Исправление возможных ошибок
-        try:
-
-            ai_prompt = (
-                "Определи исполнителя и название "
-                "песни из запроса пользователя. "
-                "Исправь ошибки в написании. "
-                "Если название написано примерно "
-                "по звучанию, попробуй восстановить "
-                "оригинальное название. "
-                "Ответь только исполнителем "
-                "и названием песни.\n\n"
-                f"Запрос: {raw_query}"
-            )
-
-            response = (
-                ai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": ai_prompt
-                        }
-                    ]
-                )
-            )
-
-            possible_query = (
-                response.choices[0]
-                .message
-                .content
-                .strip()
-            )
-
-            if possible_query:
-                refined_query = possible_query
-
-        except Exception as e:
-
-            print(
-                "[MUSIC AI ERROR]",
-                repr(e)
-            )
-
-        # Поиск
-        tracks, total = music_search_web(
-            refined_query,
-            page=0
-        )
-
-        if (
-            not tracks
-            and refined_query != raw_query
-        ):
-
-            tracks, total = music_search_web(
-                raw_query,
-                page=0
-            )
-
-            refined_query = raw_query
-
+        tracks, total = music_search_web(query, 0)
         if not tracks:
-
-            bot.edit_message_text(
-                "❌ По запросу ничего не найдено.\n\n"
-                "Попробуй написать исполнителя "
-                "и название песни.",
-                chat_id=user_id,
-                message_id=msg.message_id
-            )
-
+            bot.edit_message_text("❌ На Sefon ничего подходящего не найдено.\n\nПопробуй более длинный фрагмент или добавь исполнителя.", chat_id=user_id, message_id=msg.message_id)
             return
-
-        music_searches[user_id] = {
-            "query": refined_query,
-            "page": 0,
-            "tracks": tracks,
-            "total": total
-        }
-
-        bot.edit_message_text(
-            music_results_text(
-                tracks,
-                0
-            ),
-            chat_id=user_id,
-            message_id=msg.message_id,
-            reply_markup=music_keyboard(
-                user_id,
-                0,
-                total
-            )
-        )
-
+        music_searches[user_id] = {"query": query, "page": 0, "tracks": tracks, "total": total}
+        bot.edit_message_text(music_results_text(tracks, 0), chat_id=user_id, message_id=msg.message_id, reply_markup=music_keyboard(user_id, 0, total))
     except Exception as e:
-
-        print(
-            "[MUSIC COMMAND ERROR]",
-            repr(e)
-        )
-
-        try:
-
-            bot.edit_message_text(
-                "❌ Ошибка поиска музыки.",
-                chat_id=user_id,
-                message_id=msg.message_id
-            )
-
-        except Exception:
-            pass
+        print("[MUSIC COMMAND ERROR]", repr(e))
+        try: bot.edit_message_text("❌ Ошибка поиска на Sefon.", chat_id=user_id, message_id=msg.message_id)
+        except Exception: pass
 
 
-@bot.callback_query_handler(
-    func=lambda call:
-        call.data.startswith(
-            "music_page:"
-        )
-)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("music_page:"))
 def callback_music_page(call):
-
     try:
-
-        _, user_id, page = (
-            call.data.split(":")
-        )
-
-        user_id = int(user_id)
-        page = int(page)
-
-        if call.from_user.id != user_id:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Это не твой поиск."
-            )
-
-            return
-
-        search = music_searches.get(
-            user_id
-        )
-
+        _, user_id, page = call.data.split(":")
+        user_id, page = int(user_id), int(page)
+        if page < 0 or call.from_user.id != user_id:
+            bot.answer_callback_query(call.id, "❌ Некорректная страница.", show_alert=True); return
+        search = music_searches.get(user_id)
         if not search:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Поиск устарел.",
-                show_alert=True
-            )
-
-            return
-
-        bot.answer_callback_query(
-            call.id,
-            "🔎 Загружаю..."
-        )
-
-        tracks, total = music_search_web(
-            search["query"],
-            page=page
-        )
-
+            bot.answer_callback_query(call.id, "❌ Поиск устарел.", show_alert=True); return
+        bot.answer_callback_query(call.id, "🔎 Загружаю...")
+        tracks, total = music_search_web(search["query"], page)
         if not tracks:
-
-            bot.answer_callback_query(
-                call.id,
-                "Больше результатов нет.",
-                show_alert=True
-            )
-
-            return
-
-        search["page"] = page
-        search["tracks"] = tracks
-        search["total"] = total
-
-        bot.edit_message_text(
-            music_results_text(
-                tracks,
-                page
-            ),
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=music_keyboard(
-                user_id,
-                page,
-                total
-            )
-        )
-
+            bot.answer_callback_query(call.id, "Больше результатов нет.", show_alert=True); return
+        search.update({"page": page, "tracks": tracks, "total": total})
+        bot.edit_message_text(music_results_text(tracks, page), chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=music_keyboard(user_id, page, total))
     except Exception as e:
-
-        print(
-            "[MUSIC PAGE ERROR]",
-            repr(e)
-        )
-
-        try:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Ошибка загрузки.",
-                show_alert=True
-            )
-
-        except Exception:
-            pass
+        print("[MUSIC PAGE ERROR]", repr(e))
+        try: bot.answer_callback_query(call.id, "❌ Ошибка загрузки.", show_alert=True)
+        except Exception: pass
 
 
-@bot.callback_query_handler(
-    func=lambda call:
-        call.data.startswith(
-            "music_get:"
-        )
-)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("music_get:"))
 def callback_music_get(call):
-
     user_id = call.message.chat.id
-
     try:
-
-        _, search_user_id, index = (
-            call.data.split(":")
-        )
-
-        search_user_id = int(
-            search_user_id
-        )
-
-        index = int(index)
-
+        _, search_user_id, index = call.data.split(":")
+        search_user_id, index = int(search_user_id), int(index)
         if call.from_user.id != search_user_id:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Это не твой поиск.",
-                show_alert=True
-            )
-
-            return
-
-        search = music_searches.get(
-            search_user_id
-        )
-
-        if not search:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Список устарел.",
-                show_alert=True
-            )
-
-            return
-
-        tracks = search.get(
-            "tracks",
-            []
-        )
-
-        if (
-            index < 0
-            or index >= len(tracks)
-        ):
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Трек не найден.",
-                show_alert=True
-            )
-
-            return
-
-        track = tracks[index]
-
-        title = track.get(
-            "title",
-            "Трек"
-        )
-
-        page_url = track.get("url")
-
-        if not page_url:
-
-            bot.answer_callback_query(
-                call.id,
-                "❌ Источник отсутствует.",
-                show_alert=True
-            )
-
-            return
-
-        bot.answer_callback_query(
-            call.id,
-            "🔎 Проверяю аудио..."
-        )
-
-        processing_msg = bot.send_message(
-            user_id,
-            f"🔎 Проверяю:\n🎵 {title}"
-        )
-
-        # ----------------------------------------------------
-        # Сначала проверяем разрешение на распространение
-        # ----------------------------------------------------
-
-        bot.edit_message_text(
-            f"🔐 Проверяю условия использования:\n🎵 {title}",
-            chat_id=user_id,
-            message_id=processing_msg.message_id
-        )
-
-        if not page_allows_download(page_url):
-
-            bot.edit_message_text(
-                "⚠️ На этой странице не обнаружено "
-                "подтверждение свободной лицензии.\n\n"
-                "Я не могу скачивать и отправлять "
-                "этот трек без разрешения на распространение.\n\n"
-                "Выбери другой результат.",
-                chat_id=user_id,
-                message_id=processing_msg.message_id
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # Только теперь ищем аудиофайл
-        # ----------------------------------------------------
-
-        bot.edit_message_text(
-            f"🔎 Ищу аудиофайл:\n🎵 {title}",
-            chat_id=user_id,
-            message_id=processing_msg.message_id
-        )
-
-        audio_url = find_audio_on_page(
-            page_url
-        )
-
+            bot.answer_callback_query(call.id, "❌ Это не твой поиск.", show_alert=True); return
+        search = music_searches.get(search_user_id)
+        if not search or index < 0 or index >= len(search.get("tracks", [])):
+            bot.answer_callback_query(call.id, "❌ Трек не найден.", show_alert=True); return
+        track = search["tracks"][index]
+        title, page_url = track.get("title", "Трек"), track.get("url")
+        if not page_url or not _same_music_site(page_url):
+            bot.answer_callback_query(call.id, "❌ Источник отсутствует.", show_alert=True); return
+        bot.answer_callback_query(call.id, "⬇️ Ищу аудио...")
+        processing = bot.send_message(user_id, f"🔎 Проверяю:\n🎵 {title}")
+        audio_url = find_audio_on_page(page_url)
         if not audio_url:
-
-            bot.edit_message_text(
-                "❌ На этой странице "
-                "не найден доступный аудиофайл.\n\n"
-                "Выбери другой результат.",
-                chat_id=user_id,
-                message_id=processing_msg.message_id
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # Скачивание
-        # ----------------------------------------------------
-
-        bot.edit_message_text(
-            f"⬇️ Скачиваю:\n🎵 {title}",
-            chat_id=user_id,
-            message_id=processing_msg.message_id
-        )
-
-        audio_data = download_music_audio(
-            audio_url
-        )
-
-        if not audio_data:
-
-            bot.edit_message_text(
-                "❌ Аудиофайл найден, "
-                "но скачать его не удалось.\n\n"
-                "Попробуй другой результат.",
-                chat_id=user_id,
-                message_id=processing_msg.message_id
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # Имя файла
-        # ----------------------------------------------------
-
-        safe_title = re.sub(
-            r'[\\/:*?"<>|]',
-            "_",
-            title
-        )
-
-        safe_title = safe_title.strip()
-
-        if not safe_title:
-            safe_title = "track"
-
-        if len(safe_title) > 80:
-            safe_title = safe_title[:80]
-
-        audio_file = io.BytesIO(
-            audio_data
-        )
-
-        audio_file.name = (
-            safe_title + ".mp3"
-        )
-
-        # ----------------------------------------------------
-        # Отправка
-        # ----------------------------------------------------
-
+            bot.edit_message_text("❌ На странице Sefon не найден доступный аудиофайл.\n\nПопробуй другой результат.", chat_id=user_id, message_id=processing.message_id); return
+        bot.edit_message_text(f"⬇️ Скачиваю:\n🎵 {title}", chat_id=user_id, message_id=processing.message_id)
+        data = download_music_audio(audio_url)
+        if not data:
+            bot.edit_message_text("❌ Аудиофайл найден, но скачать его не удалось.", chat_id=user_id, message_id=processing.message_id); return
         try:
-
-            bot.send_audio(
-                chat_id=user_id,
-                audio=audio_file,
-                title=title,
-                caption=(
-                    f"🎵 {title}\n\n"
-                    f"🌐 Источник:\n"
-                    f"{page_url}"
-                )
-            )
-
-            bot.delete_message(
-                chat_id=user_id,
-                message_id=processing_msg.message_id
-            )
-
-        except Exception as e:
-
-            print(
-                "[MUSIC TELEGRAM SEND ERROR]",
-                repr(e)
-            )
-
-            bot.edit_message_text(
-                "❌ Не удалось отправить "
-                "аудиофайл в Telegram.",
-                chat_id=user_id,
-                message_id=processing_msg.message_id
-            )
+            head = requests.get(audio_url, stream=True, timeout=15, headers=MUSIC_HEADERS, allow_redirects=True)
+            ext = get_audio_extension(head.url, head.headers.get("Content-Type", "")); head.close()
+        except Exception:
+            ext = get_audio_extension(audio_url)
+        safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip()[:80] or "track"
+        audio = io.BytesIO(data); audio.name = safe_title + ext
+        caption = f"🎵 {title}\n\n🌐 Sefon: {page_url}"
+        if ext in (".mp3", ".m4a"):
+            bot.send_audio(user_id, audio, title=title, caption=caption)
+        else:
+            bot.send_document(user_id, audio, caption=caption)
+        try: bot.delete_message(user_id, processing.message_id)
+        except Exception: pass
+    except Exception as e:
+        print("[MUSIC GET ERROR]", repr(e))
+        try: bot.answer_callback_query(call.id, "❌ Ошибка загрузки.", show_alert=True)
+        except Exception: pass
 
 
 # ============================================================
@@ -2085,10 +1218,8 @@ def handle_doc(message):
                 path = f.name
 
             text = "".join(
-                [
-                    p.extract_text()
-                    for p in PdfReader(path).pages[:3]
-                ]
+                (p.extract_text() or "")
+                for p in PdfReader(path).pages[:3]
             )
 
             os.remove(path)
