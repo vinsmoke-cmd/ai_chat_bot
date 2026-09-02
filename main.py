@@ -68,50 +68,36 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ПОИСК МУЗЫКИ С МОБИЛЬНЫМ КЛИЕНТОМ И ЛОГИРОВАНИЕМ ---
+# --- ГИБРИДНЫЙ ПОИСК МУЗЫКИ ЧЕРЕЗ WEBSEARCH И ОБХОД БЛОКИРОВОК ---
 
-def search_youtube_with_cookies(query, limit=10):
+def search_youtube_with_cookies(query, limit=5):
     tracks = []
-    ydl_opts = {
-        'extract_flat': True,
-        'skip_download': True,
-        'quiet': False,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-    }
+    print(f"🔍 Ищем через веб-поиск ссылку на YouTube для: {query}")
     
-    if os.path.exists("cookies.txt"):
-        ydl_opts['cookiefile'] = "cookies.txt"
-
+    search_query = f"{query} site:youtube.com/watch"
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"🔍 Ищем в YouTube Music по запросу: {query}")
-            info = ydl.extract_info(f"ytmsearch{limit}:{query}", download=False)
-            
-            if not info or 'entries' not in info or not info['entries']:
-                print("🔄 В Music ничего не найдено, пробуем обычный YouTube...")
-                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-            
-            if info and 'entries' in info:
-                for entry in info['entries']:
-                    if not entry:
-                        continue
-                    video_id = entry.get('id')
-                    title = entry.get('title', 'Без названия')
-                    dur = entry.get('duration', 0) or 0
-                    minutes = int(dur) // 60
-                    seconds = int(dur) % 60
+        with DDGS() as ddgs:
+            results = list(ddgs.text(search_query, max_results=limit))
+            for res in results:
+                href = res.get('href', '')
+                title = res.get('title', 'Без названия')
+                
+                match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', href)
+                if match:
+                    video_id = match.group(1)
+                    url = f"https://www.youtube.com/watch?v={video_id}"
                     
-                    if video_id and not any(t.get("video_id") == video_id for t in tracks):
+                    if not any(t.get("video_id") == video_id for t in tracks):
                         tracks.append({
-                            "title": title,
-                            "duration": f"{minutes}:{seconds:02d}",
-                            "url": f"https://www.youtube.com/watch?v={video_id}",
+                            "title": title.replace(" - YouTube", ""),
+                            "duration": "--:--",
+                            "url": url,
                             "video_id": video_id
                         })
     except Exception as e:
-        print(f"❌ Ошибка поиска YouTube: {e}")
-        
-    print(f"✅ Найдено треков: {len(tracks)}")
+        print(f"❌ Ошибка веб-поиска: {e}")
+
+    print(f"✅ Найдено треков через обходной поиск: {len(tracks)}")
     return tracks
 
 def ask_ai_with_history(user_id, prompt):
@@ -258,7 +244,7 @@ def help_cmd(message):
         "- /fix <текст> - исправить ошибки\n"
         "- /tts <текст> - озвучить текст\n"
         "- /clear - очистить память\n"
-        "- /neuroham (или /rude) - режим Нейрохама 💀"
+        "- /neuroham (or /rude) - режим Нейрохама 💀"
     )
     bot.reply_to(message, help_text)
 
@@ -339,13 +325,13 @@ def music_cmd(message):
         bot.reply_to(message, "Укажи название трека, строчку из него или транслит.\nПример: `/music айм блу да ба ди`", parse_mode="Markdown")  
         return  
 
-    msg = bot.reply_to(message, "🧠 Анализирую текст и ищу на YouTube... 🎧")
+    msg = bot.reply_to(message, "🧠 Анализирую текст и ищу трек... 🎧")
 
     ai_prompt = (
         f"Пользователь ищет песню по следующему запросу: '{raw_query}'. "
-        f"Это может быть отрывок текста (строчка из песни), русский транслит (например 'кадиллак', 'айм блу') или перевод. "
-        f"Определи оригинальное название. Выведи ТОЛЬКО в формате: 'Исполнитель - Название трека' (например, 'Eiffel 65 - Blue'). "
-        f"Без кавычек, пояснений и лишних слов. Если вообще не можешь понять, напиши исходный запрос."
+        f"Это может быть отрывок текста (строчка из песни), русский транслит или название. "
+        f"Определи точное название песни и исполнителя. Выведи ТОЛЬКО в формате: 'Исполнитель - Название трека'. "
+        f"Без кавычек, пояснений и лишних слов."
     )
     
     refined_query = raw_query
@@ -358,10 +344,10 @@ def music_cmd(message):
     except Exception:
         pass
 
-    results = search_youtube_with_cookies(refined_query, limit=10)
+    results = search_youtube_with_cookies(refined_query, limit=5)
     
     if not results and refined_query != raw_query:
-        results = search_youtube_with_cookies(raw_query, limit=10)
+        results = search_youtube_with_cookies(raw_query, limit=5)
 
     if not results:
         bot.edit_message_text(f"❌ Не удалось найти трек по запросу: *{refined_query}*", chat_id=user_id, message_id=msg.message_id, parse_mode="Markdown")
@@ -374,7 +360,7 @@ def music_cmd(message):
     buttons = []
 
     for i, track in enumerate(results, 1):  
-        text_result += f"{i}. {track.get('title')} [{track.get('duration')}]\n"  
+        text_result += f"{i}. {track.get('title')}\n"  
         buttons.append(InlineKeyboardButton(f"Скачать {i}", callback_data=f"music_{i-1}"))
 
     for k in range(0, len(buttons), 2):
