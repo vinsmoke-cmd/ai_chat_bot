@@ -390,7 +390,7 @@ def callback_music(call):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
             ydl_opts = {
-                'format': 'bestaudio/best',
+                'format': 'ba/b',
                 'outtmpl': out_tmpl,
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
@@ -398,6 +398,7 @@ def callback_music(call):
                     'preferredquality': '192',
                 }],
                 'quiet': True,
+                'no_warnings': True,
                 'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
             
