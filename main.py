@@ -22,14 +22,19 @@ from groq import Groq
 # Автоматически внедряем FFmpeg в окружение
 static_ffmpeg.add_paths()
 
-# Автоматически создаем cookies.txt из переменной окружения на хостинге
-COOKIES_DATA = os.getenv("YOUTUBE_COOKIES")
-if COOKIES_DATA:
-    with open("cookies.txt", "w", encoding="utf-8") as f:
-        f.write(COOKIES_DATA.strip())
-    print("✅ Файл cookies.txt успешно создан из переменной окружения! Размер:", len(COOKIES_DATA))
+# Проверяем наличие файла cookies.txt локально в репозитории или в переменных окружения
+COOKIES_PATH = "cookies.txt"
+if os.path.exists(COOKIES_PATH):
+    print(f"✅ Найден локальный файл {COOKIES_PATH} в директории проекта!")
 else:
-    print("❌ ВНИМАНИЕ: Переменная YOUTUBE_COOKIES не найдена или пуста!")
+    # Запасной вариант: если файла нет, проверяем переменную окружения
+    COOKIES_DATA = os.getenv("YOUTUBE_COOKIES")
+    if COOKIES_DATA:
+        with open(COOKIES_PATH, "w", encoding="utf-8") as f:
+            f.write(COOKIES_DATA.strip())
+        print("✅ Файл cookies.txt успешно создан из переменной окружения!")
+    else:
+        print("❌ ВНИМАНИЕ: Файл cookies.txt не найден в репозитории и переменная YOUTUBE_COOKIES пуста!")
 
 try:
     from tavily import TavilyClient
@@ -68,8 +73,6 @@ def clean_markdown(text):
     if not text:
         return ""
     return re.sub(r'[*_#]', '', text)
-
-# --- ПОИСК МУЗЫКИ С ПРИНУДИТЕЛЬНЫМ УТОЧНЕНИЕМ SONG ---
 
 def search_youtube_with_cookies(query, limit=5):
     tracks = []
