@@ -75,7 +75,6 @@ def search_youtube_with_cookies(query, limit=5):
     tracks = []
     attempt = 1
     
-    # Бот будет циклично пытаться найти трек, пока список не заполнится
     while not tracks:
         print(f"🔍 Попытка поиска №{attempt} для запроса: {query}")
         search_query = f"{query} site:youtube.com/watch"
@@ -106,7 +105,7 @@ def search_youtube_with_cookies(query, limit=5):
             break
             
         attempt += 1
-        time.sleep(2) # Пауза перед следующей попыткой поиска
+        time.sleep(2)
         
     return tracks
 
@@ -397,7 +396,7 @@ def callback_music(call):
 
         audio_data = None
         download_attempts = 0
-        max_download_attempts = 10  # До 10 попыток скачивания с авто-переподключением
+        max_download_attempts = 10
 
         while download_attempts < max_download_attempts and not audio_data:
             download_attempts += 1
@@ -405,13 +404,17 @@ def callback_music(call):
                 with tempfile.TemporaryDirectory() as temp_dir:
                     out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
                     
-                    # Чередуем форматы и настройки при разных попытках обхода защиты
                     formats_to_try = ['best', 'ba/b', 'bestaudio']
                     chosen_format = formats_to_try[(download_attempts - 1) % len(formats_to_try)]
                     
                     ydl_opts = {
                         'format': chosen_format,
                         'outtmpl': out_tmpl,
+                        'extractor_args': {
+                            'youtube': {
+                                'player_client': ['android', 'web']
+                            }
+                        },
                         'postprocessors': [{
                             'key': 'FFmpegExtractAudio',
                             'preferredcodec': 'mp3',
@@ -434,7 +437,7 @@ def callback_music(call):
                             break
             except Exception as e:
                 print(f"⚠️ Ошибка скачивания (попытка {download_attempts}/{max_download_attempts}): {e}")
-                time.sleep(3) # Пауза перед следующей попыткой скачать
+                time.sleep(3)
 
         if audio_data:
             audio_file = io.BytesIO(audio_data)
