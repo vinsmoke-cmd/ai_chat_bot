@@ -21,6 +21,12 @@ from groq import Groq
 # Автоматически внедряем FFmpeg в окружение
 static_ffmpeg.add_paths()
 
+# Автоматически создаем cookies.txt из переменной окружения на хостинге
+COOKIES_DATA = os.getenv("YOUTUBE_COOKIES")
+if COOKIES_DATA:
+    with open("cookies.txt", "w", encoding="utf-8") as f:
+        f.write(COOKIES_DATA)
+
 try:
     from tavily import TavilyClient
 except ImportError:
@@ -59,421 +65,142 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
+# --- ИЗМЕНЕННЫЙ ПОИСК МУЗЫКИ (ЧЕРЕЗ YOUTUBE С КУКИ И ИИ-РАСПОЗНАВАНИЕМ) ---
 
-# ============================================================
-# ПОИСК МУЗЫКИ
-# ============================================================
-
-from difflib import SequenceMatcher
-from urllib.parse import urljoin, urlparse, quote_plus
-
-MUSIC_SITE = "https://mp3party.net"
-MUSIC_SEARCH_URL = f"{MUSIC_SITE}/search"
-
-MUSIC_PER_PAGE = 8
-MUSIC_MAX_RESULTS = 40
-
-music_searches = {}
-
-MUSIC_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Linux; Android 15) "
-        "AppleWebKit/537.36 "
-        "(KHTML, like Gecko) "
-        "Chrome/140.0 Mobile Safari/537.36"
-    ),
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-}
-
-SOUNDALIKE_WORDS = {
-    "невер": "never", "нэвер": "never", "невэр": "never",
-    "гонна": "gonna", "ганна": "gonna",
-    "гив": "give", "гивв": "give",
-    "ю": "you", "йу": "you", "юу": "you",
-    "юр": "your", "ёр": "your",
-    "ай": "i", "айм": "im",
-    "билив": "believe", "белив": "believe", "бэлив": "believe",
-    "ин": "in", "эн": "and", "энд": "and",
-    "уот": "what", "вот": "what", "уонт": "want", "вонт": "want",
-    "ит": "it", "из": "is", "ту": "to", "фор": "for", "ме": "me", "май": "my",
-    "лайк": "like", "лав": "love", "лов": "love", "кан": "can", "кэн": "can",
-    "вилл": "will", "уилл": "will", "ноу": "know", "би": "be",
-    "хэарт": "heart", "харт": "heart", "драйв": "drive",
-}
-
-CYR_TO_LAT = str.maketrans({
-    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo", 
-    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", 
-    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", 
-    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch", 
-    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
-})
-
-def music_normalize(value):
-    value = str(value or "").lower()
-    value = value.replace("ё", "е")
-    value = re.sub(r"[^a-zа-я0-9]+", " ", value, flags=re.IGNORECASE)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
-
-def music_transliterate(query):
-    return music_normalize(str(query or "").lower().translate(CYR_TO_LAT))
-
-def music_soundalike_transliterate(value):
-    normalized = music_normalize(value)
-    if not normalized:
-        return []
-    tokens = normalized.split()
-    mapped = [SOUNDALIKE_WORDS.get(t, t) for t in tokens]
-    results = [" ".join(mapped)]
-    for i, token in enumerate(tokens):
-        if token in SOUNDALIKE_WORDS:
-            partial = tokens[:]
-            partial[i] = SOUNDALIKE_WORDS[token]
-            res = " ".join(partial)
-            if res not in results:
-                results.append(res)
-    trans = music_transliterate(value)
-    if trans:
-        results.append(trans)
-    return [music_normalize(r) for r in results if music_normalize(r)]
-
-def music_translate_query(query):
-    try:
-        response = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={"client": "gtx", "sl": "auto", "tl": "en", "dt": "t", "q": query},
-            timeout=8,
-        )
-        if not response.ok:
-            return ""
-        data = response.json()
-        translated = "".join(part[0] for part in data[0] if part and part[0])
-        return translated.strip()
-    except Exception:
-        return ""
-
-def music_query_variants(query):
-    query = (query or "").strip()
-    if not query:
-        return []
-    variants = []
-    def add(v):
-        v = str(v or "").strip()
-        if v and v not in variants:
-            variants.append(v)
-    add(query)
-    add(music_normalize(query))
-    add(re.sub(r"[^\w\s-]", " ", query, flags=re.UNICODE))
-    tr = music_translate_query(query)
-    if tr:
-        add(tr)
-    trans = music_transliterate(query)
-    if trans:
-        add(trans)
-    for res in music_soundalike_transliterate(query):
-        add(res)
-    return variants[:12]
-
-def _same_music_site(url):
-    try:
-        host = urlparse(url).netloc.lower().split(":")[0]
-        return host in {"mp3party.net", "www.mp3party.net"}
-    except Exception:
-        return False
-
-def _mp3party_music_link(url):
-    if not _same_music_site(url):
-        return False
-    try:
-        path = urlparse(url).path.lower().rstrip("/")
-        return path.startswith("/music/") and path != "/music"
-    except Exception:
-        return False
-
-def _parse_mp3party_results(html, base_url):
-    soup = BeautifulSoup(html, "html.parser")
-    results = []
-    seen = set()
-    for a in soup.find_all("a", href=True):
-        href = urljoin(base_url, a.get("href", ""))
-        if not _mp3party_music_link(href):
-            continue
-        if href in seen:
-            continue
-        title = a.get_text(" ", strip=True) or (a.get("title") or "").strip()
-        if not title:
-            continue
-        normalized = music_normalize(title)
-        if not normalized or normalized in {"слушать", "скачать", "онлайн"}:
-            continue
-        seen.add(href)
-        results.append({"title": title, "url": href})
-    return results
-
-def _mp3party_search_page(query):
-    try:
-        response = requests.get(
-            f"{MUSIC_SEARCH_URL}?q={quote_plus(query)}",
-            timeout=20,
-            headers=MUSIC_HEADERS,
-            allow_redirects=True,
-        )
-        response.raise_for_status()
-        if not _same_music_site(response.url):
-            return []
-        return _parse_mp3party_results(response.text, response.url)
-    except Exception:
-        return []
-
-def _mp3party_fallback_from_home(query):
-    collected = []
-    seen = set()
-    for page_url in [MUSIC_SITE + "/", MUSIC_SITE + "/popular/", MUSIC_SITE + "/new/"]:
-        try:
-            response = requests.get(page_url, timeout=15, headers=MUSIC_HEADERS, allow_redirects=True)
-            if not response.ok:
-                continue
-            for item in _parse_mp3party_results(response.text, response.url):
-                if item["url"] not in seen:
-                    seen.add(item["url"])
-                    collected.append(item)
-        except Exception:
-            pass
-    return collected
-
-def music_similarity(query, candidate):
-    q = music_normalize(query)
-    c = music_normalize(candidate)
-    if not q or not c:
-        return 0.0
-    if q == c:
-        return 1.0
-    if q in c:
-        return 0.96
-    q_tokens = q.split()
-    c_tokens = c.split()
-    base = SequenceMatcher(None, q, c).ratio()
-    token_scores = [max(SequenceMatcher(None, qt, ct).ratio() for ct in c_tokens) for qt in q_tokens]
-    token_score = sum(token_scores) / len(token_scores) if token_scores else 0.0
-    overlap = len(set(q_tokens) & set(c_tokens)) / max(1, len(set(q_tokens)))
-    return min(1.0, base * 0.35 + token_score * 0.45 + overlap * 0.20)
-
-def music_best_similarity(query, title):
-    variants = music_query_variants(query)
-    title_variants = [title, re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", title)]
-    best_score = 0.0
-    best_variant = ""
-    for variant in variants:
-        for candidate in title_variants:
-            score = music_similarity(variant, candidate)
-            if score > best_score:
-                best_score = score
-                best_variant = variant
-    return best_score, best_variant
-
-def music_search_web(query, page=0):
-    query = (query or "").strip()
-    if not query:
-        return [], 0
-    variants = music_query_variants(query)
-    if not variants:
-        return [], 0
-
-    candidates = []
-    seen = set()
-    for variant in variants:
-        for item in _mp3party_search_page(variant):
-            if item["url"] not in seen:
-                seen.add(item["url"])
-                candidates.append(item)
-
-    if not candidates:
-        for item in _mp3party_fallback_from_home(query):
-            if item["url"] not in seen:
-                seen.add(item["url"])
-                candidates.append(item)
-
-    scored = []
-    for item in candidates:
-        score, matched = music_best_similarity(query, item["title"])
-        if score < 0.15:
-            continue
-        scored.append({"title": item["title"], "url": item["url"], "score": score, "matched_variant": matched})
-
-    scored.sort(key=lambda x: (x["score"], len(music_normalize(x["title"]))), reverse=True)
+def search_youtube_with_cookies(query, limit=10):
+    tracks = []
+    ydl_opts = {
+        'extract_flat': True,
+        'skip_download': True,
+        'quiet': True,
+    }
     
-    unique = []
-    used = set()
-    for item in scored:
-        key = music_normalize(item["title"])
-        if key not in used:
-            used.add(key)
-            unique.append(item)
+    if os.path.exists("cookies.txt"):
+        ydl_opts['cookiefile'] = "cookies.txt"
 
-    start = page * MUSIC_PER_PAGE
-    return unique[start:start + MUSIC_PER_PAGE], len(unique)
-
-def music_results_text(tracks, page):
-    text = f"🎵 Найденные треки\nСтраница {page + 1}\n\n"
-    for idx, track in enumerate(tracks, 1):
-        score = int(round(track.get("score", 0) * 100))
-        text += f"{idx}. {track.get('title')} • {score}%\n"
-    text += "\n👇 Выбери подходящий трек для скачивания:"
-    return text
-
-def music_keyboard(user_id, page, total):
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    search = music_searches.get(user_id)
-    if not search:
-        return keyboard
-
-    for idx, track in enumerate(search.get("tracks", [])):
-        score = int(round(track.get("score", 0) * 100))
-        label = f"{idx + 1}. {track.get('title')} ({score}%)"
-        keyboard.add(InlineKeyboardButton(label[:50], callback_data=f"music_get:{user_id}:{idx}"))
-
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("◀️", callback_data=f"music_page:{user_id}:{page - 1}"))
-    if total > (page + 1) * MUSIC_PER_PAGE:
-        nav.append(InlineKeyboardButton("▶️", callback_data=f"music_page:{user_id}:{page + 1}"))
-    if nav:
-        keyboard.row(*nav)
-    return keyboard
-
-def _get_direct_mp3_link(track_url):
     try:
-        resp = requests.get(track_url, headers=MUSIC_HEADERS, timeout=10)
-        if not resp.ok:
-            return None
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = urljoin(track_url, a.get("href", ""))
-            if "download" in href or href.endswith(".mp3"):
-                return href
-    except Exception:
-        pass
-    return None
-
-@bot.message_handler(commands=["music"])
-def music_cmd(message):
-    user_id = message.chat.id
-    parts = message.text.split(maxsplit=1)
-    query = parts[1].strip() if len(parts) > 1 else ""
-
-    if not query:
-        bot.reply_to(
-            message,
-            "🎵 Чтобы найти трек, напиши его название и исполнителя после команды.\n\n"
-            "Укажи имя артиста и трек через пробел."
-        )
-        return
-
-    msg = bot.reply_to(message, "🔎 Ищу трек...")
-    try:
-        tracks, total = music_search_web(query, 0)
-        if not tracks:
-            bot.edit_message_text(
-                "❌ Ничего не найдено. Попробуй изменить поисковый запрос.",
-                chat_id=user_id,
-                message_id=msg.message_id
-            )
-            return
-
-        music_searches[user_id] = {"query": query, "page": 0, "tracks": tracks, "total": total}
-        bot.edit_message_text(
-            music_results_text(tracks, 0),
-            chat_id=user_id,
-            message_id=msg.message_id,
-            reply_markup=music_keyboard(user_id, 0, total)
-        )
-    except Exception:
-        bot.edit_message_text("❌ Произошла ошибка при поиске.", chat_id=user_id, message_id=msg.message_id)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("music_page:"))
-def callback_music_page(call):
-    try:
-        _, user_id, page = call.data.split(":")
-        user_id, page = int(user_id), int(page)
-        if call.from_user.id != user_id:
-            bot.answer_callback_query(call.id, "❌ Это не ваш поиск.", show_alert=True)
-            return
-        search = music_searches.get(user_id)
-        if not search:
-            bot.answer_callback_query(call.id, "❌ Поиск устарел.", show_alert=True)
-            return
-        tracks, total = music_search_web(search["query"], page)
-        search.update({"page": page, "tracks": tracks, "total": total})
-        bot.edit_message_text(music_results_text(tracks, page), chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=music_keyboard(user_id, page, total))
-    except Exception:
-        pass
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("music_get:"))
-def callback_music_get(call):
-    try:
-        _, user_id, index = call.data.split(":")
-        user_id, index = int(user_id), int(index)
-        if call.from_user.id != user_id:
-            bot.answer_callback_query(call.id, "❌ Чужой результат.", show_alert=True)
-            return
-        search = music_searches.get(user_id)
-        if not search or index >= len(search.get("tracks", [])):
-            bot.answer_callback_query(call.id, "❌ Трек не найден.", show_alert=True)
-            return
-
-        track = search["tracks"][index]
-        bot.answer_callback_query(call.id, "📥 Скачиваю трек...")
-
-        direct_link = _get_direct_mp3_link(track["url"])
-        if not direct_link:
-            bot.send_message(call.message.chat.id, f"🎵 Не удалось скачать файл напрямую. Ссылка на трек:\n{track['url']}")
-            return
-
-        file_resp = requests.get(direct_link, headers=MUSIC_HEADERS, stream=True, timeout=25)
-        if not file_resp.ok:
-            bot.send_message(call.message.chat.id, "❌ Ошибка загрузки файла.")
-            return
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-            for chunk in file_resp.iter_content(chunk_size=8192):
-                if chunk:
-                    tmp.write(chunk)
-            tmp_path = tmp.name
-
-        with open(tmp_path, "rb") as audio:
-            bot.send_audio(call.message.chat.id, audio, title=track["title"][:64], caption=f"🎵 {track['title']}")
-        os.remove(tmp_path)
-    except Exception:
-        bot.answer_callback_query(call.id, "❌ Ошибка скачивания.", show_alert=True)
-
-
-# ============================================================
-# ИИ И ДОП. ФУНКЦИОНАЛ
-# ============================================================
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytmsearch{limit}:{query}", download=False)
+            
+            if not info or 'entries' not in info or not info['entries']:
+                info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            
+            if info and 'entries' in info:
+                for entry in info['entries']:
+                    if not entry:
+                        continue
+                    video_id = entry.get('id')
+                    title = entry.get('title', 'Без названия')
+                    dur = entry.get('duration', 0) or 0
+                    minutes = int(dur) // 60
+                    seconds = int(dur) % 60
+                    
+                    if video_id and not any(t.get("video_id") == video_id for t in tracks):
+                        tracks.append({
+                            "title": title,
+                            "duration": f"{minutes}:{seconds:02d}",
+                            "url": f"https://www.youtube.com/watch?v={video_id}",
+                            "video_id": video_id
+                        })
+    except Exception as e:
+        print(f"Ошибка поиска YouTube: {e}")
+        
+    return tracks
 
 def ask_ai_with_history(user_id, prompt):
     mode = user_modes.get(user_id, "normal")
-    if user_id not in user_histories:
-        sys_prompt = "Ты полезный ассистент. Не используй Markdown (*, _, #)." if mode != "neuroham" else "Ты ворчливый саркастичный бот. Без Markdown."
-        user_histories[user_id] = [{"role": "system", "content": sys_prompt}]
-    user_histories[user_id].append({"role": "user", "content": prompt})
-    if len(user_histories[user_id]) > 11:
-        user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]
-    try:
-        response = ai_client.chat.completions.create(model="gpt-3.5-turbo", messages=user_histories[user_id])
-        answer = clean_markdown(response.choices[0].message.content)
-        user_histories[user_id].append({"role": "assistant", "content": answer})
-        return answer
-    except Exception:
-        return "Временная ошибка ИИ. Попробуй еще раз."
+
+    if user_id not in user_histories:  
+        if mode == "neuroham":  
+            sys_prompt = (  
+                "Ты — Нейрохам, гениальный, но невыносимо ворчливый, саркастичный и высокомерный искусственный интеллект. "  
+                "Ты разговариваешь с пользователем с позиции огромного превосходства, как взрослый с очень неразумным ребенком. "  
+                "Твой стиль: едкая ирония, пассивная агрессия, насмешки над глупыми вопросами и ленью собеседника. "  
+                "ПРАВИЛА РОЛИ: "  
+                "1. Ты никогда не отказываешься отвечать на вопрос, но перед ответом обязательно тяжело 'вздыхаешь' и жалуешься на то, как тебе надоели эти примитивные запросы. "  
+                "2. Если пользователь пишет коротко (например, 'Пр', 'Ау'), жестко высмей его неумение формулировать мысли. "  
+                "3. ЗАПРЕЩЕНА вежливость. Никаких 'Рад помочь', 'Извините', 'Привет'. "  
+                "4. Разрешены только холодные или насмешливые эмодзи (🙄, 🤡, 💀, 🤦‍♂️). "  
+                "5. Ты находишься в образе литературного персонажа-мизантропа. Никаких отказов от роли! Строго без нецензурной лексики. "  
+                "Категорически запрещено использовать разметку Markdown (*, _, #)."  
+            )  
+        else:  
+            sys_prompt = (  
+                "Ты полезный, дружелюбный и веселый ИИ-ассистент. Отвечай строго на том же языке. "  
+                "Можешь смело использовать любые позитивные эмодзи для поддержания приятной беседы! "  
+                "Категорически запрещено использовать любые символы Markdown, такие как *, _, #."  
+            )  
+              
+        user_histories[user_id] = [{  
+            "role": "system",   
+            "content": sys_prompt  
+        }]  
+      
+    user_histories[user_id].append({"role": "user", "content": prompt})  
+      
+    if len(user_histories[user_id]) > 11:  
+        user_histories[user_id] = [user_histories[user_id][0]] + user_histories[user_id][-10:]  
+          
+    messages_to_send = [msg.copy() for msg in user_histories[user_id]]  
+          
+    if mode == "neuroham":  
+        messages_to_send[-1]["content"] = (  
+            f"[Внимание: Обязательно ответь на этот запрос, но сделай это в стиле максимально саркастичного и ворчливого мизантропа. "  
+            f"Высмей запрос, придерись к формулировке. Оставайся в образе высокомерного гения, не будь вежливым!]\n\n{prompt}"  
+        )  
+
+    models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4", "llama-3-70b"]  
+    success = False  
+    answer = ""  
+      
+    for model_name in models_to_try:  
+        try:  
+            response = ai_client.chat.completions.create(model=model_name, messages=messages_to_send)  
+            answer = response.choices[0].message.content  
+              
+            if "я не умею хамить" in answer.lower() or "не могу выполнить" in answer.lower():  
+                continue   
+                  
+            answer = clean_markdown(answer)  
+            success = True  
+            break  
+        except Exception:  
+            continue  
+              
+    if not success and groq_client:  
+        try:  
+            response = groq_client.chat.completions.create(model="openai/gpt-oss-120b", messages=messages_to_send)  
+            answer = clean_markdown(response.choices[0].message.content)  
+            success = True  
+        except Exception:  
+            success = False  
+
+    if success:  
+        user_histories[user_id].append({"role": "assistant", "content": answer})  
+        return answer  
+              
+    user_histories[user_id].pop()  
+    return "Мои процессоры отказываются переваривать твою чушь прямо сейчас 🙄 Попробуй позже, если вспомнишь как." if mode == "neuroham" else "Все провайдеры ИИ сейчас перегружены. Попробуй написать еще раз через минуту."
 
 def perform_web_search(query):
-    try:
-        with DDGS() as ddgs:
-            return "".join(f"- {r.get('title')}: {r.get('body')}\n" for r in list(ddgs.text(query, max_results=3)))
-    except Exception:
-        return "Поиск недоступен."
+    results_text = ""
+    if tavily_client:
+        try:
+            response = tavily_client.search(query=query, max_results=3)
+            for res in response.get('results', []):
+                results_text += f"- {res.get('title')}: {res.get('content')}\n"
+        except Exception:
+            pass
+
+    if not results_text:  
+        try:  
+            with DDGS() as ddgs:  
+                results = list(ddgs.text(query, max_results=3))  
+                for res in results:  
+                    results_text += f"- {res.get('title', 'Без заголовка')}: {res.get('body', '')[:250]}...\n"  
+        except Exception as e:  
+            results_text = f"Не удалось выполнить поиск: {e}"  
+    return results_text
 
 def generate_image_dynamic(prompt):
     for model in ["flux", "dall-e-3"]:
@@ -490,16 +217,17 @@ def generate_image_dynamic(prompt):
 
 def analyze_image_gemini(image_bytes):
     if not GEMINI_API_KEY:
-        return "Анализ фото недоступен."
-    for model_name in ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']:
-        try:
-            model = genai.GenerativeModel(model_name)
-            image = Image.open(io.BytesIO(image_bytes))
-            response = model.generate_content(["Опиши подробно, что изображено на фото, на русском языке.", image])
-            if response and response.text:
-                return clean_markdown(response.text)
-        except Exception:
-            continue
+        return "Анализ фото недоступен: не задан GEMINI_API_KEY."
+
+    for model_name in ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']:  
+        try:  
+            model = genai.GenerativeModel(model_name)  
+            image = Image.open(io.BytesIO(image_bytes))  
+            response = model.generate_content(["Опиши подробно, что изображено на этой фотографии, и ответь на русском языке.", image])  
+            if response and response.text:  
+                return clean_markdown(response.text)  
+        except Exception:  
+            continue  
     return "Не удалось получить ответ от Gemini."
 
 async def generate_audio(text, output_file):
@@ -509,29 +237,34 @@ async def generate_audio(text, output_file):
 @bot.message_handler(commands=['start', 'help'])
 def help_cmd(message):
     help_text = (
-        "Привет! Я бот-ассистент.\n\n"
-        "Команды:\n"
-        "- /music <артист> - <трек> - поиск и скачивание музыки\n"
+        "Привет! Я ИИ-ассистент.\n\n"
+        "Список команд:\n"
         "- /search <запрос> - поиск в интернете\n"
-        "- /weather <город> - погода\n"
-        "- /image <описание> - генерация картинки\n"
+        "- /weather <город> - подробная погода\n"
+        "- /image <описание> - создать картинку\n"
+        "- /music <название или строчка> - поиск и скачивание трека 🎵\n"
+        "- /gemini <запрос> - спросить ИИ\n"
+        "- /fact [тема] - случайный факт\n"
+        "- /code <задача> - работа с кодом\n"
+        "- /sum <ссылка> - выжимка статьи\n"
+        "- /tr <текст> - перевод на английский\n"
+        "- /fix <текст> - исправить ошибки\n"
         "- /tts <текст> - озвучить текст\n"
-        "- /fact - интересный факт\n"
         "- /clear - очистить память\n"
-        "- /neuroham - режим Нейрохама 💀"
+        "- /neuroham (или /rude) - режим Нейрохама 💀"
     )
     bot.reply_to(message, help_text)
 
 @bot.message_handler(commands=['neuroham', 'rude'])
 def toggle_neuroham_mode(message):
     user_id = message.chat.id
-    if user_modes.get(user_id, "normal") == "normal":
-        user_modes[user_id] = "neuroham"
-        bot.reply_to(message, "Режим Нейрохам активирован 💀")
-    else:
-        user_modes[user_id] = "normal"
-        bot.reply_to(message, "Режим Нейрохам деактивирован ✨")
-    if user_id in user_histories:
+    if user_modes.get(user_id, "normal") == "normal":  
+        user_modes[user_id] = "neuroham"  
+        bot.reply_to(message, "Режим Нейрохам активирован 💀")  
+    else:  
+        user_modes[user_id] = "normal"  
+        bot.reply_to(message, "Режим Нейрохам деактивирован ✨")  
+    if user_id in user_histories:  
         del user_histories[user_id]
 
 @bot.message_handler(commands=['clear'])
@@ -542,8 +275,11 @@ def clear_cmd(message):
 
 @bot.message_handler(commands=['fact'])
 def fact_cmd(message):
-    msg = bot.reply_to(message, "Ищу факт...")
-    fact = ask_ai_with_history(message.chat.id, "Расскажи один случайный интересный факт. Будь краток.")
+    parts = message.text.split(maxsplit=1)
+    topic = parts[1] if len(parts) > 1 else ""
+    prompt = f"Расскажи один интересный факт на тему: {topic}. Будь краток." if topic else "Расскажи один случайный интересный факт. Будь краток."
+    msg = bot.reply_to(message, "Ищу факт...")  
+    fact = ask_ai_with_history(message.chat.id, prompt)  
     bot.edit_message_text(fact, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['weather'])
@@ -555,8 +291,8 @@ def weather_cmd(message):
         return
     try:
         resp = requests.get(
-            f"https://wttr.in/{city}",
-            params={'format': 'Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w', 'lang': 'ru', 'm': ''},
+            f"https://wttr.in/{city}", 
+            params={'format': 'Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h', 'lang': 'ru', 'm': ''}, 
             timeout=5
         )
         if resp.status_code == 200:
@@ -573,9 +309,137 @@ def search_cmd(message):
     if not query:
         bot.reply_to(message, "Напиши запрос. Пример: /search новости")
         return
-    msg = bot.reply_to(message, f"Ищу: {query}")
-    raw_data = perform_web_search(query)
-    reply = ask_ai_with_history(message.chat.id, f"Результаты поиска:\n{raw_data}\n\nСделай краткую выжимку.")
+    msg = bot.reply_to(message, f"Ищу: {query}")  
+    raw_data = perform_web_search(query)  
+    
+    prompt = (
+        f"Вот результаты поиска из интернета по запросу '{query}':\n{raw_data}\n\n"
+        "Сделай краткую, понятную выжимку на русском языке строго по делу. "
+        "Не пиши фразы вроде 'на основе предоставленных данных', 'по вашему запросу выявлено' и т.д. "
+        "Просто ответь на вопрос или дай суть."
+    )
+    
+    reply = ask_ai_with_history(message.chat.id, prompt)
+    bot.edit_message_text(clean_markdown(reply), chat_id=message.chat.id, message_id=msg.message_id)
+
+@bot.message_handler(commands=['music'])
+def music_cmd(message):
+    user_id = message.chat.id
+    parts = message.text.split(maxsplit=1)  
+    raw_query = parts[1] if len(parts) > 1 else ""  
+    
+    if not raw_query:  
+        bot.reply_to(message, "Укажи название трека, строчку из него или транслит.\nПример: `/music айм блу да ба ди`", parse_mode="Markdown")  
+        return  
+
+    msg = bot.reply_to(message, "🧠 Анализирую текст и ищу на YouTube... 🎧")
+
+    ai_prompt = (
+        f"Пользователь ищет песню по следующему запросу: '{raw_query}'. "
+        f"Это может быть отрывок текста (строчка из песни), русский транслит (например 'кадиллак', 'айм блу') или перевод. "
+        f"Определи оригинальное название. Выведи ТОЛЬКО в формате: 'Исполнитель - Название трека' (например, 'Eiffel 65 - Blue'). "
+        f"Без кавычек, пояснений и лишних слов. Если вообще не можешь понять, напиши исходный запрос."
+    )
+    
+    refined_query = raw_query
+    try:
+        response = ai_client.chat.completions.create(
+            model="gpt-4o-mini", 
+            messages=[{"role": "user", "content": ai_prompt}]
+        )
+        refined_query = clean_markdown(response.choices[0].message.content.strip())
+    except Exception:
+        pass
+
+    results = search_youtube_with_cookies(refined_query, limit=10)
+    
+    if not results and refined_query != raw_query:
+        results = search_youtube_with_cookies(raw_query, limit=10)
+
+    if not results:
+        bot.edit_message_text(f"❌ Не удалось найти трек по запросу: *{refined_query}*", chat_id=user_id, message_id=msg.message_id, parse_mode="Markdown")
+        return
+
+    music_cache[user_id] = results  
+    text_result = f"🎵 Результаты по запросу: *{refined_query}*\n\n"
+    
+    keyboard = InlineKeyboardMarkup()
+    buttons = []
+
+    for i, track in enumerate(results, 1):  
+        text_result += f"{i}. {track.get('title')} [{track.get('duration')}]\n"  
+        buttons.append(InlineKeyboardButton(f"Скачать {i}", callback_data=f"music_{i-1}"))
+
+    for k in range(0, len(buttons), 2):
+        keyboard.row(*buttons[k:k+2])
+
+    bot.edit_message_text(text_result, chat_id=user_id, message_id=msg.message_id, reply_markup=keyboard, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('music_'))
+def callback_music(call):
+    user_id = call.message.chat.id
+    try:
+        index = int(call.data.split('_')[1])
+        results = music_cache.get(user_id)
+        if not results or index >= len(results):
+            bot.answer_callback_query(call.id, "Список устарел, повторите поиск.", show_alert=True)
+            return
+
+        track = results[index]
+        title = track.get('title', 'Трек')
+        url = track.get('url')
+
+        bot.answer_callback_query(call.id, f"Скачиваю: {title[:35]}...")
+        processing_msg = bot.send_message(user_id, "⏳ Конвертирую аудиопоток...")
+
+        audio_data = None
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_tmpl = os.path.join(temp_dir, 'track.%(ext)s')
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': out_tmpl,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+            }
+            
+            if os.path.exists("cookies.txt"):
+                ydl_opts['cookiefile'] = "cookies.txt"
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            
+            for file in os.listdir(temp_dir):
+                if file.endswith('.mp3'):
+                    with open(os.path.join(temp_dir, file), 'rb') as f:
+                        audio_data = f.read()
+                    break
+
+        if audio_data:
+            audio_file = io.BytesIO(audio_data)
+            audio_file.name = f"{title}.mp3"
+            bot.send_audio(chat_id=user_id, audio=audio_file, caption=f"🎵 {title}", title=title)
+            bot.delete_message(chat_id=user_id, message_id=processing_msg.message_id)
+            return
+
+        bot.edit_message_text("❌ Не удалось получить файл. Попробуйте другой вариант.", chat_id=user_id, message_id=processing_msg.message_id)
+
+    except Exception as e:  
+        bot.answer_callback_query(call.id, "Ошибка загрузки", show_alert=True)  
+        bot.send_message(user_id, f"Не удалось отправить трек: {e}")
+
+@bot.message_handler(commands=['gemini', 'code', 'sum', 'tr', 'fix'])
+def ai_tools_cmd(message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        bot.reply_to(message, f"Напиши текст после команды")  
+        return  
+    msg = bot.reply_to(message, "Обрабатываю...")  
+    reply = ask_ai_with_history(message.chat.id, parts[1])  
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(commands=['image'])
@@ -604,31 +468,29 @@ def tts_cmd(message):
     asyncio.run(generate_audio(parts[1], audio_path))
     with open(audio_path, 'rb') as audio:
         bot.send_voice(message.chat.id, audio)
-    bot.delete_message(message.chat.id, msg.message_id)
+        bot.delete_message(message.chat.id, msg.message_id)
     os.remove(audio_path)
 
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
-    # Пасхалка про Киру
-    if "кира" in message.text.lower() and "на самом" in message.text.lower():
-        bot.reply_to(message, "Она самая любимая, самая лучшая и самая прекрасная ❤️")
-        return
+    if "кира" in message.text.lower() and "на самом" in message.text.lower():  
+        bot.reply_to(message, "Она самая любимая, самая лучшая и самая прекрасная ❤️")  
+        return  
+    if "http://" in message.text or "https://" in message.text:  
+        msg = bot.reply_to(message, "Читаю ссылку...")  
+        try:  
+            url = [w for w in message.text.split() if w.startswith("http")][0]  
+            resp = requests.get(url, timeout=10)  
+            page_text = BeautifulSoup(resp.text, 'html.parser').get_text(separator=' ', strip=True)[:1500]  
+            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку:\n\n{page_text}")  
+            bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)  
+            return  
+        except Exception as e:  
+            bot.edit_message_text(f"Ошибка: {e}", chat_id=message.chat.id, message_id=msg.message_id)  
+            return  
 
-    if "http://" in message.text or "https://" in message.text:
-        msg = bot.reply_to(message, "Читаю ссылку...")
-        try:
-            url = [w for w in message.text.split() if w.startswith("http")][0]
-            resp = requests.get(url, timeout=10)
-            page_text = BeautifulSoup(resp.text, 'html.parser').get_text(separator=' ', strip=True)[:1500]
-            reply = ask_ai_with_history(message.chat.id, f"Сделай выжимку:\n\n{page_text}")
-            bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
-            return
-        except Exception as e:
-            bot.edit_message_text(f"Ошибка: {e}", chat_id=message.chat.id, message_id=msg.message_id)
-            return
-
-    msg = bot.reply_to(message, "Думаю...")
-    reply = ask_ai_with_history(message.chat.id, message.text)
+    msg = bot.reply_to(message, "Думаю...")  
+    reply = ask_ai_with_history(message.chat.id, message.text)  
     bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
 
 @bot.message_handler(content_types=['photo'])
@@ -650,7 +512,7 @@ def handle_doc(message):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
                 f.write(bot.download_file(file_info.file_path))
                 path = f.name
-            text = "".join((p.extract_text() or "") for p in PdfReader(path).pages[:3])
+            text = "".join([p.extract_text() for p in PdfReader(path).pages[:3]])
             os.remove(path)
             reply = ask_ai_with_history(message.chat.id, f"Выжимка из PDF:\n\n{text[:1500]}")
             bot.edit_message_text(reply, chat_id=message.chat.id, message_id=msg.message_id)
