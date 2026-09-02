@@ -25,7 +25,10 @@ static_ffmpeg.add_paths()
 COOKIES_DATA = os.getenv("YOUTUBE_COOKIES")
 if COOKIES_DATA:
     with open("cookies.txt", "w", encoding="utf-8") as f:
-        f.write(COOKIES_DATA)
+        f.write(COOKIES_DATA.strip())
+    print("✅ Файл cookies.txt успешно создан из переменной окружения! Размер:", len(COOKIES_DATA))
+else:
+    print("❌ ВНИМАНИЕ: Переменная YOUTUBE_COOKIES не найдена или пуста!")
 
 try:
     from tavily import TavilyClient
@@ -65,14 +68,15 @@ def clean_markdown(text):
         return ""
     return re.sub(r'[*_#]', '', text)
 
-# --- ИЗМЕНЕННЫЙ ПОИСК МУЗЫКИ (ЧЕРЕЗ YOUTUBE С КУКИ И ИИ-РАСПОЗНАВАНИЕМ) ---
+# --- ПОИСК МУЗЫКИ С МОБИЛЬНЫМ КЛИЕНТОМ И ЛОГИРОВАНИЕМ ---
 
 def search_youtube_with_cookies(query, limit=10):
     tracks = []
     ydl_opts = {
         'extract_flat': True,
         'skip_download': True,
-        'quiet': True,
+        'quiet': False,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
     
     if os.path.exists("cookies.txt"):
@@ -80,9 +84,11 @@ def search_youtube_with_cookies(query, limit=10):
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print(f"🔍 Ищем в YouTube Music по запросу: {query}")
             info = ydl.extract_info(f"ytmsearch{limit}:{query}", download=False)
             
             if not info or 'entries' not in info or not info['entries']:
+                print("🔄 В Music ничего не найдено, пробуем обычный YouTube...")
                 info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
             
             if info and 'entries' in info:
@@ -103,8 +109,9 @@ def search_youtube_with_cookies(query, limit=10):
                             "video_id": video_id
                         })
     except Exception as e:
-        print(f"Ошибка поиска YouTube: {e}")
+        print(f"❌ Ошибка поиска YouTube: {e}")
         
+    print(f"✅ Найдено треков: {len(tracks)}")
     return tracks
 
 def ask_ai_with_history(user_id, prompt):
@@ -405,6 +412,7 @@ def callback_music(call):
                     'preferredquality': '192',
                 }],
                 'quiet': True,
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
             }
             
             if os.path.exists("cookies.txt"):
