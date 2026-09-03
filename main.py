@@ -4,6 +4,7 @@ import io
 import asyncio
 import threading
 import tempfile
+import time
 
 import telebot
 import requests
@@ -181,14 +182,12 @@ def ask_ai_with_history(user_id, prompt):
             }
         ]
 
-
     user_histories[user_id].append(
         {
             "role": "user",
             "content": prompt
         }
     )
-
 
     # Максимум 10 последних сообщений
     if len(user_histories[user_id]) > 11:
@@ -199,12 +198,10 @@ def ask_ai_with_history(user_id, prompt):
             user_histories[user_id][-10:]
         )
 
-
     messages_to_send = [
         msg.copy()
         for msg in user_histories[user_id]
     ]
-
 
     if mode == "neuroham":
 
@@ -215,7 +212,6 @@ def ask_ai_with_history(user_id, prompt):
             + prompt
         )
 
-
     models_to_try = [
         "gpt-3.5-turbo",
         "gpt-4o-mini",
@@ -223,10 +219,8 @@ def ask_ai_with_history(user_id, prompt):
         "llama-3-70b"
     ]
 
-
     success = False
     answer = ""
-
 
     # --------------------------------------------------------
     # G4F
@@ -248,10 +242,8 @@ def ask_ai_with_history(user_id, prompt):
                 .content
             )
 
-
             if not answer:
                 continue
-
 
             answer = clean_markdown(answer)
 
@@ -259,13 +251,11 @@ def ask_ai_with_history(user_id, prompt):
 
             break
 
-
         except Exception as e:
 
             print(
                 f"⚠️ AI {model_name}: {e}"
             )
-
 
     # --------------------------------------------------------
     # Groq fallback
@@ -289,13 +279,11 @@ def ask_ai_with_history(user_id, prompt):
 
             success = True
 
-
         except Exception as e:
 
             print(
                 f"⚠️ Groq ошибка: {e}"
             )
-
 
     # --------------------------------------------------------
     # Успех
@@ -312,13 +300,11 @@ def ask_ai_with_history(user_id, prompt):
 
         return answer
 
-
     # --------------------------------------------------------
     # Ошибка
     # --------------------------------------------------------
 
     user_histories[user_id].pop()
-
 
     if mode == "neuroham":
 
@@ -326,7 +312,6 @@ def ask_ai_with_history(user_id, prompt):
             "Мои процессоры сейчас не хотят "
             "переваривать этот запрос 🙄"
         )
-
 
     return (
         "Все провайдеры ИИ сейчас перегружены. "
@@ -342,53 +327,38 @@ def is_kira_question(text):
 
     normalized = text.lower().strip()
 
-    # Убираем знаки препинания
     normalized = re.sub(
         r"[^\w\s]",
         " ",
         normalized
     )
 
-    # Убираем лишние пробелы
     normalized = re.sub(
         r"\s+",
         " ",
         normalized
     ).strip()
 
-
     patterns = [
 
         r"\bкто такая кира\b",
-
         r"\bкто такая кира\b.*",
-
         r"\bа кто такая кира\b",
-
         r"\bрасскажи про киру\b",
-
         r"\bрасскажи кто такая кира\b",
-
         r"\bчто за кира\b",
-
         r"\bкто кира\b",
-
         r"\bкира кто\b",
-
         r"\bа кира кто\b",
-
         r"\bможешь рассказать про киру\b",
-
         r"\bможешь рассказать кто такая кира\b"
 
     ]
-
 
     for pattern in patterns:
 
         if re.search(pattern, normalized):
             return True
-
 
     return False
 
@@ -423,14 +393,12 @@ def generate_kira_text():
 "Кира — это..."
 """
 
-
     models_to_try = [
         "gpt-4o-mini",
         "gpt-3.5-turbo",
         "gpt-4",
         "llama-3-70b"
     ]
-
 
     for model_name in models_to_try:
 
@@ -454,7 +422,6 @@ def generate_kira_text():
                 ]
             )
 
-
             answer = (
                 response
                 .choices[0]
@@ -462,20 +429,17 @@ def generate_kira_text():
                 .content
             )
 
-
             if answer:
 
                 return clean_markdown(
                     answer.strip()
                 )
 
-
         except Exception as e:
 
             print(
                 f"⚠️ Kira AI {model_name}: {e}"
             )
-
 
     # --------------------------------------------------------
     # Groq fallback
@@ -503,7 +467,6 @@ def generate_kira_text():
                 ]
             )
 
-
             answer = (
                 response
                 .choices[0]
@@ -511,20 +474,17 @@ def generate_kira_text():
                 .content
             )
 
-
             if answer:
 
                 return clean_markdown(
                     answer.strip()
                 )
 
-
         except Exception as e:
 
             print(
                 f"⚠️ Groq Kira ошибка: {e}"
             )
-
 
     # --------------------------------------------------------
     # Финальный fallback
@@ -548,7 +508,6 @@ def perform_web_search(query):
 
     results_text = ""
 
-
     # --------------------------------------------------------
     # Tavily
     # --------------------------------------------------------
@@ -561,7 +520,6 @@ def perform_web_search(query):
                 query=query,
                 max_results=3
             )
-
 
             for res in response.get(
                 "results",
@@ -582,13 +540,11 @@ def perform_web_search(query):
                     f"- {title}: {content}\n"
                 )
 
-
         except Exception as e:
 
             print(
                 f"⚠️ Tavily ошибка: {e}"
             )
-
 
     # --------------------------------------------------------
     # DuckDuckGo fallback
@@ -609,7 +565,6 @@ def perform_web_search(query):
                     )
                 )
 
-
                 for res in results:
 
                     results_text += (
@@ -618,13 +573,11 @@ def perform_web_search(query):
                         f"{res.get('body', '')[:250]}...\n"
                     )
 
-
         except Exception as e:
 
             results_text = (
                 f"Не удалось выполнить поиск: {e}"
             )
-
 
     return results_text
 
@@ -648,9 +601,7 @@ def generate_image_dynamic(prompt):
                 response_format="url"
             )
 
-
             image_url = response.data[0].url
-
 
             if image_url:
 
@@ -659,17 +610,14 @@ def generate_image_dynamic(prompt):
                     timeout=25
                 )
 
-
                 if r.status_code == 200:
                     return r.content
-
 
         except Exception as e:
 
             print(
                 f"⚠️ Генерация {model}: {e}"
             )
-
 
     return None
 
@@ -687,7 +635,6 @@ def analyze_image_gemini(image_bytes):
             "не задан GEMINI_API_KEY."
         )
 
-
     for model_name in [
         "gemini-2.5-flash",
         "gemini-1.5-flash",
@@ -700,11 +647,9 @@ def analyze_image_gemini(image_bytes):
                 model_name
             )
 
-
             image = Image.open(
                 io.BytesIO(image_bytes)
             )
-
 
             response = model.generate_content(
                 [
@@ -717,20 +662,17 @@ def analyze_image_gemini(image_bytes):
                 ]
             )
 
-
             if response and response.text:
 
                 return clean_markdown(
                     response.text
                 )
 
-
         except Exception as e:
 
             print(
                 f"⚠️ Gemini {model_name}: {e}"
             )
-
 
     return (
         "Не удалось получить ответ от Gemini."
@@ -784,7 +726,6 @@ def help_cmd(message):
         "/neuroham — режим Нейрохама 💀"
     )
 
-
     bot.reply_to(
         message,
         help_text
@@ -807,7 +748,6 @@ def toggle_neuroham_mode(message):
         "normal"
     )
 
-
     if current_mode == "normal":
 
         user_modes[user_id] = "neuroham"
@@ -817,7 +757,6 @@ def toggle_neuroham_mode(message):
             "Режим Нейрохам активирован 💀"
         )
 
-
     else:
 
         user_modes[user_id] = "normal"
@@ -826,7 +765,6 @@ def toggle_neuroham_mode(message):
             message,
             "Режим Нейрохам деактивирован ✨"
         )
-
 
     if user_id in user_histories:
 
@@ -844,11 +782,9 @@ def clear_cmd(message):
 
     user_id = message.chat.id
 
-
     if user_id in user_histories:
 
         del user_histories[user_id]
-
 
     bot.reply_to(
         message,
@@ -869,13 +805,11 @@ def fact_cmd(message):
         maxsplit=1
     )
 
-
     topic = (
         parts[1]
         if len(parts) > 1
         else ""
     )
-
 
     if topic:
 
@@ -892,18 +826,15 @@ def fact_cmd(message):
             "интересный факт. Будь краток."
         )
 
-
     msg = bot.reply_to(
         message,
         "Ищу факт..."
     )
 
-
     fact = ask_ai_with_history(
         message.chat.id,
         prompt
     )
-
 
     bot.edit_message_text(
         fact,
@@ -925,13 +856,11 @@ def weather_cmd(message):
         maxsplit=1
     )
 
-
     city = (
         parts[1]
         if len(parts) > 1
         else ""
     )
-
 
     if not city:
 
@@ -941,7 +870,6 @@ def weather_cmd(message):
         )
 
         return
-
 
     try:
 
@@ -963,7 +891,6 @@ def weather_cmd(message):
             timeout=8
         )
 
-
         if resp.status_code == 200:
 
             bot.reply_to(
@@ -974,14 +901,12 @@ def weather_cmd(message):
                 )
             )
 
-
         else:
 
             bot.reply_to(
                 message,
                 "Город не найден."
             )
-
 
     except Exception as e:
 
@@ -1004,13 +929,11 @@ def search_cmd(message):
         maxsplit=1
     )
 
-
     query = (
         parts[1]
         if len(parts) > 1
         else ""
     )
-
 
     if not query:
 
@@ -1022,17 +945,14 @@ def search_cmd(message):
 
         return
 
-
     msg = bot.reply_to(
         message,
         f"Ищу: {query}"
     )
 
-
     raw_data = perform_web_search(
         query
     )
-
 
     prompt = (
         f"Вот результаты поиска из интернета "
@@ -1044,12 +964,10 @@ def search_cmd(message):
         "Отвечай по делу."
     )
 
-
     reply = ask_ai_with_history(
         message.chat.id,
         prompt
     )
-
 
     bot.edit_message_text(
         clean_markdown(reply),
@@ -1077,7 +995,6 @@ def ai_tools_cmd(message):
         maxsplit=1
     )
 
-
     if len(parts) < 2:
 
         bot.reply_to(
@@ -1087,18 +1004,15 @@ def ai_tools_cmd(message):
 
         return
 
-
     msg = bot.reply_to(
         message,
         "Обрабатываю..."
     )
 
-
     reply = ask_ai_with_history(
         message.chat.id,
         parts[1]
     )
-
 
     bot.edit_message_text(
         reply,
@@ -1120,13 +1034,11 @@ def image_cmd(message):
         maxsplit=1
     )
 
-
     prompt = (
         parts[1]
         if len(parts) > 1
         else ""
     )
-
 
     if not prompt:
 
@@ -1138,17 +1050,14 @@ def image_cmd(message):
 
         return
 
-
     msg = bot.reply_to(
         message,
         "Генерирую..."
     )
 
-
     img_bytes = generate_image_dynamic(
         prompt
     )
-
 
     if img_bytes:
 
@@ -1158,12 +1067,10 @@ def image_cmd(message):
             caption=f"Запрос: {prompt}"
         )
 
-
         bot.delete_message(
             message.chat.id,
             msg.message_id
         )
-
 
     else:
 
@@ -1187,7 +1094,6 @@ def tts_cmd(message):
         maxsplit=1
     )
 
-
     if len(parts) < 2:
 
         bot.reply_to(
@@ -1197,17 +1103,14 @@ def tts_cmd(message):
 
         return
 
-
     msg = bot.reply_to(
         message,
         "Озвучиваю..."
     )
 
-
     audio_path = tempfile.mktemp(
         suffix=".mp3"
     )
-
 
     try:
 
@@ -1217,7 +1120,6 @@ def tts_cmd(message):
                 audio_path
             )
         )
-
 
         with open(
             audio_path,
@@ -1229,12 +1131,10 @@ def tts_cmd(message):
                 audio
             )
 
-
         bot.delete_message(
             message.chat.id,
             msg.message_id
         )
-
 
     except Exception as e:
 
@@ -1243,7 +1143,6 @@ def tts_cmd(message):
             chat_id=message.chat.id,
             message_id=msg.message_id
         )
-
 
     finally:
 
@@ -1273,7 +1172,6 @@ def handle_text(message):
 
     text_lower = text.lower()
 
-
     # ========================================================
     # ПАСХАЛКА КИРА
     # ========================================================
@@ -1285,11 +1183,9 @@ def handle_text(message):
             "✨ Думаю, как лучше рассказать о Кире..."
         )
 
-
         try:
 
             kira_text = generate_kira_text()
-
 
             bot.edit_message_text(
                 kira_text,
@@ -1297,13 +1193,11 @@ def handle_text(message):
                 message_id=msg.message_id
             )
 
-
         except Exception as e:
 
             print(
                 f"❌ Ошибка пасхалки Кира: {e}"
             )
-
 
             bot.edit_message_text(
                 (
@@ -1318,9 +1212,7 @@ def handle_text(message):
                 message_id=msg.message_id
             )
 
-
         return
-
 
     # ========================================================
     # URL
@@ -1336,7 +1228,6 @@ def handle_text(message):
             "Читаю ссылку..."
         )
 
-
         try:
 
             urls = [
@@ -1345,16 +1236,13 @@ def handle_text(message):
                 if word.startswith("http")
             ]
 
-
             if not urls:
 
                 raise ValueError(
                     "Ссылка не найдена"
                 )
 
-
             url = urls[0]
-
 
             resp = requests.get(
                 url,
@@ -1365,18 +1253,15 @@ def handle_text(message):
                 }
             )
 
-
             soup = BeautifulSoup(
                 resp.text,
                 "html.parser"
             )
 
-
             page_text = soup.get_text(
                 separator=" ",
                 strip=True
             )[:5000]
-
 
             reply = ask_ai_with_history(
                 message.chat.id,
@@ -1386,16 +1271,13 @@ def handle_text(message):
                 + page_text
             )
 
-
             bot.edit_message_text(
                 reply,
                 chat_id=message.chat.id,
                 message_id=msg.message_id
             )
 
-
             return
-
 
         except Exception as e:
 
@@ -1407,7 +1289,6 @@ def handle_text(message):
 
             return
 
-
     # ========================================================
     # Обычный текст
     # ========================================================
@@ -1417,12 +1298,10 @@ def handle_text(message):
         "Думаю..."
     )
 
-
     reply = ask_ai_with_history(
         message.chat.id,
         message.text
     )
-
 
     bot.edit_message_text(
         reply,
@@ -1445,30 +1324,25 @@ def handle_photo(message):
         "Изучаю фото..."
     )
 
-
     try:
 
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
 
-
         image_bytes = bot.download_file(
             file_info.file_path
         )
 
-
         answer = analyze_image_gemini(
             image_bytes
         )
-
 
         bot.edit_message_text(
             answer,
             chat_id=message.chat.id,
             message_id=msg.message_id
         )
-
 
     except Exception as e:
 
@@ -1498,15 +1372,12 @@ def handle_doc(message):
 
         return
 
-
     msg = bot.reply_to(
         message,
         "Читаю PDF..."
     )
 
-
     path = None
-
 
     try:
 
@@ -1514,11 +1385,9 @@ def handle_doc(message):
             message.document.file_id
         )
 
-
         file_data = bot.download_file(
             file_info.file_path
         )
-
 
         with tempfile.NamedTemporaryFile(
             delete=False,
@@ -1528,19 +1397,15 @@ def handle_doc(message):
             f.write(file_data)
             path = f.name
 
-
         reader = PdfReader(
             path
         )
 
-
         extracted_pages = []
-
 
         for page in reader.pages[:5]:
 
             page_text = page.extract_text()
-
 
             if page_text:
 
@@ -1548,18 +1413,15 @@ def handle_doc(message):
                     page_text
                 )
 
-
         text = "\n".join(
             extracted_pages
         )
-
 
         if not text.strip():
 
             raise ValueError(
                 "Не удалось извлечь текст из PDF."
             )
-
 
         reply = ask_ai_with_history(
             message.chat.id,
@@ -1569,13 +1431,11 @@ def handle_doc(message):
             + text[:6000]
         )
 
-
         bot.edit_message_text(
             reply,
             chat_id=message.chat.id,
             message_id=msg.message_id
         )
-
 
     except Exception as e:
 
@@ -1584,7 +1444,6 @@ def handle_doc(message):
             chat_id=message.chat.id,
             message_id=msg.message_id
         )
-
 
     finally:
 
@@ -1620,7 +1479,6 @@ if __name__ == "__main__":
         daemon=True
     ).start()
 
-
     # --------------------------------------------------------
     # Telegram
     # --------------------------------------------------------
@@ -1629,9 +1487,24 @@ if __name__ == "__main__":
         "🤖 Telegram polling запущен"
     )
 
+    while True:
 
-    bot.infinity_polling(
-        skip_pending=True,
-        timeout=30,
-        long_polling_timeout=30
-    )
+        try:
+
+            bot.infinity_polling(
+                skip_pending=True,
+                timeout=30,
+                long_polling_timeout=30
+            )
+
+        except Exception as e:
+
+            print(
+                f"⚠️ Telegram polling остановлен: {e}"
+            )
+
+            print(
+                "🔄 Повторное подключение через 5 секунд..."
+            )
+
+            time.sleep(5)
