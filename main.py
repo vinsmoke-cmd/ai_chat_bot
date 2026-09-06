@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import html
 import asyncio
 import threading
 import tempfile
@@ -8,6 +9,8 @@ import time
 
 import telebot
 import requests
+
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from flask import Flask
 from bs4 import BeautifulSoup
@@ -109,12 +112,12 @@ user_modes = {}
 
 
 # ============================================================
-# НАСТРОЙКИ ДЛИННЫХ ОТВЕТОВ
+# НАСТРОЙКИ ОТВЕТОВ
 # ============================================================
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 
-# Примерно в 10 раз больше стандартного лимита Telegram.
+# Максимальный размер одного ответа ИИ.
 AI_MAX_RESPONSE_LENGTH = 40000
 
 
@@ -147,7 +150,7 @@ def run_web():
 
 
 # ============================================================
-# Markdown cleaner
+# MARKDOWN CLEANER
 # ============================================================
 
 def clean_markdown(text):
@@ -183,15 +186,12 @@ def split_long_message(
 
     while len(text) > max_length:
 
-        # Сначала ищем перенос строки
         split_pos = text.rfind(
             "\n",
             0,
             max_length
         )
 
-        # Если перенос слишком далеко —
-        # ищем обычный пробел
         if split_pos < max_length // 2:
 
             split_pos = text.rfind(
@@ -200,10 +200,7 @@ def split_long_message(
                 max_length
             )
 
-        # Если подходящей точки нет —
-        # режем принудительно
         if split_pos <= 0:
-
             split_pos = max_length
 
         part = text[
@@ -224,10 +221,233 @@ def split_long_message(
 
 
 # ============================================================
-# ОТПРАВКА ДЛИННОГО ОТВЕТА
+# ИЗВЛЕЧЕНИЕ КОДОВЫХ БЛОКОВ
 # ============================================================
 
-def send_long_message(
+def extract_code_blocks(text):
+
+    if not text:
+        return []
+
+    text = str(text)
+
+    pattern = (
+        r"```"
+        r"(?:([a-zA-Z0-9_+#.-]+))?"
+        r"\s*\n?"
+        r"(.*?)"
+        r"```"
+    )
+
+    matches = list(
+        re.finditer(
+            pattern,
+            text,
+            flags=re.DOTALL
+        )
+    )
+
+    if not matches:
+
+        return [
+            {
+                "type": "text",
+                "content": text
+            }
+        ]
+
+    parts = []
+
+    last_end = 0
+
+    for match in matches:
+
+        before = text[
+            last_end:
+            match.start()
+        ]
+
+        if before.strip():
+
+            parts.append(
+                {
+                    "type": "text",
+                    "content": before.strip()
+                }
+            )
+
+        language = (
+            match.group(1)
+            or ""
+        ).strip()
+
+        code = (
+            match.group(2)
+            or ""
+        ).strip()
+
+        parts.append(
+            {
+                "type": "code",
+                "language": language,
+                "content": code
+            }
+        )
+
+        last_end = match.end()
+
+    after = text[
+        last_end:
+    ]
+
+    if after.strip():
+
+        parts.append(
+            {
+                "type": "text",
+                "content": after.strip()
+            }
+        )
+
+    return parts
+
+
+# ============================================================
+# КНОПКА КОПИРОВАНИЯ
+# ============================================================
+
+def create_copy_keyboard(text):
+
+    keyboard = InlineKeyboardMarkup()
+
+    # Telegram ограничивает copy_text 256 символами.
+    # Для больших кодов сама рамка остаётся
+    # удобной для копирования целиком через Telegram.
+    if len(text) <= 256:
+
+        keyboard.add(
+            InlineKeyboardButton(
+                text="📋 Скопировать",
+                copy_text={
+                    "text": text
+                }
+            )
+        )
+
+    return keyboard
+
+
+# ============================================================
+# ОТПРАВКА КОДА
+# ============================================================
+
+def send_code_block(
+    chat_id,
+    code,
+    language="",
+    reply_to_message_id=None
+):
+
+    if not code:
+        return None
+
+    safe_code = html.escape(
+        code,
+        quote=False
+    )
+
+    language = re.sub(
+        r"[^a-zA-Z0-9_+#.-]",
+        "",
+        language
+    )
+
+    if language:
+
+        formatted = (
+            "<pre><code class=\"language-"
+            + language
+            + "\">"
+            + safe_code
+            + "</code></pre>"
+        )
+
+    else:
+
+        formatted = (
+            "<pre><code>"
+            + safe_code
+            + "</code></pre>"
+        )
+
+    keyboard = None
+
+    if len(code) <= 256:
+
+        keyboard = create_copy_keyboard(
+            code
+        )
+
+    try:
+
+        kwargs = {
+            "chat_id": chat_id,
+            "text": formatted,
+            "parse_mode": "HTML"
+        }
+
+        if reply_to_message_id:
+            kwargs[
+                "reply_to_message_id"
+            ] = reply_to_message_id
+
+        if keyboard:
+            kwargs[
+                "reply_markup"
+            ] = keyboard
+
+        return bot.send_message(
+            **kwargs
+        )
+
+    except Exception as e:
+
+        print(
+            f"⚠️ Ошибка отправки "
+            f"кодового блока: {e}"
+        )
+
+        try:
+
+            kwargs = {
+                "chat_id": chat_id,
+                "text": code
+            }
+
+            if reply_to_message_id:
+
+                kwargs[
+                    "reply_to_message_id"
+                ] = reply_to_message_id
+
+            return bot.send_message(
+                **kwargs
+            )
+
+        except Exception as e2:
+
+            print(
+                f"⚠️ Ошибка fallback кода: {e2}"
+            )
+
+    return None
+
+
+# ============================================================
+# ОТПРАВКА ОТВЕТА ИИ
+# ============================================================
+
+def send_ai_response(
     chat_id,
     text,
     reply_to_message_id=None
@@ -238,7 +458,6 @@ def send_long_message(
 
     text = str(text)
 
-    # Защита от бесконечно огромных ответов
     if len(text) > AI_MAX_RESPONSE_LENGTH:
 
         text = (
@@ -249,52 +468,113 @@ def send_long_message(
             "из-за максимального размера.]"
         )
 
-    parts = split_long_message(text)
+    parts = extract_code_blocks(
+        text
+    )
 
     sent_messages = []
 
-    for index, part in enumerate(parts):
+    first_message = True
 
-        try:
+    for part in parts:
 
-            if (
-                index == 0
-                and reply_to_message_id
-            ):
+        content = part.get(
+            "content",
+            ""
+        )
 
-                sent = bot.send_message(
+        if not content:
+            continue
+
+        # ====================================================
+        # КОД
+        # ====================================================
+
+        if part["type"] == "code":
+
+            code_parts = split_long_message(
+                content,
+                max_length=3500
+            )
+
+            for code_part in code_parts:
+
+                reply_id = (
+                    reply_to_message_id
+                    if first_message
+                    else None
+                )
+
+                sent = send_code_block(
                     chat_id,
-                    part,
-                    reply_to_message_id=(
-                        reply_to_message_id
+                    code_part,
+                    language=part.get(
+                        "language",
+                        ""
+                    ),
+                    reply_to_message_id=reply_id
+                )
+
+                if sent:
+                    sent_messages.append(
+                        sent
                     )
-                )
 
-            else:
+                first_message = False
 
-                sent = bot.send_message(
-                    chat_id,
-                    part
-                )
+        # ====================================================
+        # ОБЫЧНЫЙ ТЕКСТ
+        # ====================================================
 
-            sent_messages.append(
-                sent
+        else:
+
+            text_parts = split_long_message(
+                content
             )
 
-        except Exception as e:
+            for text_part in text_parts:
 
-            print(
-                "⚠️ Ошибка отправки "
-                f"части сообщения: {e}"
-            )
+                reply_id = (
+                    reply_to_message_id
+                    if first_message
+                    else None
+                )
 
-            break
+                try:
+
+                    kwargs = {
+                        "chat_id": chat_id,
+                        "text": text_part
+                    }
+
+                    if reply_id:
+
+                        kwargs[
+                            "reply_to_message_id"
+                        ] = reply_id
+
+                    sent = bot.send_message(
+                        **kwargs
+                    )
+
+                    sent_messages.append(
+                        sent
+                    )
+
+                except Exception as e:
+
+                    print(
+                        f"⚠️ Ошибка отправки "
+                        f"текста: {e}"
+                    )
+
+                first_message = False
 
     return sent_messages
 
 
 # ============================================================
-# УНИВЕРСАЛЬНОЕ РЕДАКТИРОВАНИЕ ОТВЕТА
+# УНИВЕРСАЛЬНАЯ ОТПРАВКА
 # ============================================================
 
 def edit_or_send_long(
@@ -308,9 +588,12 @@ def edit_or_send_long(
 
     text = str(text)
 
-    # Если ответ помещается в одно сообщение —
-    # сохраняем старое поведение edit_message_text()
-    if len(text) <= TELEGRAM_MESSAGE_LIMIT - 100:
+    # Если нет кода и ответ короткий —
+    # оставляем старое поведение.
+    if (
+        "```" not in text
+        and len(text) <= TELEGRAM_MESSAGE_LIMIT - 100
+    ):
 
         try:
 
@@ -325,15 +608,12 @@ def edit_or_send_long(
         except Exception as e:
 
             print(
-                f"⚠️ Не удалось изменить сообщение: {e}"
+                f"⚠️ Не удалось "
+                f"изменить сообщение: {e}"
             )
 
-            # Если Telegram всё-таки не разрешил редактирование,
-            # отправляем обычное сообщение.
-
-    # Длинный ответ нельзя запихнуть в edit_message_text(),
-    # поэтому удаляем сообщение "Думаю..." / "Ищу..." и
-    # отправляем ответ частями.
+    # Длинный ответ или код:
+    # удаляем "Думаю..." и отправляем красиво.
 
     try:
 
@@ -345,10 +625,11 @@ def edit_or_send_long(
     except Exception as e:
 
         print(
-            f"⚠️ Не удалось удалить сообщение: {e}"
+            f"⚠️ Не удалось удалить "
+            f"временное сообщение: {e}"
         )
 
-    send_long_message(
+    send_ai_response(
         chat_id,
         text
     )
@@ -381,7 +662,7 @@ def ask_ai_with_history(
                 "Ты разговариваешь с пользователем "
                 "с позиции огромного превосходства. "
 
-                "Твой стиль — едкая ирония, "
+                "Твой стиль: едкая ирония, "
                 "пассивная агрессия и насмешки "
                 "над глупыми вопросами. "
 
@@ -411,7 +692,7 @@ def ask_ai_with_history(
         ]
 
     # ========================================================
-    # ОПРЕДЕЛЕНИЕ ЗАПРОСА НА КОД
+    # ОПРЕДЕЛЕНИЕ КОДИНГА
     # ========================================================
 
     coding_keywords = [
@@ -477,7 +758,7 @@ def ask_ai_with_history(
     )
 
     # ========================================================
-    # ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ ДЛЯ КОДИНГА
+    # ИНСТРУКЦИЯ ДЛЯ КОДА
     # ========================================================
 
     if is_coding_request:
@@ -491,43 +772,42 @@ def ask_ai_with_history(
             "и подробно.\n"
 
             "Если пользователь просит написать код, "
-            "предоставляй полноценный код, а не "
-            "маленький фрагмент, если полноценный "
-            "вариант возможен.\n"
+            "предоставляй полноценный код.\n"
 
-            "Не сокращай большие участки кода "
-            "без необходимости.\n"
+            "Если пользователь просит полный готовый "
+            "код — не заменяй части словами "
+            "\"остальной код без изменений\".\n"
 
-            "Не используй фразы вроде "
-            "\"остальной код без изменений\", "
-            "если пользователь явно просит "
-            "полный готовый код.\n"
-
-            "Не заменяй код многоточиями.\n"
+            "Не используй многоточия вместо частей "
+            "кода.\n"
 
             "Если пользователь прислал существующий "
-            "проект и просит внести изменение, "
-            "сохраняй его существующие функции, "
-            "если пользователь отдельно не попросил "
-            "их удалить.\n"
+            "проект и просит изменить конкретную часть, "
+            "сохраняй остальные функции, если он "
+            "не попросил их удалить.\n"
 
             "Учитывай импорты, зависимости, "
-            "обработчики, функции, переменные "
-            "окружения и связи между частями проекта.\n"
+            "переменные окружения, функции, "
+            "обработчики и связи между компонентами.\n"
 
-            "Если исправляешь ошибку, постарайся "
-            "исправить причину ошибки, а не только "
-            "скрыть её.\n"
+            "Если исправляешь ошибку, исправляй "
+            "причину проблемы, а не просто скрывай её.\n"
 
-            "Если требуется несколько файлов, "
-            "чётко разделяй их.\n"
+            "Большие фрагменты кода разрешено "
+            "выдавать полностью.\n"
 
-            "Если требуется большой код, "
-            "не обрывай ответ только потому, "
-            "что он получился длинным.\n"
+            "Код оформляй внутри Markdown-кодовых "
+            "блоков с тройными обратными кавычками.\n"
 
-            "Приоритет — рабочий и законченный "
-            "результат."
+            "По возможности указывай язык после "
+            "первых трёх обратных кавычек, например:\n\n"
+
+            "```python\n"
+            "print('hello')\n"
+            "```\n\n"
+
+            "Не помещай весь ответ в один кодовый блок, "
+            "если в нём есть обычное объяснение."
         )
 
         effective_prompt = (
@@ -555,12 +835,6 @@ def ask_ai_with_history(
     # УВЕЛИЧЕННАЯ ПАМЯТЬ
     # ========================================================
 
-    # Было:
-    # system + 10 сообщений
-    #
-    # Теперь:
-    # system + 20 последних сообщений
-
     if len(user_histories[user_id]) > 21:
 
         user_histories[user_id] = (
@@ -583,13 +857,13 @@ def ask_ai_with_history(
         messages_to_send[-1]["content"] = (
             "[Ответь в стиле саркастичного "
             "и ворчливого мизантропа. "
-            "Без мата и без Markdown.]\n\n"
+            "Без мата.]\n\n"
             +
             messages_to_send[-1]["content"]
         )
 
     # ========================================================
-    # МОДЕЛИ
+    # G4F MODELS
     # ========================================================
 
     models_to_try = [
@@ -630,9 +904,12 @@ def ask_ai_with_history(
             if not answer:
                 continue
 
-            answer = clean_markdown(
+            # ВАЖНО:
+            # Здесь НЕ удаляем ``` из ответа.
+            # Они нужны для определения кода.
+            answer = str(
                 answer
-            )
+            ).strip()
 
             success = True
 
@@ -665,14 +942,20 @@ def ask_ai_with_history(
                 )
             )
 
-            answer = clean_markdown(
+            answer = (
                 response
                 .choices[0]
                 .message
                 .content
             )
 
-            success = True
+            if answer:
+
+                answer = str(
+                    answer
+                ).strip()
+
+                success = True
 
         except Exception as e:
 
@@ -835,9 +1118,9 @@ def generate_kira_text():
 
             if answer:
 
-                return clean_markdown(
-                    answer.strip()
-                )
+                return str(
+                    answer
+                ).strip()
 
         except Exception as e:
 
@@ -885,19 +1168,15 @@ def generate_kira_text():
 
             if answer:
 
-                return clean_markdown(
-                    answer.strip()
-                )
+                return str(
+                    answer
+                ).strip()
 
         except Exception as e:
 
             print(
                 f"⚠️ Groq Kira ошибка: {e}"
             )
-
-    # ========================================================
-    # ФИНАЛЬНЫЙ FALLBACK
-    # ========================================================
 
     return (
         "Кира — это человек, рядом с которым "
@@ -1083,9 +1362,9 @@ def analyze_image_gemini(
                 and response.text
             ):
 
-                return clean_markdown(
+                return str(
                     response.text
-                )
+                ).strip()
 
         except Exception as e:
 
@@ -1323,9 +1602,7 @@ def weather_cmd(message):
             bot.reply_to(
                 message,
                 "Сводка:\n\n"
-                + clean_markdown(
-                    resp.text.strip()
-                )
+                + resp.text.strip()
             )
 
         else:
@@ -1399,7 +1676,7 @@ def search_cmd(message):
     edit_or_send_long(
         message.chat.id,
         msg.message_id,
-        clean_markdown(reply)
+        reply
     )
 
 
@@ -1717,7 +1994,7 @@ def handle_text(message):
             return
 
     # ========================================================
-    # Обычный текст
+    # ОБЫЧНЫЙ ТЕКСТ
     # ========================================================
 
     msg = bot.reply_to(
@@ -1825,7 +2102,6 @@ def handle_doc(message):
         ) as f:
 
             f.write(file_data)
-
             path = f.name
 
         reader = PdfReader(
@@ -1918,11 +2194,15 @@ if __name__ == "__main__":
     )
 
     print(
-        "💻 Увеличенный режим кодинга включён"
+        "💻 Расширенный режим программирования включён"
     )
 
     print(
-        "📨 Поддержка длинных ответов включена"
+        "📨 Длинные ответы включены"
+    )
+
+    print(
+        "📋 Кодовые блоки с копированием включены"
     )
 
     # ========================================================
