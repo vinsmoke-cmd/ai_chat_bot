@@ -10,8 +10,6 @@ import time
 import telebot
 import requests
 
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
 from flask import Flask
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
@@ -22,7 +20,7 @@ from groq import Groq
 
 
 # ============================================================
-# ENV
+# ENVIRONMENT
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -32,7 +30,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
 # ============================================================
-# Проверка BOT_TOKEN
+# ПРОВЕРКА BOT TOKEN
 # ============================================================
 
 if not BOT_TOKEN:
@@ -40,10 +38,15 @@ if not BOT_TOKEN:
 
 
 # ============================================================
-# Клиенты
+# TELEGRAM
 # ============================================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+
+# ============================================================
+# AI CLIENTS
+# ============================================================
 
 ai_client = Client()
 
@@ -55,7 +58,7 @@ groq_client = (
 
 
 # ============================================================
-# Tavily
+# TAVILY
 # ============================================================
 
 try:
@@ -72,13 +75,12 @@ tavily_client = (
 
 
 # ============================================================
-# Gemini
+# GEMINI
 # ============================================================
 
 if GEMINI_API_KEY:
 
     try:
-
         import google.generativeai as genai
         from PIL import Image
 
@@ -104,7 +106,7 @@ else:
 
 
 # ============================================================
-# Память
+# ПАМЯТЬ
 # ============================================================
 
 user_histories = {}
@@ -112,17 +114,16 @@ user_modes = {}
 
 
 # ============================================================
-# НАСТРОЙКИ ОТВЕТОВ
+# НАСТРОЙКИ
 # ============================================================
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 
-# Максимальный размер одного ответа ИИ.
 AI_MAX_RESPONSE_LENGTH = 40000
 
 
 # ============================================================
-# Flask
+# FLASK
 # ============================================================
 
 app = Flask(__name__)
@@ -130,7 +131,6 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-
     return "Бот работает!"
 
 
@@ -150,7 +150,7 @@ def run_web():
 
 
 # ============================================================
-# MARKDOWN CLEANER
+# ОЧИСТКА ОБЫЧНОГО MARKDOWN
 # ============================================================
 
 def clean_markdown(text):
@@ -158,11 +158,44 @@ def clean_markdown(text):
     if not text:
         return ""
 
-    return re.sub(
+    text = str(text)
+
+    # Защищаем кодовые блоки,
+    # чтобы символы _ и # внутри кода
+    # случайно не удалялись.
+    code_blocks = []
+
+    def protect_code(match):
+
+        code_blocks.append(
+            match.group(0)
+        )
+
+        return f"§CODEBLOCK{len(code_blocks) - 1}§"
+
+    protected = re.sub(
+        r"```.*?```",
+        protect_code,
+        text,
+        flags=re.DOTALL
+    )
+
+    protected = re.sub(
         r"[*_#]",
         "",
-        str(text)
+        protected
     )
+
+    for index, code_block in enumerate(
+        code_blocks
+    ):
+
+        protected = protected.replace(
+            f"§CODEBLOCK{index}§",
+            code_block
+        )
+
+    return protected
 
 
 # ============================================================
@@ -284,7 +317,11 @@ def extract_code_blocks(text):
         code = (
             match.group(2)
             or ""
-        ).strip()
+        )
+
+        # Убираем только лишние переносы
+        # по краям. Сам код внутри сохраняем.
+        code = code.strip("\n")
 
         parts.append(
             {
@@ -313,39 +350,13 @@ def extract_code_blocks(text):
 
 
 # ============================================================
-# КНОПКА КОПИРОВАНИЯ
-# ============================================================
-
-def create_copy_keyboard(text):
-
-    keyboard = InlineKeyboardMarkup()
-
-    # Telegram ограничивает copy_text 256 символами.
-    # Для больших кодов сама рамка остаётся
-    # удобной для копирования целиком через Telegram.
-    if len(text) <= 256:
-
-        keyboard.add(
-            InlineKeyboardButton(
-                text="📋 Скопировать",
-                copy_text={
-                    "text": text
-                }
-            )
-        )
-
-    return keyboard
-
-
-# ============================================================
-# ОТПРАВКА КОДА
+# ОТПРАВКА КОДА В TELEGRAM
 # ============================================================
 
 def send_code_block(
     chat_id,
     code,
-    language="",
-    reply_to_message_id=None
+    language=""
 ):
 
     if not code:
@@ -356,58 +367,25 @@ def send_code_block(
         quote=False
     )
 
-    language = re.sub(
-        r"[^a-zA-Z0-9_+#.-]",
-        "",
-        language
+    # Telegram понимает <pre><code>
+    # как отдельный форматированный
+    # блок кода.
+    #
+    # В клиентах Telegram такой блок
+    # имеет стандартное копирование.
+
+    formatted = (
+        "<pre><code>"
+        + safe_code
+        + "</code></pre>"
     )
-
-    if language:
-
-        formatted = (
-            "<pre><code class=\"language-"
-            + language
-            + "\">"
-            + safe_code
-            + "</code></pre>"
-        )
-
-    else:
-
-        formatted = (
-            "<pre><code>"
-            + safe_code
-            + "</code></pre>"
-        )
-
-    keyboard = None
-
-    if len(code) <= 256:
-
-        keyboard = create_copy_keyboard(
-            code
-        )
 
     try:
 
-        kwargs = {
-            "chat_id": chat_id,
-            "text": formatted,
-            "parse_mode": "HTML"
-        }
-
-        if reply_to_message_id:
-            kwargs[
-                "reply_to_message_id"
-            ] = reply_to_message_id
-
-        if keyboard:
-            kwargs[
-                "reply_markup"
-            ] = keyboard
-
         return bot.send_message(
-            **kwargs
+            chat_id,
+            formatted,
+            parse_mode="HTML"
         )
 
     except Exception as e:
@@ -419,38 +397,28 @@ def send_code_block(
 
         try:
 
-            kwargs = {
-                "chat_id": chat_id,
-                "text": code
-            }
-
-            if reply_to_message_id:
-
-                kwargs[
-                    "reply_to_message_id"
-                ] = reply_to_message_id
-
             return bot.send_message(
-                **kwargs
+                chat_id,
+                code
             )
 
         except Exception as e2:
 
             print(
-                f"⚠️ Ошибка fallback кода: {e2}"
+                f"❌ Ошибка fallback "
+                f"кодового блока: {e2}"
             )
 
     return None
 
 
 # ============================================================
-# ОТПРАВКА ОТВЕТА ИИ
+# ОТПРАВКА AI-ОТВЕТА
 # ============================================================
 
 def send_ai_response(
     chat_id,
-    text,
-    reply_to_message_id=None
+    text
 ):
 
     if not text:
@@ -473,8 +441,6 @@ def send_ai_response(
     )
 
     sent_messages = []
-
-    first_message = True
 
     for part in parts:
 
@@ -499,28 +465,19 @@ def send_ai_response(
 
             for code_part in code_parts:
 
-                reply_id = (
-                    reply_to_message_id
-                    if first_message
-                    else None
-                )
-
                 sent = send_code_block(
                     chat_id,
                     code_part,
-                    language=part.get(
+                    part.get(
                         "language",
                         ""
-                    ),
-                    reply_to_message_id=reply_id
+                    )
                 )
 
                 if sent:
                     sent_messages.append(
                         sent
                     )
-
-                first_message = False
 
         # ====================================================
         # ОБЫЧНЫЙ ТЕКСТ
@@ -534,27 +491,11 @@ def send_ai_response(
 
             for text_part in text_parts:
 
-                reply_id = (
-                    reply_to_message_id
-                    if first_message
-                    else None
-                )
-
                 try:
 
-                    kwargs = {
-                        "chat_id": chat_id,
-                        "text": text_part
-                    }
-
-                    if reply_id:
-
-                        kwargs[
-                            "reply_to_message_id"
-                        ] = reply_id
-
                     sent = bot.send_message(
-                        **kwargs
+                        chat_id,
+                        text_part
                     )
 
                     sent_messages.append(
@@ -568,13 +509,12 @@ def send_ai_response(
                         f"текста: {e}"
                     )
 
-                first_message = False
-
     return sent_messages
 
 
 # ============================================================
-# УНИВЕРСАЛЬНАЯ ОТПРАВКА
+# ИЗМЕНИТЬ ВРЕМЕННОЕ СООБЩЕНИЕ
+# ИЛИ ОТПРАВИТЬ НОВЫЕ СООБЩЕНИЯ
 # ============================================================
 
 def edit_or_send_long(
@@ -588,11 +528,13 @@ def edit_or_send_long(
 
     text = str(text)
 
-    # Если нет кода и ответ короткий —
-    # оставляем старое поведение.
+    # Если обычный короткий текст,
+    # оставляем старое поведение —
+    # просто меняем "Думаю..." на ответ.
     if (
         "```" not in text
-        and len(text) <= TELEGRAM_MESSAGE_LIMIT - 100
+        and len(text)
+        <= TELEGRAM_MESSAGE_LIMIT - 100
     ):
 
         try:
@@ -608,13 +550,12 @@ def edit_or_send_long(
         except Exception as e:
 
             print(
-                f"⚠️ Не удалось "
-                f"изменить сообщение: {e}"
+                f"⚠️ Не удалось изменить "
+                f"сообщение: {e}"
             )
 
-    # Длинный ответ или код:
-    # удаляем "Думаю..." и отправляем красиво.
-
+    # Если ответ содержит код или длинный текст,
+    # удаляем временное сообщение.
     try:
 
         bot.delete_message(
@@ -629,6 +570,7 @@ def edit_or_send_long(
             f"временное сообщение: {e}"
         )
 
+    # И отправляем нормальным способом.
     send_ai_response(
         chat_id,
         text
@@ -636,7 +578,7 @@ def edit_or_send_long(
 
 
 # ============================================================
-# AI MEMORY
+# AI
 # ============================================================
 
 def ask_ai_with_history(
@@ -648,6 +590,10 @@ def ask_ai_with_history(
         user_id,
         "normal"
     )
+
+    # ========================================================
+    # СОЗДАНИЕ ИСТОРИИ
+    # ========================================================
 
     if user_id not in user_histories:
 
@@ -667,7 +613,9 @@ def ask_ai_with_history(
                 "над глупыми вопросами. "
 
                 "Никакой нецензурной лексики. "
-                "Не используй Markdown."
+
+                "Не используй Markdown, "
+                "кроме кодовых блоков."
             )
 
         else:
@@ -679,9 +627,20 @@ def ask_ai_with_history(
                 "Отвечай строго на том же языке, "
                 "на котором пишет пользователь. "
 
+                "Если пользователь пишет на русском — "
+                "отвечай на русском. "
+
+                "Если пользователь пишет на английском — "
+                "отвечай на английском. "
+
+                "Если пользователь пишет на другом языке — "
+                "отвечай на этом же языке. "
+
                 "Можешь использовать позитивные эмодзи. "
 
-                "Не используй Markdown."
+                "Не используй Markdown в обычных ответах. "
+                "Для программного кода используй "
+                "Markdown-кодовые блоки."
             )
 
         user_histories[user_id] = [
@@ -692,7 +651,7 @@ def ask_ai_with_history(
         ]
 
     # ========================================================
-    # ОПРЕДЕЛЕНИЕ КОДИНГА
+    # ОПРЕДЕЛЕНИЕ ЗАПРОСА ПРО КОД
     # ========================================================
 
     coding_keywords = [
@@ -711,39 +670,53 @@ def ask_ai_with_history(
         "css",
         "sql",
         "bash",
+
         "telegram bot",
         "telegram бот",
         "бот",
+
         "api",
         "sdk",
+
         "функция",
         "класс",
         "метод",
         "библиотек",
         "скрипт",
+
         "исправь",
         "исправить",
         "ошибка",
         "ошибку",
+
         "перепиши",
         "переделай",
+
         "добавь функцию",
         "добавь код",
+
         "сделай код",
         "напиши код",
+
         "полный код",
         "готовый код",
+
         "source code",
+
         "debug",
         "debugging",
+
         "stack trace",
         "exception",
+
         "import",
         "pip",
         "npm",
         "json",
+
         "regex",
         "регулярное выражение",
+
         "database",
         "база данных"
     ]
@@ -758,56 +731,61 @@ def ask_ai_with_history(
     )
 
     # ========================================================
-    # ИНСТРУКЦИЯ ДЛЯ КОДА
+    # ИНСТРУКЦИЯ ДЛЯ ПРОГРАММИРОВАНИЯ
     # ========================================================
 
     if is_coding_request:
 
         coding_instruction = (
-            "ИНСТРУКЦИИ ДЛЯ ПРОГРАММИРОВАНИЯ:\n"
+            "ИНСТРУКЦИИ ДЛЯ ПРОГРАММИРОВАНИЯ:\n\n"
 
-            "Пользователь работает с программным кодом.\n"
+            "Пользователь работает с программным кодом.\n\n"
 
             "Отвечай максимально практически "
-            "и подробно.\n"
+            "и подробно.\n\n"
 
             "Если пользователь просит написать код, "
-            "предоставляй полноценный код.\n"
+            "предоставляй полноценный рабочий код.\n\n"
 
             "Если пользователь просит полный готовый "
-            "код — не заменяй части словами "
-            "\"остальной код без изменений\".\n"
+            "код — предоставляй весь код целиком.\n\n"
+
+            "Никогда не заменяй части кода фразами "
+            "\"остальной код без изменений\", "
+            "\"здесь остальной код\" или "
+            "\"...\".\n\n"
 
             "Не используй многоточия вместо частей "
-            "кода.\n"
+            "программного кода.\n\n"
 
             "Если пользователь прислал существующий "
             "проект и просит изменить конкретную часть, "
             "сохраняй остальные функции, если он "
-            "не попросил их удалить.\n"
+            "не попросил их удалить.\n\n"
 
             "Учитывай импорты, зависимости, "
             "переменные окружения, функции, "
-            "обработчики и связи между компонентами.\n"
+            "обработчики и связи между компонентами.\n\n"
 
             "Если исправляешь ошибку, исправляй "
-            "причину проблемы, а не просто скрывай её.\n"
+            "причину проблемы, а не просто скрывай её.\n\n"
 
             "Большие фрагменты кода разрешено "
-            "выдавать полностью.\n"
+            "выдавать полностью.\n\n"
 
-            "Код оформляй внутри Markdown-кодовых "
-            "блоков с тройными обратными кавычками.\n"
+            "Каждый отдельный программный блок "
+            "обязательно помещай в тройные обратные "
+            "кавычки.\n\n"
 
-            "По возможности указывай язык после "
-            "первых трёх обратных кавычек, например:\n\n"
+            "Например:\n\n"
 
             "```python\n"
-            "print('hello')\n"
+            "print('Hello')\n"
             "```\n\n"
 
-            "Не помещай весь ответ в один кодовый блок, "
-            "если в нём есть обычное объяснение."
+            "Если ответ содержит объяснение и код, "
+            "разделяй их: объяснение обычным текстом, "
+            "код — внутри кодового блока.\n"
         )
 
         effective_prompt = (
@@ -824,6 +802,10 @@ def ask_ai_with_history(
             prompt
         )
 
+    # ========================================================
+    # ДОБАВЛЯЕМ ЗАПРОС В ИСТОРИЮ
+    # ========================================================
+
     user_histories[user_id].append(
         {
             "role": "user",
@@ -832,7 +814,7 @@ def ask_ai_with_history(
     )
 
     # ========================================================
-    # УВЕЛИЧЕННАЯ ПАМЯТЬ
+    # ПАМЯТЬ
     # ========================================================
 
     if len(user_histories[user_id]) > 21:
@@ -863,7 +845,7 @@ def ask_ai_with_history(
         )
 
     # ========================================================
-    # G4F MODELS
+    # УРОВЕНЬ 1 — G4F
     # ========================================================
 
     models_to_try = [
@@ -873,16 +855,32 @@ def ask_ai_with_history(
         "llama-3-70b"
     ]
 
-    success = False
     answer = ""
+    success = False
+
+    print(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    print(
+        f"🤖 Новый запрос от {user_id}"
+    )
+
+    print(
+        "🔄 Запускаю G4F..."
+    )
 
     # ========================================================
-    # G4F
+    # ПРОБУЕМ ВСЕ G4F
     # ========================================================
 
     for model_name in models_to_try:
 
         try:
+
+            print(
+                f"🔄 G4F → {model_name}"
+            )
 
             response = (
                 ai_client
@@ -902,69 +900,115 @@ def ask_ai_with_history(
             )
 
             if not answer:
+
+                print(
+                    f"⚠️ G4F → {model_name}: "
+                    "пустой ответ"
+                )
+
                 continue
 
-            # ВАЖНО:
-            # Здесь НЕ удаляем ``` из ответа.
-            # Они нужны для определения кода.
             answer = str(
                 answer
             ).strip()
 
             success = True
 
+            print(
+                f"✅ G4F → {model_name}: "
+                "ответ получен"
+            )
+
             break
 
         except Exception as e:
 
             print(
-                f"⚠️ AI {model_name}: {e}"
+                f"❌ G4F → {model_name}: "
+                f"{e}"
             )
 
     # ========================================================
-    # GROQ FALLBACK
+    # УРОВЕНЬ 2 — GROQ GPT-OSS 120B
     # ========================================================
 
-    if (
-        not success
-        and groq_client
-    ):
+    if not success:
 
-        try:
+        print(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
 
-            response = (
-                groq_client
-                .chat
-                .completions
-                .create(
-                    model="openai/gpt-oss-120b",
-                    messages=messages_to_send
-                )
-            )
+        print(
+            "⚠️ Все G4F провайдеры "
+            "не ответили."
+        )
 
-            answer = (
-                response
-                .choices[0]
-                .message
-                .content
-            )
-
-            if answer:
-
-                answer = str(
-                    answer
-                ).strip()
-
-                success = True
-
-        except Exception as e:
+        if groq_client:
 
             print(
-                f"⚠️ Groq ошибка: {e}"
+                "🔄 Переключаюсь на "
+                "Groq GPT-OSS 120B..."
+            )
+
+            try:
+
+                response = (
+                    groq_client
+                    .chat
+                    .completions
+                    .create(
+                        model="openai/gpt-oss-120b",
+                        messages=messages_to_send
+                    )
+                )
+
+                answer = (
+                    response
+                    .choices[0]
+                    .message
+                    .content
+                )
+
+                if answer:
+
+                    answer = str(
+                        answer
+                    ).strip()
+
+                    success = True
+
+                    print(
+                        "✅ Groq GPT-OSS 120B: "
+                        "ответ успешно получен!"
+                    )
+
+                else:
+
+                    print(
+                        "❌ Groq GPT-OSS 120B: "
+                        "пустой ответ."
+                    )
+
+            except Exception as e:
+
+                print(
+                    "❌ Groq GPT-OSS 120B: "
+                    f"{e}"
+                )
+
+        else:
+
+            print(
+                "❌ GROQ_API_KEY не найден."
+            )
+
+            print(
+                "⚠️ Резервный Groq "
+                "отключён."
             )
 
     # ========================================================
-    # УСПЕХ
+    # УСПЕШНЫЙ ОТВЕТ
     # ========================================================
 
     if success:
@@ -976,24 +1020,47 @@ def ask_ai_with_history(
             }
         )
 
+        print(
+            "🤖 Ответ отправлен."
+        )
+
+        print(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+
         return answer
 
     # ========================================================
-    # ОШИБКА
+    # ПОЛНОСТЬЮ НЕУДАЧНЫЙ ЗАПРОС
     # ========================================================
 
     user_histories[user_id].pop()
 
+    print(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    print(
+        "❌ Все AI-провайдеры "
+        "не смогли обработать запрос."
+    )
+
+    print(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
     if mode == "neuroham":
 
         return (
-            "Мои процессоры сейчас не хотят "
-            "переваривать этот запрос 🙄"
+            "Даже мои процессоры решили "
+            "сегодня саботировать работу 🙄"
         )
 
     return (
-        "Все провайдеры ИИ сейчас перегружены. "
-        "Попробуй ещё раз через минуту."
+        "Не удалось получить ответ от ИИ.\n\n"
+        "Я попробовал все доступные G4F-провайдеры "
+        "и резервный Groq GPT-OSS 120B. "
+        "Попробуй ещё раз немного позже."
     )
 
 
@@ -1082,6 +1149,10 @@ def generate_kira_text():
         "llama-3-70b"
     ]
 
+    # ========================================================
+    # G4F
+    # ========================================================
+
     for model_name in models_to_try:
 
         try:
@@ -1125,7 +1196,8 @@ def generate_kira_text():
         except Exception as e:
 
             print(
-                f"⚠️ Kira AI {model_name}: {e}"
+                f"⚠️ Kira G4F "
+                f"{model_name}: {e}"
             )
 
     # ========================================================
@@ -1135,6 +1207,10 @@ def generate_kira_text():
     if groq_client:
 
         try:
+
+            print(
+                "🔄 Kira → Groq GPT-OSS 120B"
+            )
 
             response = (
                 groq_client
@@ -1146,8 +1222,8 @@ def generate_kira_text():
                         {
                             "role": "system",
                             "content": (
-                                "Пиши красивые, тёплые "
-                                "и приятные тексты. "
+                                "Пиши красивые, "
+                                "тёплые и приятные тексты. "
                                 "Без Markdown."
                             )
                         },
@@ -1168,6 +1244,10 @@ def generate_kira_text():
 
             if answer:
 
+                print(
+                    "✅ Kira → Groq успешно"
+                )
+
                 return str(
                     answer
                 ).strip()
@@ -1175,8 +1255,12 @@ def generate_kira_text():
         except Exception as e:
 
             print(
-                f"⚠️ Groq Kira ошибка: {e}"
+                f"❌ Groq Kira ошибка: {e}"
             )
+
+    # ========================================================
+    # FALLBACK TEXT
+    # ========================================================
 
     return (
         "Кира — это человек, рядом с которым "
@@ -1198,7 +1282,7 @@ def perform_web_search(query):
     results_text = ""
 
     # ========================================================
-    # Tavily
+    # TAVILY
     # ========================================================
 
     if tavily_client:
@@ -1210,23 +1294,24 @@ def perform_web_search(query):
                 max_results=3
             )
 
-            for res in response.get(
+            for result in response.get(
                 "results",
                 []
             ):
 
-                title = res.get(
+                title = result.get(
                     "title",
                     "Без заголовка"
                 )
 
-                content = res.get(
+                content = result.get(
                     "content",
                     ""
                 )
 
                 results_text += (
-                    f"- {title}: {content}\n"
+                    f"- {title}: "
+                    f"{content}\n"
                 )
 
         except Exception as e:
@@ -1236,7 +1321,7 @@ def perform_web_search(query):
             )
 
     # ========================================================
-    # DuckDuckGo fallback
+    # DUCKDUCKGO FALLBACK
     # ========================================================
 
     if not results_text:
@@ -1254,12 +1339,12 @@ def perform_web_search(query):
                     )
                 )
 
-                for res in results:
+                for result in results:
 
                     results_text += (
                         f"- "
-                        f"{res.get('title', 'Без заголовка')}: "
-                        f"{res.get('body', '')[:250]}...\n"
+                        f"{result.get('title', 'Без заголовка')}: "
+                        f"{result.get('body', '')[:500]}\n"
                     )
 
         except Exception as e:
@@ -1272,7 +1357,7 @@ def perform_web_search(query):
 
 
 # ============================================================
-# IMAGE GENERATION
+# ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЯ
 # ============================================================
 
 def generate_image_dynamic(prompt):
@@ -1284,24 +1369,32 @@ def generate_image_dynamic(prompt):
 
         try:
 
-            response = ai_client.images.generate(
-                model=model,
-                prompt=prompt,
-                response_format="url"
+            response = (
+                ai_client
+                .images
+                .generate(
+                    model=model,
+                    prompt=prompt,
+                    response_format="url"
+                )
             )
 
-            image_url = response.data[0].url
+            image_url = (
+                response
+                .data[0]
+                .url
+            )
 
             if image_url:
 
-                r = requests.get(
+                response_image = requests.get(
                     image_url,
                     timeout=25
                 )
 
-                if r.status_code == 200:
+                if response_image.status_code == 200:
 
-                    return r.content
+                    return response_image.content
 
         except Exception as e:
 
@@ -1313,7 +1406,7 @@ def generate_image_dynamic(prompt):
 
 
 # ============================================================
-# GEMINI IMAGE
+# GEMINI IMAGE ANALYSIS
 # ============================================================
 
 def analyze_image_gemini(
@@ -1409,22 +1502,25 @@ async def generate_audio(
 def help_cmd(message):
 
     help_text = (
-        "Привет! Я ИИ-ассистент.\n\n"
+        "Привет! Я ИИ-ассистент 🤖\n\n"
 
-        "Список команд:\n"
+        "Мои команды:\n\n"
 
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
-        "/image <описание> — создать картинку\n"
-        "/gemini <запрос> — спросить ИИ\n"
+        "/image <описание> — создать изображение\n"
+        "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
         "/code <задача> — работа с кодом\n"
-        "/sum <ссылка> — выжимка статьи\n"
+        "/sum <текст> — сделать выжимку\n"
         "/tr <текст> — перевод\n"
         "/fix <текст> — исправление текста\n"
         "/tts <текст> — озвучка\n"
         "/clear — очистить память\n"
-        "/neuroham — режим Нейрохама 💀"
+        "/neuroham — режим Нейрохама\n\n"
+
+        "Также можешь просто написать мне "
+        "любой вопрос обычным сообщением."
     )
 
     bot.reply_to(
@@ -1572,14 +1668,16 @@ def weather_cmd(message):
 
         bot.reply_to(
             message,
-            "Укажи город. Например: /weather Москва"
+            "Укажи город.\n\n"
+            "Например:\n"
+            "/weather Ташкент"
         )
 
         return
 
     try:
 
-        resp = requests.get(
+        response = requests.get(
             f"https://wttr.in/{city}",
             params={
                 "format":
@@ -1593,16 +1691,15 @@ def weather_cmd(message):
                 "lang": "ru",
                 "m": ""
             },
-
             timeout=8
         )
 
-        if resp.status_code == 200:
+        if response.status_code == 200:
 
             bot.reply_to(
                 message,
                 "Сводка:\n\n"
-                + resp.text.strip()
+                + response.text.strip()
             )
 
         else:
@@ -1616,7 +1713,7 @@ def weather_cmd(message):
 
         bot.reply_to(
             message,
-            f"Ошибка: {e}"
+            f"Ошибка погоды: {e}"
         )
 
 
@@ -1643,8 +1740,9 @@ def search_cmd(message):
 
         bot.reply_to(
             message,
-            "Напиши запрос. "
-            "Например: /search новости"
+            "Напиши запрос.\n\n"
+            "Например:\n"
+            "/search новости"
         )
 
         return
@@ -1660,11 +1758,11 @@ def search_cmd(message):
 
     prompt = (
         f"Вот результаты поиска из интернета "
-        f"по запросу '{query}':\n"
+        f"по запросу '{query}':\n\n"
         f"{raw_data}\n\n"
 
         "Сделай краткую и понятную выжимку "
-        "на русском языке. "
+        "на языке пользователя. "
         "Отвечай по делу."
     )
 
@@ -1748,8 +1846,9 @@ def image_cmd(message):
 
         bot.reply_to(
             message,
-            "Опиши картинку.\n"
-            "Например: /image кот"
+            "Опиши картинку.\n\n"
+            "Например:\n"
+            "/image кот в космосе"
         )
 
         return
@@ -1759,29 +1858,34 @@ def image_cmd(message):
         "Генерирую..."
     )
 
-    img_bytes = generate_image_dynamic(
+    image_bytes = generate_image_dynamic(
         prompt
     )
 
-    if img_bytes:
+    if image_bytes:
 
         bot.send_photo(
             message.chat.id,
-            img_bytes,
+            image_bytes,
             caption=f"Запрос: {prompt}"
         )
 
-        bot.delete_message(
-            message.chat.id,
-            msg.message_id
-        )
+        try:
+
+            bot.delete_message(
+                message.chat.id,
+                msg.message_id
+            )
+
+        except Exception:
+            pass
 
     else:
 
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
-            "Не удалось сгенерировать."
+            "Не удалось сгенерировать изображение."
         )
 
 
@@ -1835,10 +1939,15 @@ def tts_cmd(message):
                 audio
             )
 
-        bot.delete_message(
-            message.chat.id,
-            msg.message_id
-        )
+        try:
+
+            bot.delete_message(
+                message.chat.id,
+                msg.message_id
+            )
+
+        except Exception:
+            pass
 
     except Exception as e:
 
@@ -1878,7 +1987,7 @@ def handle_text(message):
     text_lower = text.lower()
 
     # ========================================================
-    # ПАСХАЛКА КИРА
+    # KIRA
     # ========================================================
 
     if is_kira_question(text):
@@ -1948,7 +2057,7 @@ def handle_text(message):
 
             url = urls[0]
 
-            resp = requests.get(
+            response = requests.get(
                 url,
                 timeout=10,
                 headers={
@@ -1958,7 +2067,7 @@ def handle_text(message):
             )
 
             soup = BeautifulSoup(
-                resp.text,
+                response.text,
                 "html.parser"
             )
 
@@ -1988,13 +2097,13 @@ def handle_text(message):
             edit_or_send_long(
                 message.chat.id,
                 msg.message_id,
-                f"Ошибка: {e}"
+                f"Ошибка чтения ссылки: {e}"
             )
 
             return
 
     # ========================================================
-    # ОБЫЧНЫЙ ТЕКСТ
+    # ОБЫЧНЫЙ AI ЧАТ
     # ========================================================
 
     msg = bot.reply_to(
@@ -2053,7 +2162,7 @@ def handle_photo(message):
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
-            f"Ошибка: {e}"
+            f"Ошибка анализа фото: {e}"
         )
 
 
@@ -2074,7 +2183,7 @@ def handle_doc(message):
         bot.reply_to(
             message,
             "Отправьте документ "
-            "в формате .pdf"
+            "в формате PDF."
         )
 
         return
@@ -2099,10 +2208,13 @@ def handle_doc(message):
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=".pdf"
-        ) as f:
+        ) as temp_file:
 
-            f.write(file_data)
-            path = f.name
+            temp_file.write(
+                file_data
+            )
+
+            path = temp_file.name
 
         reader = PdfReader(
             path
@@ -2110,6 +2222,8 @@ def handle_doc(message):
 
         extracted_pages = []
 
+        # Первые 5 страниц,
+        # как в предыдущей версии.
         for page in reader.pages[:5]:
 
             page_text = page.extract_text()
@@ -2133,9 +2247,10 @@ def handle_doc(message):
         reply = ask_ai_with_history(
             message.chat.id,
 
-            "Сделай краткую выжимку "
-            "из PDF:\n\n"
-            + text[:6000]
+            "Сделай краткую и понятную "
+            "выжимку из этого PDF:\n\n"
+            +
+            text[:6000]
         )
 
         edit_or_send_long(
@@ -2168,13 +2283,13 @@ def handle_doc(message):
 
 
 # ============================================================
-# START
+# ЗАПУСК
 # ============================================================
 
 if __name__ == "__main__":
 
     print(
-        "=" * 50
+        "=" * 60
     )
 
     print(
@@ -2182,31 +2297,52 @@ if __name__ == "__main__":
     )
 
     print(
-        "=" * 50
+        "=" * 60
     )
 
     print(
-        "🎵 Музыкальный модуль отключён"
+        "🎵 Музыкальный модуль: отключён"
     )
 
     print(
-        "✨ Пасхалка Кира обновлена"
+        "✨ Пасхалка Кира: включена"
     )
 
     print(
-        "💻 Расширенный режим программирования включён"
+        "💻 Расширенный режим программирования: включён"
     )
 
     print(
-        "📨 Длинные ответы включены"
+        "📨 Длинные ответы: включены"
     )
 
     print(
-        "📋 Кодовые блоки с копированием включены"
+        "📋 Кодовые блоки Telegram: включены"
+    )
+
+    print(
+        "🔄 AI fallback: G4F → Groq GPT-OSS 120B"
+    )
+
+    if GROQ_API_KEY:
+
+        print(
+            "✅ GROQ_API_KEY найден"
+        )
+
+    else:
+
+        print(
+            "⚠️ GROQ_API_KEY НЕ найден — "
+            "резервный Groq отключён"
+        )
+
+    print(
+        "=" * 60
     )
 
     # ========================================================
-    # Flask
+    # FLASK
     # ========================================================
 
     threading.Thread(
@@ -2215,7 +2351,7 @@ if __name__ == "__main__":
     ).start()
 
     # ========================================================
-    # Telegram
+    # TELEGRAM POLLING
     # ========================================================
 
     print(
