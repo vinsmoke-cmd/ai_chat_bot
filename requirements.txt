@@ -7,6 +7,11 @@ edge-tts
 g4f
 groq
 tavily-python
+duckduckgo-search
 google-generativeai
 Pillow
-duckduckgo-search
+replicate
+openpyxl
+python-pptx
+python-docx
+reportlab
