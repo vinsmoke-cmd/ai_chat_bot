@@ -1,4 +1,4 @@
-Import os
+import os
 import re
 import io
 import html
@@ -8,121 +8,86 @@ import asyncio
 import threading
 import tempfile
 import time
-
 import telebot
 import requests
-
 from flask import Flask
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 import edge_tts
-
 from g4f.client import Client
 from groq import Groq
-
 
 # ============================================================
 # ENVIRONMENT
 # ============================================================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-
 # ============================================================
 # ПРОВЕРКА BOT TOKEN
 # ============================================================
-
 if not BOT_TOKEN:
     raise RuntimeError("❌ Не задан BOT_TOKEN")
-
 
 # ============================================================
 # TELEGRAM
 # ============================================================
-
 bot = telebot.TeleBot(BOT_TOKEN)
-
 
 # ============================================================
 # AI CLIENTS
 # ============================================================
-
 ai_client = Client()
-
 groq_client = (
-    Groq(api_key=GROQ_API_KEY)
-    if GROQ_API_KEY
-    else None
+    Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 )
-
 
 # ============================================================
 # TAVILY
 # ============================================================
-
 try:
     from tavily import TavilyClient
 except ImportError:
     TavilyClient = None
 
-
 tavily_client = (
-    TavilyClient(api_key=TAVILY_API_KEY)
-    if TavilyClient and TAVILY_API_KEY
-    else None
+    TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
 )
-
 
 # ============================================================
 # GEMINI
 # ============================================================
-
 if GEMINI_API_KEY:
-
     try:
         import google.generativeai as genai
         from PIL import Image
-
         genai.configure(
             api_key=GEMINI_API_KEY
         )
-
         print("✅ Gemini подключён")
-
     except Exception as e:
-
         print(
             f"⚠️ Gemini недоступен: {e}"
         )
-
         genai = None
         Image = None
-
 else:
-
     genai = None
     Image = None
-
 
 # ============================================================
 # ПАМЯТЬ
 # ============================================================
-
 user_histories = {}
 user_modes = {}
-
 
 # ============================================================
 # НАСТРОЙКИ
 # ============================================================
-
 TELEGRAM_MESSAGE_LIMIT = 4096
-
 AI_MAX_RESPONSE_LENGTH = 40000
-
 
 # ============================================================
 # MUSICGEN
@@ -130,44 +95,27 @@ AI_MAX_RESPONSE_LENGTH = 40000
 # Google Gemini Lyria.
 # Replicate НЕ используется.
 # ============================================================
-
 MUSIC_MODEL_NAME = "lyria-3-clip-preview"
 
-
-def generate_music(
-    prompt,
-    duration=8
-):
-
+def generate_music( prompt, duration=8 ):
     import base64
-
     if not GEMINI_API_KEY:
-
         raise RuntimeError(
             "Не задан GEMINI_API_KEY."
         )
-
     try:
-
         from google import genai
-
     except ImportError as e:
-
         raise RuntimeError(
             "Не установлена библиотека google-genai. "
             "Установи её командой: pip install -U google-genai"
         ) from e
 
-    print(
-        f"🎵 Генерация музыки через Gemini Lyria: {prompt}"
-    )
-
+    print( f"🎵 Генерация музыки через Gemini Lyria: {prompt}" )
     try:
-
         client = genai.Client(
             api_key=GEMINI_API_KEY
         )
-
         interaction = client.interactions.create(
             model=MUSIC_MODEL_NAME,
             input=(
@@ -175,9 +123,7 @@ def generate_music(
                 f"Use this description: {prompt}"
             )
         )
-
     except Exception as e:
-
         raise RuntimeError(
             f"Ошибка Google Gemini Lyria: {e}"
         ) from e
@@ -185,390 +131,211 @@ def generate_music(
     generated_audio = (
         interaction.output_audio
     )
-
     if not generated_audio:
-
         raise RuntimeError(
             "Google Gemini Lyria не вернула аудио."
         )
-
     if not generated_audio.data:
-
         raise RuntimeError(
             "Google Gemini Lyria вернула пустые аудиоданные."
         )
 
     try:
-
         audio_bytes = base64.b64decode(
             generated_audio.data
         )
-
     except Exception as e:
-
         raise RuntimeError(
             f"Ошибка декодирования MP3: {e}"
         ) from e
 
     if not audio_bytes:
-
         raise RuntimeError(
             "Получен пустой MP3-файл."
         )
 
     output_file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp3"
+        delete=False, suffix=".mp3"
     )
-
     try:
-
-        output_file.write(
-            audio_bytes
-        )
-
+        output_file.write( audio_bytes )
         output_file.close()
-
     except Exception:
-
         output_file.close()
-
-        if os.path.exists(
-            output_file.name
-        ):
-
-            os.remove(
-                output_file.name
-            )
-
+        if os.path.exists( output_file.name ):
+            os.remove( output_file.name )
         raise
 
-    print(
-        f"✅ Музыка создана: {output_file.name}"
-    )
-
+    print( f"✅ Музыка создана: {output_file.name}" )
     return output_file.name
-
 
 # ============================================================
 # SMART FILE GENERATOR
 # ============================================================
-
-def safe_filename(
-    name,
-    extension
-):
-
+def safe_filename( name, extension ):
     name = str(name).strip()
-
-    name = re.sub(
-        r"[^\\wа-яА-ЯёЁ .()-]",
-        "_",
-        name
-    )
-
-    name = re.sub(
-        r"\\s+",
-        "_",
-        name
-    )
-
-    name = name.strip(
-        " ._"
-    )
-
+    name = re.sub( r"[^\wа-яА-ЯёЁ .()-]", "_", name )
+    name = re.sub( r"\s+", "_", name )
+    name = name.strip( " ._" )
     if not name:
-
         name = "generated_file"
-
-    extension = extension.lstrip(
-        "."
-    )
-
+    extension = extension.lstrip( "." )
     return (
         f"{name}.{extension}"
     )
 
-
-def detect_file_format(
-    request
-):
-
-    text = str(
-        request
-    ).lower()
+def detect_file_format( request ):
+    text = str( request ).lower()
 
     # ========================================================
     # EXCEL
     # ========================================================
-
     if any(
-        word in text
-        for word in [
-            "excel",
-            "эксель",
-            "xlsx",
-            "таблиц",
-            "таблица",
-            "умножени"
+        word in text for word in [
+            "excel", "эксель", "xlsx", "таблиц", "таблица", "умножени"
         ]
     ):
-
         return "xlsx"
 
     # ========================================================
     # WORD
     # ========================================================
-
     if any(
-        word in text
-        for word in [
-            "word",
-            "docx",
-            "документ word"
+        word in text for word in [
+            "word", "docx", "документ word"
         ]
     ):
-
         return "docx"
 
     # ========================================================
     # PDF
     # ========================================================
-
     if any(
-        word in text
-        for word in [
-            "pdf",
-            "пдф"
+        word in text for word in [
+            "pdf", "пдф"
         ]
     ):
-
         return "pdf"
 
     # ========================================================
     # POWERPOINT
     # ========================================================
-
     if any(
-        word in text
-        for word in [
-            "pptx",
-            "powerpoint",
-            "презентац"
+        word in text for word in [
+            "pptx", "powerpoint", "презентац"
         ]
     ):
-
         return "pptx"
 
     # ========================================================
     # CSV
     # ========================================================
-
     if "csv" in text:
-
         return "csv"
 
     # ========================================================
     # JSON
     # ========================================================
-
     if "json" in text:
-
         return "json"
 
     # ========================================================
     # PYTHON
     # ========================================================
-
     if any(
-        word in text
-        for word in [
-            ".py",
-            "python файл",
-            "python скрипт"
+        word in text for word in [
+            ".py", "python файл", "python скрипт"
         ]
     ):
-
         return "py"
 
     # ========================================================
     # HTML
     # ========================================================
-
     if any(
-        word in text
-        for word in [
-            "html",
-            "веб-страниц",
-            "веб страниц"
+        word in text for word in [
+            "html", "веб-страниц", "веб страниц"
         ]
     ):
-
         return "html"
 
     # ========================================================
     # MARKDOWN
     # ========================================================
-
     if "markdown" in text or ".md" in text:
-
         return "md"
 
     # ========================================================
     # ПО УМОЛЧАНИЮ
     # ========================================================
-
     return "txt"
 
-
-def make_multiplication_table_xlsx(
-    output_path
-):
-
+def make_multiplication_table_xlsx( output_path ):
     from openpyxl import Workbook
-
     workbook = Workbook()
-
     sheet = workbook.active
-
     sheet.title = "Таблица умножения"
 
     # Заголовки
-
-    sheet.cell(
-        row=1,
-        column=1,
-        value="×"
-    )
-
-    for number in range(
-        1,
-        11
-    ):
-
-        sheet.cell(
-            row=1,
-            column=number + 1,
-            value=number
-        )
-
-        sheet.cell(
-            row=number + 1,
-            column=1,
-            value=number
-        )
+    sheet.cell( row=1, column=1, value="×" )
+    for number in range( 1, 11 ):
+        sheet.cell( row=1, column=number + 1, value=number )
+        sheet.cell( row=number + 1, column=1, value=number )
 
     # Значения
-
-    for row in range(
-        1,
-        11
-    ):
-
-        for column in range(
-            1,
-            11
-        ):
-
-            sheet.cell(
-                row=row + 1,
-                column=column + 1,
-                value=row * column
-            )
+    for row in range( 1, 11 ):
+        for column in range( 1, 11 ):
+            sheet.cell( row=row + 1, column=column + 1, value=row * column )
 
     # Ширина колонок
-
     sheet.column_dimensions["A"].width = 8
+    for column in range( 2, 12 ):
+        letter = ( chr( 64 + column ) )
+        sheet.column_dimensions[ letter ].width = 10
 
-    for column in range(
-        2,
-        12
-    ):
+    workbook.save( output_path )
 
-        letter = (
-            chr(
-                64 + column
-            )
-        )
-
-        sheet.column_dimensions[
-            letter
-        ].width = 10
-
-    workbook.save(
-        output_path
-    )
-
-
-def generate_ai_file_content(
-    request,
-    extension,
-    user_id
-):
-
+def generate_ai_file_content( request, extension, user_id ):
     format_instructions = {
-
-        "txt":
-            "Создай обычный текст.",
-
-        "md":
-            "Создай Markdown-документ.",
-
-        "csv":
-            (
-                "Создай данные CSV. "
-                "Каждая строка должна быть отдельной строкой, "
-                "колонки разделяй точкой с запятой."
-            ),
-
-        "json":
-            (
-                "Создай корректный JSON. "
-                "Ответ должен содержать только JSON."
-            ),
-
-        "html":
-            (
-                "Создай полноценный HTML-документ. "
-                "Ответ должен содержать только HTML-код."
-            ),
-
-        "py":
-            (
-                "Создай полноценный рабочий Python-код. "
-                "Ответ должен содержать код."
-            ),
-
-        "docx":
-            (
-                "Подготовь содержимое для документа Word. "
-                "Используй понятные заголовки и абзацы."
-            ),
-
-        "pdf":
-            (
-                "Подготовь содержимое для PDF-документа. "
-                "Используй понятные заголовки и абзацы."
-            ),
-
-        "pptx":
-            (
-                "Подготовь содержимое презентации. "
-                "Разделяй слайды строкой вида: СЛАЙД: Название."
-            ),
-
-        "xlsx":
-            (
-                "Подготовь табличные данные. "
-                "Каждая строка — отдельная строка таблицы. "
-                "Колонки разделяй символом |."
-            )
+        "txt": "Создай обычный текст.",
+        "md": "Создай Markdown-документ.",
+        "csv": (
+            "Создай данные CSV. "
+            "Каждая строка должна быть отдельной строкой, "
+            "колонки разделяй точкой с запятой."
+        ),
+        "json": (
+            "Создай корректный JSON. "
+            "Ответ должен содержать только JSON."
+        ),
+        "html": (
+            "Создай полноценный HTML-документ. "
+            "Ответ должен содержать только HTML-код."
+        ),
+        "py": (
+            "Создай полноценный рабочий Python-код. "
+            "Ответ должен содержать код."
+        ),
+        "docx": (
+            "Подготовь содержимое для документа Word. "
+            "Используй понятные заголовки и абзацы."
+        ),
+        "pdf": (
+            "Подготовь содержимое для PDF-документа. "
+            "Используй понятные заголовки и абзацы."
+        ),
+        "pptx": (
+            "Подготовь содержимое презентации. "
+            "Разделяй слайды строкой вида: СЛАЙД: Название."
+        ),
+        "xlsx": (
+            "Подготовь табличные данные. "
+            "Каждая строка — отдельная строка таблицы. "
+            "Колонки разделяй символом |."
+        )
     }
 
-    instruction = format_instructions.get(
-        extension,
-        format_instructions["txt"]
-    )
+    instruction = format_instructions.get( extension, format_instructions["txt"] )
 
     prompt = (
         "Пользователь хочет создать файл.\n\n"
@@ -578,555 +345,254 @@ def generate_ai_file_content(
         "Не добавляй лишних пояснений."
     )
 
-    answer = ask_ai_with_history(
-        user_id,
-        prompt
-    )
+    answer = ask_ai_with_history( user_id, prompt )
+    return str( answer ).strip()
 
-    return str(
-        answer
-    ).strip()
-
-
-def create_generated_file(
-    request,
-    user_id
-):
-
-    extension = detect_file_format(
-        request
-    )
-
-    temp_directory = tempfile.mkdtemp(
-        prefix="telegram_generated_"
-    )
+def create_generated_file( request, user_id ):
+    extension = detect_file_format( request )
+    temp_directory = tempfile.mkdtemp( prefix="telegram_generated_" )
 
     # ========================================================
     # СПЕЦИАЛЬНАЯ ТАБЛИЦА УМНОЖЕНИЯ
     # ========================================================
-
-    request_lower = str(
-        request
-    ).lower()
-
+    request_lower = str( request ).lower()
     if (
-        extension == "xlsx"
-        and (
-            "умножени" in request_lower
-            or "таблица умножения"
-            in request_lower
-        )
+        extension == "xlsx" and
+        ( "умножени" in request_lower or "таблица умножения" in request_lower )
     ):
-
-        filename = safe_filename(
-            "Таблица_умножения",
-            "xlsx"
-        )
-
-        path = os.path.join(
-            temp_directory,
-            filename
-        )
-
-        make_multiplication_table_xlsx(
-            path
-        )
-
-        return (
-            path,
-            filename,
-            extension
-        )
+        filename = safe_filename( "Таблица_умножения", "xlsx" )
+        path = os.path.join( temp_directory, filename )
+        make_multiplication_table_xlsx( path )
+        return ( path, filename, extension )
 
     # ========================================================
     # AI CONTENT
     # ========================================================
-
-    content = generate_ai_file_content(
-        request,
-        extension,
-        user_id
-    )
+    content = generate_ai_file_content( request, extension, user_id )
 
     # ========================================================
     # ИМЯ
     # ========================================================
-
     filename_base = (
         str(request)
         .strip()
-        .replace(
-            "/",
-            " "
-        )
+        .replace( "/", " " )
     )
-
     if len(filename_base) > 45:
-
         filename_base = (
             filename_base[:45]
         )
 
-    filename = safe_filename(
-        filename_base,
-        extension
-    )
-
-    path = os.path.join(
-        temp_directory,
-        filename
-    )
+    filename = safe_filename( filename_base, extension )
+    path = os.path.join( temp_directory, filename )
 
     # ========================================================
     # XLSX
     # ========================================================
-
     if extension == "xlsx":
-
         from openpyxl import Workbook
-
         workbook = Workbook()
-
         sheet = workbook.active
-
         sheet.title = "Данные"
 
         lines = content.splitlines()
-
         row_number = 1
 
         for line in lines:
-
             line = line.strip()
-
             if not line:
                 continue
 
             if "|" in line:
-
-                cells = [
-                    cell.strip()
-                    for cell in line.split("|")
-                ]
-
+                cells = [ cell.strip() for cell in line.split("|") ]
             elif "\t" in line:
-
-                cells = [
-                    cell.strip()
-                    for cell in line.split("\t")
-                ]
-
+                cells = [ cell.strip() for cell in line.split("\t") ]
             elif ";" in line:
-
-                cells = [
-                    cell.strip()
-                    for cell in line.split(";")
-                ]
-
+                cells = [ cell.strip() for cell in line.split(";") ]
             else:
+                cells = [ line ]
 
-                cells = [
-                    line
-                ]
-
-            for column_number, value in enumerate(
-                cells,
-                start=1
-            ):
-
-                sheet.cell(
-                    row=row_number,
-                    column=column_number,
-                    value=value
-                )
+            for column_number, value in enumerate( cells, start=1 ):
+                sheet.cell( row=row_number, column=column_number, value=value )
 
             row_number += 1
 
-        workbook.save(
-            path
-        )
+        workbook.save( path )
 
     # ========================================================
     # DOCX
     # ========================================================
-
     elif extension == "docx":
-
         from docx import Document
-
         document = Document()
 
         for line in content.splitlines():
-
             line = line.strip()
-
             if not line:
                 document.add_paragraph("")
                 continue
 
-            if (
-                line.startswith("# ")
-                or line.startswith("## ")
-            ):
-
-                clean_title = re.sub(
-                    r"^#+\s*",
-                    "",
-                    line
-                )
-
-                document.add_heading(
-                    clean_title,
-                    level=1
-                )
-
+            if ( line.startswith("# ") or line.startswith("## ") ):
+                clean_title = re.sub( r"^#+\s*", "", line )
+                document.add_heading( clean_title, level=1 )
             else:
+                document.add_paragraph( line )
 
-                document.add_paragraph(
-                    line
-                )
-
-        document.save(
-            path
-        )
+        document.save( path )
 
     # ========================================================
     # PDF
     # ========================================================
-
     elif extension == "pdf":
-
         from reportlab.lib.pagesizes import A4
         from reportlab.platypus import (
-            SimpleDocTemplate,
-            Paragraph,
-            Spacer
+            SimpleDocTemplate, Paragraph, Spacer
         )
         from reportlab.lib.styles import (
             getSampleStyleSheet
         )
 
-        document = SimpleDocTemplate(
-            path,
-            pagesize=A4
-        )
-
+        document = SimpleDocTemplate( path, pagesize=A4 )
         styles = getSampleStyleSheet()
-
         story = []
 
         for line in content.splitlines():
-
             line = line.strip()
-
             if not line:
-
-                story.append(
-                    Spacer(
-                        1,
-                        8
-                    )
-                )
-
+                story.append( Spacer( 1, 8 ) )
                 continue
 
-            safe_text = html.escape(
-                line
-            )
+            safe_text = html.escape( line )
+            story.append( Paragraph( safe_text, styles["BodyText"] ) )
+            story.append( Spacer( 1, 6 ) )
 
-            story.append(
-                Paragraph(
-                    safe_text,
-                    styles["BodyText"]
-                )
-            )
-
-            story.append(
-                Spacer(
-                    1,
-                    6
-                )
-            )
-
-        document.build(
-            story
-        )
+        document.build( story )
 
     # ========================================================
     # PPTX
     # ========================================================
-
     elif extension == "pptx":
-
         from pptx import Presentation
-
         presentation = Presentation()
 
         current_title = None
         current_body = []
 
-        def add_slide(
-            title,
-            body
-        ):
-
+        def add_slide( title, body ):
             slide_layout = (
                 presentation
                 .slide_layouts[1]
             )
-
-            slide = presentation.slides.add_slide(
-                slide_layout
-            )
-
-            slide.shapes.title.text = (
-                title
-                or "Слайд"
-            )
+            slide = presentation.slides.add_slide( slide_layout )
+            slide.shapes.title.text = ( title or "Слайд" )
 
             text_frame = (
                 slide.placeholders[1]
                 .text_frame
             )
-
             text_frame.clear()
 
-            for index, line in enumerate(
-                body
-            ):
-
+            for index, line in enumerate( body ):
                 if index == 0:
-
                     paragraph = (
                         text_frame.paragraphs[0]
                     )
-
                 else:
-
                     paragraph = (
                         text_frame.add_paragraph()
                     )
-
                 paragraph.text = line
 
         for line in content.splitlines():
-
             stripped = line.strip()
 
             if (
                 stripped.upper()
                 .startswith("СЛАЙД:")
             ):
-
-                if (
-                    current_title
-                    or current_body
-                ):
-
-                    add_slide(
-                        current_title,
-                        current_body
-                    )
-
+                if ( current_title or current_body ):
+                    add_slide( current_title, current_body )
                 current_title = (
-                    stripped[
-                        len("СЛАЙД:"):
-                    ].strip()
+                    stripped[ len("СЛАЙД:"): ].strip()
                 )
-
                 current_body = []
-
             elif stripped:
+                current_body.append( stripped )
 
-                current_body.append(
-                    stripped
-                )
-
-        if (
-            current_title
-            or current_body
-        ):
-
-            add_slide(
-                current_title,
-                current_body
-            )
+        if ( current_title or current_body ):
+            add_slide( current_title, current_body )
 
         if not presentation.slides:
+            add_slide( "Презентация", content.splitlines() )
 
-            add_slide(
-                "Презентация",
-                content.splitlines()
-            )
-
-        presentation.save(
-            path
-        )
+        presentation.save( path )
 
     # ========================================================
     # CSV
     # ========================================================
-
     elif extension == "csv":
-
-        with open(
-            path,
-            "w",
-            encoding="utf-8-sig",
-            newline=""
-        ) as file:
-
-            writer = csv.writer(
-                file,
-                delimiter=";"
-            )
-
+        with open( path, "w", encoding="utf-8-sig", newline="" ) as file:
+            writer = csv.writer( file, delimiter=";" )
             for line in content.splitlines():
-
                 if line.strip():
-
-                    writer.writerow(
-                        [
-                            cell.strip()
-                            for cell in line.split(";")
-                        ]
-                    )
+                    writer.writerow( [ cell.strip() for cell in line.split(";") ] )
 
     # ========================================================
     # JSON
     # ========================================================
-
     elif extension == "json":
-
         clean_content = content.strip()
-
-        clean_content = re.sub(
-            r"^```(?:json)?\s*",
-            "",
-            clean_content,
-            flags=re.IGNORECASE
-        )
-
-        clean_content = re.sub(
-            r"\s*```$",
-            "",
-            clean_content
-        )
+        clean_content = re.sub( r"^```(?:json)?\s*", "", clean_content, flags=re.IGNORECASE )
+        clean_content = re.sub( r"\s*```$", "", clean_content )
 
         try:
-
-            data = json.loads(
-                clean_content
-            )
-
+            data = json.loads( clean_content )
         except Exception:
+            data = { "content": content }
 
-            data = {
-                "content": content
-            }
-
-        with open(
-            path,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            json.dump(
-                data,
-                file,
-                ensure_ascii=False,
-                indent=2
-            )
+        with open( path, "w", encoding="utf-8" ) as file:
+            json.dump( data, file, ensure_ascii=False, indent=2 )
 
     # ========================================================
     # ОСТАЛЬНЫЕ ФОРМАТЫ
     # ========================================================
-
     else:
-
         clean_content = content
 
-        if extension in [
-            "py",
-            "html",
-            "md"
-        ]:
+        if extension in [ "py", "html", "md" ]:
+            clean_content = re.sub( r"^```[a-zA-Z0-9_+#.-]*\s*\n", "", clean_content )
+            clean_content = re.sub( r"\n```\s*$", "", clean_content )
 
-            clean_content = re.sub(
-                r"^```[a-zA-Z0-9_+#.-]*\s*\n",
-                "",
-                clean_content
-            )
+        with open( path, "w", encoding="utf-8" ) as file:
+            file.write( clean_content )
 
-            clean_content = re.sub(
-                r"\n```\s*$",
-                "",
-                clean_content
-            )
-
-        with open(
-            path,
-            "w",
-            encoding="utf-8"
-        ) as file:
-
-            file.write(
-                clean_content
-            )
-
-    return (
-        path,
-        filename,
-        extension
-    )
-
+    return ( path, filename, extension )
 
 # ============================================================
 # FLASK
 # ============================================================
-
 app = Flask(__name__)
-
 
 @app.route("/")
 def home():
     return "Бот работает!"
 
-
 def run_web():
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            8080
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
-
+    port = int( os.environ.get( "PORT", 8080 ) )
+    app.run( host="0.0.0.0", port=port )
 
 # ============================================================
 # ОЧИСТКА MARKDOWN
 # ============================================================
-
 def clean_markdown(text):
-
     if not text:
         return ""
 
     text = str(text)
-
     code_blocks = []
 
     def protect_code(match):
-
-        code_blocks.append(
-            match.group(0)
-        )
-
+        code_blocks.append( match.group(0) )
         return (
             f"§CODEBLOCK"
             f"{len(code_blocks) - 1}"
@@ -1141,98 +607,27 @@ def clean_markdown(text):
         flags=re.DOTALL
     )
 
-    text = re.sub(
-        r"(?m)^\s{0,3}#{1,6}\s*",
-        "",
-        text
-    )
+    text = re.sub( r"(?m)^\s{0,3}#{1,6}\s*", "", text )
+    text = re.sub( r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL )
+    text = re.sub( r"__(.*?)__", r"\1", text, flags=re.DOTALL )
+    text = re.sub( r"\*(.*?)\*", r"\1", text, flags=re.DOTALL )
+    text = re.sub( r"_(.*?)_", r"\1", text, flags=re.DOTALL )
+    text = re.sub( r"~~(.*?)~~", r"\1", text, flags=re.DOTALL )
+    text = re.sub( r"\[([^\]]+)\]\([^)]+\)", r"\1", text )
+    text = re.sub( r"(?m)^\s*>\s?", "", text )
+    text = re.sub( r"(?m)^\s*[-*+]\s+", "• ", text )
+    text = re.sub( r"`([^`]+)`", r"\1", text )
+    text = re.sub( r"[\*_#~]", "", text )
 
-    text = re.sub(
-        r"\*\*(.*?)\*\*",
-        r"\1",
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r"__(.*?)__",
-        r"\1",
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r"\*(.*?)\*",
-        r"\1",
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r"_(.*?)_",
-        r"\1",
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r"~~(.*?)~~",
-        r"\1",
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r"\[([^\]]+)\]\([^)]+\)",
-        r"\1",
-        text
-    )
-
-    text = re.sub(
-        r"(?m)^\s*>\s?",
-        "",
-        text
-    )
-
-    text = re.sub(
-        r"(?m)^\s*[-*+]\s+",
-        "• ",
-        text
-    )
-
-    text = re.sub(
-        r"`([^`]+)`",
-        r"\1",
-        text
-    )
-
-    text = re.sub(
-        r"[\*_#~]",
-        "",
-        text
-    )
-
-    for index, code_block in enumerate(
-        code_blocks
-    ):
-
-        text = text.replace(
-            f"§CODEBLOCK{index}§",
-            code_block
-        )
+    for index, code_block in enumerate( code_blocks ):
+        text = text.replace( f"§CODEBLOCK{index}§", code_block )
 
     return text.strip()
-
 
 # ============================================================
 # РАЗБИВКА ДЛИННЫХ СООБЩЕНИЙ
 # ============================================================
-
-def split_long_message(
-    text,
-    max_length=TELEGRAM_MESSAGE_LIMIT - 100
-):
-
+def split_long_message( text, max_length=TELEGRAM_MESSAGE_LIMIT - 100 ):
     if not text:
         return [""]
 
@@ -1244,47 +639,29 @@ def split_long_message(
     parts = []
 
     while len(text) > max_length:
-
-        split_pos = text.rfind(
-            "\n",
-            0,
-            max_length
-        )
+        split_pos = text.rfind( "\n", 0, max_length )
 
         if split_pos < max_length // 2:
-
-            split_pos = text.rfind(
-                " ",
-                0,
-                max_length
-            )
+            split_pos = text.rfind( " ", 0, max_length )
 
         if split_pos <= 0:
             split_pos = max_length
 
-        part = text[
-            :split_pos
-        ].strip()
-
+        part = text[ :split_pos ].strip()
         if part:
             parts.append(part)
 
-        text = text[
-            split_pos:
-        ].strip()
+        text = text[ split_pos: ].strip()
 
     if text:
         parts.append(text)
 
     return parts
 
-
 # ============================================================
 # ИЗВЛЕЧЕНИЕ КОДОВЫХ БЛОКОВ
 # ============================================================
-
 def extract_code_blocks(text):
-
     if not text:
         return []
 
@@ -1298,16 +675,9 @@ def extract_code_blocks(text):
         r"```"
     )
 
-    matches = list(
-        re.finditer(
-            pattern,
-            text,
-            flags=re.DOTALL
-        )
-    )
+    matches = list( re.finditer( pattern, text, flags=re.DOTALL ) )
 
     if not matches:
-
         return [
             {
                 "type": "text",
@@ -1316,18 +686,11 @@ def extract_code_blocks(text):
         ]
 
     parts = []
-
     last_end = 0
 
     for match in matches:
-
-        before = text[
-            last_end:
-            match.start()
-        ]
-
+        before = text[ last_end: match.start() ]
         if before.strip():
-
             parts.append(
                 {
                     "type": "text",
@@ -1335,16 +698,8 @@ def extract_code_blocks(text):
                 }
             )
 
-        language = (
-            match.group(1)
-            or ""
-        ).strip()
-
-        code = (
-            match.group(2)
-            or ""
-        )
-
+        language = ( match.group(1) or "" ).strip()
+        code = ( match.group(2) or "" )
         code = code.strip("\n")
 
         parts.append(
@@ -1357,12 +712,8 @@ def extract_code_blocks(text):
 
         last_end = match.end()
 
-    after = text[
-        last_end:
-    ]
-
+    after = text[ last_end: ]
     if after.strip():
-
         parts.append(
             {
                 "type": "text",
@@ -1372,55 +723,29 @@ def extract_code_blocks(text):
 
     return parts
 
-
 # ============================================================
 # ОТПРАВКА КОДА
 # ============================================================
-
-def send_code_block(
-    chat_id,
-    code,
-    language=""
-):
-
+def send_code_block( chat_id, code, language="" ):
     if not code:
         return None
 
-    safe_code = html.escape(
-        code,
-        quote=False
-    )
-
+    safe_code = html.escape( code, quote=False )
     formatted = (
-        "<pre><code>"
-        + safe_code
-        + "</code></pre>"
+        "<pre><code>" + safe_code + "</code></pre>"
     )
 
     try:
-
-        return bot.send_message(
-            chat_id,
-            formatted,
-            parse_mode="HTML"
-        )
-
+        return bot.send_message( chat_id, formatted, parse_mode="HTML" )
     except Exception as e:
-
         print(
             f"⚠️ Ошибка отправки "
             f"кодового блока: {e}"
         )
 
         try:
-
-            return bot.send_message(
-                chat_id,
-                code
-            )
-
+            return bot.send_message( chat_id, code )
         except Exception as e2:
-
             print(
                 f"❌ Ошибка fallback "
                 f"кодового блока: {e2}"
@@ -1428,86 +753,42 @@ def send_code_block(
 
     return None
 
-
 # ============================================================
 # ОТПРАВКА AI-ОТВЕТА
 # ============================================================
-
-def send_ai_response(
-    chat_id,
-    text
-):
-
+def send_ai_response( chat_id, text ):
     if not text:
         return []
 
     text = str(text)
 
     if len(text) > AI_MAX_RESPONSE_LENGTH:
-
         text = (
-            text[:AI_MAX_RESPONSE_LENGTH]
-            +
-            "\n\n"
+            text[:AI_MAX_RESPONSE_LENGTH] + "\n\n"
             "[Ответ автоматически сокращён "
             "из-за максимального размера.]"
         )
 
-    text = clean_markdown(
-        text
-    )
-
-    parts = extract_code_blocks(
-        text
-    )
-
+    text = clean_markdown( text )
+    parts = extract_code_blocks( text )
     sent_messages = []
 
     for part in parts:
-
-        content = part.get(
-            "content",
-            ""
-        )
-
+        content = part.get( "content", "" )
         if not content:
             continue
 
         if part["type"] == "code":
-
-            code_parts = split_long_message(
-                content,
-                max_length=3500
-            )
-
+            code_parts = split_long_message( content, max_length=3500 )
             for code_part in code_parts:
-
-                send_code_block(
-                    chat_id,
-                    code_part,
-                    part.get(
-                        "language",
-                        ""
-                    )
-                )
+                send_code_block( chat_id, code_part, part.get( "language", "" ) )
 
         else:
-
-            text_parts = split_long_message(
-                content
-            )
-
+            text_parts = split_long_message( content )
             for text_part in text_parts:
-
                 try:
-
-                    bot.send_message(
-                        chat_id,
-                        text_part
-                    )
-
+                    bot.send_message( chat_id, text_part )
                 except Exception as e:
-
                     print(
                         f"⚠️ Ошибка отправки "
                         f"текста: {e}"
@@ -1515,145 +796,88 @@ def send_ai_response(
 
     return sent_messages
 
-
 # ============================================================
 # ИЗМЕНИТЬ ВРЕМЕННОЕ СООБЩЕНИЕ
 # ============================================================
-
-def edit_or_send_long(
-    chat_id,
-    message_id,
-    text
-):
-
+def edit_or_send_long( chat_id, message_id, text ):
     if not text:
         text = "Пустой ответ."
 
     text = str(text)
 
     if (
-        "```" not in text
-        and len(text)
-        <= TELEGRAM_MESSAGE_LIMIT - 100
+        "```" not in text and
+        len(text) <= TELEGRAM_MESSAGE_LIMIT - 100
     ):
-
         try:
-
-            cleaned_text = clean_markdown(
-                text
-            )
-
-            bot.edit_message_text(
-                cleaned_text,
-                chat_id=chat_id,
-                message_id=message_id
-            )
-
+            cleaned_text = clean_markdown( text )
+            bot.edit_message_text( cleaned_text, chat_id=chat_id, message_id=message_id )
             return
-
         except Exception as e:
-
             print(
                 f"⚠️ Не удалось изменить "
                 f"сообщение: {e}"
             )
 
     try:
-
-        bot.delete_message(
-            chat_id,
-            message_id
-        )
-
+        bot.delete_message( chat_id, message_id )
     except Exception as e:
-
         print(
             f"⚠️ Не удалось удалить "
             f"временное сообщение: {e}"
         )
 
-    send_ai_response(
-        chat_id,
-        text
-    )
-
+    send_ai_response( chat_id, text )
 
 # ============================================================
 # AI С ИСТОРИЕЙ
 # ============================================================
-
-def ask_ai_with_history(
-    user_id,
-    prompt
-):
-
-    mode = user_modes.get(
-        user_id,
-        "normal"
-    )
+def ask_ai_with_history( user_id, prompt ):
+    mode = user_modes.get( user_id, "normal" )
 
     if user_id not in user_histories:
-
         if mode == "neuroham":
-
             sys_prompt = (
                 "Ты — Нейрохам, гениальный, "
                 "но невыносимо ворчливый, "
                 "саркастичный и высокомерный "
                 "искусственный интеллект. "
-
                 "Ты разговариваешь с пользователем "
                 "с позиции огромного превосходства. "
-
                 "Твой стиль: едкая ирония, "
                 "пассивная агрессия и насмешки "
                 "над глупыми вопросами. "
-
                 "Никакой нецензурной лексики. "
-
                 "Не используй Markdown в обычном тексте. "
-
                 "Если нужно показать программный код, "
                 "используй отдельный кодовый блок."
             )
-
         else:
-
             sys_prompt = (
                 "Ты полезный, дружелюбный и умный "
                 "ИИ-ассистент. "
-
                 "Отвечай строго на том же языке, "
                 "на котором пишет пользователь. "
-
                 "Если пользователь пишет на русском — "
                 "отвечай на русском. "
-
                 "Если пользователь пишет на английском — "
                 "отвечай на английском. "
-
                 "Если пользователь пишет на другом языке — "
                 "отвечай на этом же языке. "
-
                 "Не используй Markdown в обычных сообщениях. "
-
                 "Не используй **жирный текст**, "
                 "*курсив*, # заголовки, "
                 "[Markdown-ссылки](...) "
                 "или другие Markdown-конструкции "
                 "в обычном тексте. "
-
                 "Если ответ содержит программный код, "
                 "помещай его только в отдельный "
                 "Markdown-кодовый блок "
                 "с тройными обратными кавычками. "
-
                 "Например:\n\n"
-
                 "```python\n"
                 "print('Hello')\n"
                 "```\n\n"
-
                 "Код внутри такого блока не изменяй."
             )
 
@@ -1665,140 +889,64 @@ def ask_ai_with_history(
         ]
 
     coding_keywords = [
-
-        "код",
-        "кодинг",
-        "программ",
-        "python",
-        "javascript",
-        "typescript",
-        "java",
-        "c++",
-        "c#",
-        "php",
-        "html",
-        "css",
-        "sql",
-        "bash",
-
-        "telegram bot",
-        "telegram бот",
-        "бот",
-
-        "api",
-        "sdk",
-
-        "функция",
-        "класс",
-        "метод",
-        "библиотек",
-        "скрипт",
-
-        "исправь",
-        "исправить",
-        "ошибка",
-        "ошибку",
-
-        "перепиши",
-        "переделай",
-
-        "добавь функцию",
-        "добавь код",
-
-        "сделай код",
-        "напиши код",
-
-        "полный код",
-        "готовый код",
-
-        "source code",
-
-        "debug",
-        "debugging",
-
-        "stack trace",
-        "exception",
-
-        "import",
-        "pip",
-        "npm",
-        "json",
-
-        "regex",
-        "регулярное выражение",
-
-        "database",
+        "код", "кодинг", "программ", "python",
+        "javascript", "typescript", "java", "c++",
+        "c#", "php", "html", "css",
+        "sql", "bash", "telegram bot", "telegram бот",
+        "бот", "api", "sdk", "функция",
+        "класс", "метод", "библиотек", "скрипт",
+        "исправь", "исправить", "ошибка", "ошибку",
+        "перепиши", "переделай", "добавь функцию", "добавь код",
+        "сделай код", "напиши код", "полный код", "готовый код",
+        "source code", "debug", "debugging", "stack trace",
+        "exception", "import", "pip", "npm",
+        "json", "regex", "регулярное выражение", "database",
         "база данных"
     ]
 
-    prompt_lower = str(
-        prompt
-    ).lower()
-
+    prompt_lower = str( prompt ).lower()
     is_coding_request = any(
-        keyword in prompt_lower
-        for keyword in coding_keywords
+        keyword in prompt_lower for keyword in coding_keywords
     )
 
     if is_coding_request:
-
         coding_instruction = (
             "ИНСТРУКЦИИ ДЛЯ ПРОГРАММИРОВАНИЯ:\n\n"
-
             "Пользователь работает с программным кодом.\n\n"
-
             "Отвечай максимально практически "
             "и подробно.\n\n"
-
             "Если пользователь просит написать код, "
             "предоставляй полноценный рабочий код.\n\n"
-
             "Если пользователь просит полный готовый "
             "код — предоставляй весь код целиком.\n\n"
-
             "Никогда не заменяй части кода словами "
             "\"остальной код без изменений\", "
             "\"здесь остальной код\" или "
             "\"...\".\n\n"
-
             "Не используй многоточия вместо частей "
             "программного кода.\n\n"
-
             "Если пользователь прислал существующий "
             "проект и просит изменить конкретную часть, "
             "сохраняй остальные функции, если он "
             "не попросил их удалить.\n\n"
-
             "Учитывай импорты, зависимости, "
             "переменные окружения, функции, "
             "обработчики и связи между компонентами.\n\n"
-
             "Если исправляешь ошибку, исправляй "
             "причину проблемы.\n\n"
-
             "Большие фрагменты кода можно выдавать "
             "полностью.\n\n"
-
             "Обычное объяснение пиши без Markdown.\n\n"
-
             "Каждый отдельный фрагмент программного "
             "кода обязательно помещай в отдельный "
             "кодовый блок с тройными обратными кавычками."
         )
 
         effective_prompt = (
-            coding_instruction
-            +
-            "\n\nЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n"
-            +
-            str(prompt)
+            coding_instruction + "\n\nЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n" + str(prompt)
         )
-
     else:
-
-        effective_prompt = str(
-            prompt
-        )
+        effective_prompt = str( prompt )
 
     user_histories[user_id].append(
         {
@@ -1808,29 +956,20 @@ def ask_ai_with_history(
     )
 
     if len(user_histories[user_id]) > 21:
-
         user_histories[user_id] = (
-            [user_histories[user_id][0]]
-            +
-            user_histories[user_id][-20:]
+            [user_histories[user_id][0]] + user_histories[user_id][-20:]
         )
 
-    messages_to_send = [
-        msg.copy()
-        for msg in user_histories[user_id]
-    ]
+    messages_to_send = [ msg.copy() for msg in user_histories[user_id] ]
 
     if mode == "neuroham":
-
         messages_to_send[-1]["content"] = (
             "[Ответь в стиле саркастичного "
             "и ворчливого мизантропа. "
             "Без мата. "
             "Обычный текст без Markdown. "
             "Код помещай в отдельные "
-            "кодовые блоки.]\n\n"
-            +
-            messages_to_send[-1]["content"]
+            "кодовые блоки.]\n\n" + messages_to_send[-1]["content"]
         )
 
     models_to_try = [
@@ -1843,26 +982,13 @@ def ask_ai_with_history(
     answer = ""
     success = False
 
-    print(
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
-
-    print(
-        f"🤖 Новый запрос от {user_id}"
-    )
-
-    print(
-        "🔄 Запускаю G4F..."
-    )
+    print( "━━━━━━━━━━━━━━━━━━━━━━━━━━━━" )
+    print( f"🤖 Новый запрос от {user_id}" )
+    print( "🔄 Запускаю G4F..." )
 
     for model_name in models_to_try:
-
         try:
-
-            print(
-                f"🔄 G4F → {model_name}"
-            )
-
+            print( f"🔄 G4F → {model_name}" )
             response = (
                 ai_client
                 .chat
@@ -1872,7 +998,6 @@ def ask_ai_with_history(
                     messages=messages_to_send
                 )
             )
-
             answer = (
                 response
                 .choices[0]
@@ -1881,54 +1006,40 @@ def ask_ai_with_history(
             )
 
             if not answer:
-
                 print(
                     f"⚠️ G4F → {model_name}: "
                     "пустой ответ"
                 )
-
                 continue
 
-            answer = str(
-                answer
-            ).strip()
-
+            answer = str( answer ).strip()
             success = True
-
             print(
                 f"✅ G4F → {model_name}: "
                 "ответ получен"
             )
-
             break
 
         except Exception as e:
-
             print(
                 f"❌ G4F → {model_name}: "
                 f"{e}"
             )
 
     if not success:
-
-        print(
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-
+        print( "━━━━━━━━━━━━━━━━━━━━━━━━━━━━" )
         print(
             "⚠️ Все G4F провайдеры "
             "не ответили."
         )
 
         if groq_client:
-
             print(
                 "🔄 Переключаюсь на "
                 "Groq GPT-OSS 120B..."
             )
 
             try:
-
                 response = (
                     groq_client
                     .chat
@@ -1947,65 +1058,41 @@ def ask_ai_with_history(
                 )
 
                 if answer:
-
-                    answer = str(
-                        answer
-                    ).strip()
-
+                    answer = str( answer ).strip()
                     success = True
-
                     print(
                         "✅ Groq GPT-OSS 120B: "
                         "ответ успешно получен!"
                     )
-
                 else:
-
                     print(
                         "❌ Groq GPT-OSS 120B: "
                         "пустой ответ."
                     )
 
             except Exception as e:
-
                 print(
                     "❌ Groq GPT-OSS 120B: "
                     f"{e}"
                 )
-
         else:
-
-            print(
-                "❌ GROQ_API_KEY не найден."
-            )
+            print( "❌ GROQ_API_KEY не найден." )
 
     if success:
-
         user_histories[user_id].append(
             {
                 "role": "assistant",
                 "content": answer
             }
         )
-
-        print(
-            "🤖 Ответ успешно получен."
-        )
-
-        print(
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-
+        print( "🤖 Ответ успешно получен." )
+        print( "━━━━━━━━━━━━━━━━━━━━━━━━━━━━" )
         return answer
 
     user_histories[user_id].pop()
-
-    print(
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
+    print( "━━━━━━━━━━━━━━━━━━━━━━━━━━━━" )
 
     if mode == "neuroham":
-
         return (
             "Даже мои процессоры решили "
             "сегодня саботировать работу 🙄"
@@ -2018,21 +1105,16 @@ def ask_ai_with_history(
         "Попробуй ещё раз немного позже."
     )
 
-
 # ============================================================
 # ПАСХАЛКА КИРА
 # ============================================================
-
 def generate_kira_text():
-
     prompt = """
-Напиши красивый, искренний и оригинальный текст о девушке по имени Кира.
-
-Это специальная команда /kira в Telegram-боте. 
+Напиши красивый, искренний и оригинальный текст о девушке по имени Кира. Это специальная команда /kira в Telegram-боте.
 
 ВАЖНО:
 - Не используй избитые и заезженные шаблоны вроде "Кира — это человек, рядом с которым...".
-- Придумай каждый раз уникальную подачу, метафору или мысль (например, сравнение с атмосферной музыкой, редким явлением, уютным вечером или утренним светом).
+- Придумывай каждый раз уникальную подачу, метафору или мысль (например, сравнение с атмосферной музыкой, редким явлением, уютным вечером или утренним светом).
 - Текст должен звучать тёпло, эстетично и глубоко, но без излишнего пафоса и приторности.
 - Не придумывай конкретные факты о её жизни, возрасте или внешности.
 - Длина: примерно 3–5 предложений.
@@ -2048,9 +1130,7 @@ def generate_kira_text():
     ]
 
     for model_name in models_to_try:
-
         try:
-
             response = (
                 ai_client
                 .chat
@@ -2082,22 +1162,16 @@ def generate_kira_text():
             )
 
             if answer:
-
-                return clean_markdown(
-                    str(answer).strip()
-                )
+                return clean_markdown( str(answer).strip() )
 
         except Exception as e:
-
             print(
                 f"⚠️ Kira G4F "
                 f"{model_name}: {e}"
             )
 
     if groq_client:
-
         try:
-
             response = (
                 groq_client
                 .chat
@@ -2129,16 +1203,10 @@ def generate_kira_text():
             )
 
             if answer:
-
-                return clean_markdown(
-                    str(answer).strip()
-                )
+                return clean_markdown( str(answer).strip() )
 
         except Exception as e:
-
-            print(
-                f"❌ Groq Kira ошибка: {e}"
-            )
+            print( f"❌ Groq Kira ошибка: {e}" )
 
     return (
         "Кира — словно редкая виниловая пластинка с любимой музыкой, "
@@ -2148,33 +1216,14 @@ def generate_kira_text():
         "немного понятнее и светлее. ❤️"
     )
 
-
-@bot.message_handler(
-    commands=["kira"]
-)
+@bot.message_handler( commands=["kira"] )
 def kira_cmd(message):
-
-    msg = bot.reply_to(
-        message,
-        "✨ Нахожу нужные слова..."
-    )
-
+    msg = bot.reply_to( message, "✨ Нахожу нужные слова..." )
     try:
-
         kira_text = generate_kira_text()
-
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            kira_text
-        )
-
+        edit_or_send_long( message.chat.id, msg.message_id, kira_text )
     except Exception as e:
-
-        print(
-            f"❌ Ошибка пасхалки Кира: {e}"
-        )
-
+        print( f"❌ Ошибка пасхалки Кира: {e}" )
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
@@ -2184,95 +1233,49 @@ def kira_cmd(message):
             )
         )
 
-
 # ============================================================
 # WEB SEARCH
 # ============================================================
-
 def perform_web_search(query):
-
     results_text = ""
 
     if tavily_client:
-
         try:
-
-            response = tavily_client.search(
-                query=query,
-                max_results=3
-            )
-
-            for result in response.get(
-                "results",
-                []
-            ):
-
-                title = result.get(
-                    "title",
-                    "Без заголовка"
-                )
-
-                content = result.get(
-                    "content",
-                    ""
-                )
-
+            response = tavily_client.search( query=query, max_results=3 )
+            for result in response.get( "results", [] ):
+                title = result.get( "title", "Без заголовка" )
+                content = result.get( "content", "" )
                 results_text += (
                     f"- {title}: "
                     f"{content}\n"
                 )
-
         except Exception as e:
-
-            print(
-                f"⚠️ Tavily ошибка: {e}"
-            )
+            print( f"⚠️ Tavily ошибка: {e}" )
 
     if not results_text:
-
         try:
-
             from duckduckgo_search import DDGS
-
             with DDGS() as ddgs:
-
-                results = list(
-                    ddgs.text(
-                        query,
-                        max_results=3
-                    )
-                )
-
+                results = list( ddgs.text( query, max_results=3 ) )
                 for result in results:
-
                     results_text += (
                         f"- "
                         f"{result.get('title', 'Без заголовка')}: "
                         f"{result.get('body', '')[:500]}\n"
                     )
-
         except Exception as e:
-
             results_text = (
                 f"Не удалось выполнить поиск: {e}"
             )
 
     return results_text
 
-
 # ============================================================
 # ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЯ
 # ============================================================
-
 def generate_image_dynamic(prompt):
-
-    for model in [
-        "flux",
-        "dall-e-3"
-    ]:
-
+    for model in [ "flux", "dall-e-3" ]:
         try:
-
             response = (
                 ai_client
                 .images
@@ -2290,38 +1293,20 @@ def generate_image_dynamic(prompt):
             )
 
             if image_url:
-
-                response_image = requests.get(
-                    image_url,
-                    timeout=25
-                )
-
+                response_image = requests.get( image_url, timeout=25 )
                 if response_image.status_code == 200:
-
                     return response_image.content
 
         except Exception as e:
-
-            print(
-                f"⚠️ Генерация {model}: {e}"
-            )
+            print( f"⚠️ Генерация {model}: {e}" )
 
     return None
-
 
 # ============================================================
 # GEMINI IMAGE ANALYSIS
 # ============================================================
-
-def analyze_image_gemini(
-    image_bytes
-):
-
-    if (
-        not GEMINI_API_KEY
-        or not genai
-    ):
-
+def analyze_image_gemini( image_bytes ):
+    if ( not GEMINI_API_KEY or not genai ):
         return (
             "Анализ фото недоступен: "
             "не задан GEMINI_API_KEY."
@@ -2332,16 +1317,9 @@ def analyze_image_gemini(
         "gemini-1.5-flash",
         "gemini-2.0-flash"
     ]:
-
         try:
-
-            model = genai.GenerativeModel(
-                model_name
-            )
-
-            image = Image.open(
-                io.BytesIO(image_bytes)
-            )
+            model = genai.GenerativeModel( model_name )
+            image = Image.open( io.BytesIO(image_bytes) )
 
             response = model.generate_content(
                 [
@@ -2355,64 +1333,31 @@ def analyze_image_gemini(
                 ]
             )
 
-            if (
-                response
-                and response.text
-            ):
-
-                return clean_markdown(
-                    str(
-                        response.text
-                    ).strip()
-                )
+            if ( response and response.text ):
+                return clean_markdown( str( response.text ).strip() )
 
         except Exception as e:
-
-            print(
-                f"⚠️ Gemini {model_name}: {e}"
-            )
+            print( f"⚠️ Gemini {model_name}: {e}" )
 
     return (
         "Не удалось получить ответ от Gemini."
     )
 
-
 # ============================================================
 # TTS
 # ============================================================
-
-async def generate_audio(
-    text,
-    output_file
-):
-
-    communicate = edge_tts.Communicate(
-        text,
-        "ru-RU-SvetlanaNeural"
-    )
-
-    await communicate.save(
-        output_file
-    )
-
+async def generate_audio( text, output_file ):
+    communicate = edge_tts.Communicate( text, "ru-RU-SvetlanaNeural" )
+    await communicate.save( output_file )
 
 # ============================================================
 # START / HELP
 # ============================================================
-
-@bot.message_handler(
-    commands=[
-        "start",
-        "help"
-    ]
-)
+@bot.message_handler( commands=[ "start", "help" ] )
 def help_cmd(message):
-
     help_text = (
         "Привет! Я ИИ-ассистент 🤖\n\n"
-
         "Мои команды:\n\n"
-
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
         "/image <описание> — создать изображение\n"
@@ -2428,32 +1373,18 @@ def help_cmd(message):
         "/kira — послание о Кире ✨\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
-
         "Также можешь просто написать мне "
         "любой вопрос обычным сообщением."
     )
-
-    bot.reply_to(
-        message,
-        help_text
-    )
-
+    bot.reply_to( message, help_text )
 
 # ============================================================
 # MUSIC
 # ============================================================
-
-@bot.message_handler(
-    commands=["music"]
-)
+@bot.message_handler( commands=["music"] )
 def music_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
+    parts = message.text.split( maxsplit=1 )
     if len(parts) < 2:
-
         bot.reply_to(
             message,
             "Напиши описание музыки.\n\n"
@@ -2461,19 +1392,15 @@ def music_cmd(message):
             "/music спокойная фортепианная мелодия "
             "для ночного города"
         )
-
         return
 
     prompt = parts[1].strip()
-
     if len(prompt) > 500:
-
         bot.reply_to(
             message,
             "Описание музыки слишком длинное. "
             "Сделай его короче."
         )
-
         return
 
     msg = bot.reply_to(
@@ -2485,17 +1412,8 @@ def music_cmd(message):
     music_path = None
 
     try:
-
-        music_path = generate_music(
-            prompt,
-            duration=8
-        )
-
-        with open(
-            music_path,
-            "rb"
-        ) as audio:
-
+        music_path = generate_music( prompt, duration=8 )
+        with open( music_path, "rb" ) as audio:
             bot.send_audio(
                 message.chat.id,
                 audio,
@@ -2508,21 +1426,12 @@ def music_cmd(message):
             )
 
         try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
+            bot.delete_message( message.chat.id, msg.message_id )
         except Exception:
             pass
 
     except Exception as e:
-
-        print(
-            f"❌ Ошибка MusicGen: {e}"
-        )
-
+        print( f"❌ Ошибка MusicGen: {e}" )
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
@@ -2533,39 +1442,19 @@ def music_cmd(message):
         )
 
     finally:
-
-        if (
-            music_path
-            and os.path.exists(
-                music_path
-            )
-        ):
-
+        if ( music_path and os.path.exists( music_path ) ):
             try:
-
-                os.remove(
-                    music_path
-                )
-
+                os.remove( music_path )
             except Exception:
                 pass
-
 
 # ============================================================
 # FILE
 # ============================================================
-
-@bot.message_handler(
-    commands=["file"]
-)
+@bot.message_handler( commands=["file"] )
 def file_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
+    parts = message.text.split( maxsplit=1 )
     if len(parts) < 2:
-
         bot.reply_to(
             message,
             "Напиши, какой файл создать.\n\n"
@@ -2575,24 +1464,14 @@ def file_cmd(message):
             "/file PDF о планетах\n"
             "/file Презентация о солнечной системе"
         )
-
         return
 
     request = parts[1].strip()
-
     if len(request) > 1000:
-
-        bot.reply_to(
-            message,
-            "Запрос слишком длинный."
-        )
-
+        bot.reply_to( message, "Запрос слишком длинный." )
         return
 
-    extension = detect_file_format(
-        request
-    )
-
+    extension = detect_file_format( request )
     msg = bot.reply_to(
         message,
         (
@@ -2605,23 +1484,12 @@ def file_cmd(message):
     temp_directory = None
 
     try:
-
         path, filename, extension = (
-            create_generated_file(
-                request,
-                message.chat.id
-            )
+            create_generated_file( request, message.chat.id )
         )
+        temp_directory = os.path.dirname( path )
 
-        temp_directory = os.path.dirname(
-            path
-        )
-
-        with open(
-            path,
-            "rb"
-        ) as document:
-
+        with open( path, "rb" ) as document:
             bot.send_document(
                 message.chat.id,
                 document,
@@ -2632,21 +1500,12 @@ def file_cmd(message):
             )
 
         try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
+            bot.delete_message( message.chat.id, msg.message_id )
         except Exception:
             pass
 
     except Exception as e:
-
-        print(
-            f"❌ Ошибка создания файла: {e}"
-        )
-
+        print( f"❌ Ошибка создания файла: {e}" )
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
@@ -2657,197 +1516,97 @@ def file_cmd(message):
         )
 
     finally:
-
-        if (
-            path
-            and os.path.exists(path)
-        ):
-
+        if ( path and os.path.exists(path) ):
             try:
-
-                os.remove(
-                    path
-                )
-
+                os.remove( path )
             except Exception:
                 pass
 
-        if (
-            temp_directory
-            and os.path.isdir(
-                temp_directory
-            )
-        ):
-
+        if ( temp_directory and os.path.isdir( temp_directory ) ):
             try:
-
-                os.rmdir(
-                    temp_directory
-                )
-
+                os.rmdir( temp_directory )
             except Exception:
                 pass
-
 
 # ============================================================
 # NEUROHAM
 # ============================================================
-
-@bot.message_handler(
-    commands=[
-        "neuroham",
-        "rude"
-    ]
-)
-def toggle_neuroham_mode(
-    message
-):
-
+@bot.message_handler( commands=[ "neuroham", "rude" ] )
+def toggle_neuroham_mode( message ):
     user_id = message.chat.id
-
-    current_mode = user_modes.get(
-        user_id,
-        "normal"
-    )
+    current_mode = user_modes.get( user_id, "normal" )
 
     if current_mode == "normal":
-
         user_modes[user_id] = "neuroham"
-
-        bot.reply_to(
-            message,
-            "Режим Нейрохам активирован 💀"
-        )
-
+        bot.reply_to( message, "Режим Нейрохам активирован 💀" )
     else:
-
         user_modes[user_id] = "normal"
-
-        bot.reply_to(
-            message,
-            "Режим Нейрохам деактивирован ✨"
-        )
+        bot.reply_to( message, "Режим Нейрохам деактивирован ✨" )
 
     if user_id in user_histories:
-
         del user_histories[user_id]
-
 
 # ============================================================
 # CLEAR
 # ============================================================
-
-@bot.message_handler(
-    commands=["clear"]
-)
+@bot.message_handler( commands=["clear"] )
 def clear_cmd(message):
-
     user_id = message.chat.id
-
     if user_id in user_histories:
-
         del user_histories[user_id]
-
-    bot.reply_to(
-        message,
-        "Память диалога очищена."
-    )
-
+    bot.reply_to( message, "Память диалога очищена." )
 
 # ============================================================
 # FACT
 # ============================================================
-
-@bot.message_handler(
-    commands=["fact"]
-)
+@bot.message_handler( commands=["fact"] )
 def fact_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    topic = (
-        parts[1]
-        if len(parts) > 1
-        else ""
-    )
+    parts = message.text.split( maxsplit=1 )
+    topic = ( parts[1] if len(parts) > 1 else "" )
 
     if topic:
-
         prompt = (
             f"Расскажи один интересный факт "
             f"на тему: {topic}. "
             f"Будь краток."
         )
-
     else:
-
         prompt = (
             "Расскажи один случайный "
             "интересный факт. Будь краток."
         )
 
-    msg = bot.reply_to(
-        message,
-        "Ищу факт..."
-    )
-
-    fact = ask_ai_with_history(
-        message.chat.id,
-        prompt
-    )
-
-    edit_or_send_long(
-        message.chat.id,
-        msg.message_id,
-        fact
-    )
-
+    msg = bot.reply_to( message, "Ищу факт..." )
+    fact = ask_ai_with_history( message.chat.id, prompt )
+    edit_or_send_long( message.chat.id, msg.message_id, fact )
 
 # ============================================================
 # WEATHER
 # ============================================================
-
-@bot.message_handler(
-    commands=["weather"]
-)
+@bot.message_handler( commands=["weather"] )
 def weather_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    city = (
-        parts[1]
-        if len(parts) > 1
-        else ""
-    )
+    parts = message.text.split( maxsplit=1 )
+    city = ( parts[1] if len(parts) > 1 else "" )
 
     if not city:
-
         bot.reply_to(
             message,
             "Укажи город.\n\n"
             "Например:\n"
             "/weather Ташкент"
         )
-
         return
 
     try:
-
         response = requests.get(
-            f"https://wttr.in/{city}",
+            f"[https://wttr.in/](https://wttr.in/){city}",
             params={
-                "format":
-                    "Город: %l\n"
-                    "Погода: %C %c\n"
-                    "Температура: %t "
-                    "(ощущается как %f)\n"
-                    "Ветер: %w\n"
-                    "Влажность: %h",
-
+                "format": "Город: %l\n"
+                          "Погода: %C %c\n"
+                          "Температура: %t "
+                          "(ощущается как %f)\n"
+                          "Ветер: %w\n"
+                          "Влажность: %h",
                 "lang": "ru",
                 "m": ""
             },
@@ -2855,262 +1614,123 @@ def weather_cmd(message):
         )
 
         if response.status_code == 200:
-
             bot.reply_to(
                 message,
-                "Сводка:\n\n"
-                + response.text.strip()
+                "Сводка:\n\n" + response.text.strip()
             )
-
         else:
-
-            bot.reply_to(
-                message,
-                "Город не найден."
-            )
+            bot.reply_to( message, "Город не найден." )
 
     except Exception as e:
-
-        bot.reply_to(
-            message,
-            f"Ошибка погоды: {e}"
-        )
-
+        bot.reply_to( message, f"Ошибка погоды: {e}" )
 
 # ============================================================
 # SEARCH
 # ============================================================
-
-@bot.message_handler(
-    commands=["search"]
-)
+@bot.message_handler( commands=["search"] )
 def search_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    query = (
-        parts[1]
-        if len(parts) > 1
-        else ""
-    )
+    parts = message.text.split( maxsplit=1 )
+    query = ( parts[1] if len(parts) > 1 else "" )
 
     if not query:
-
         bot.reply_to(
             message,
             "Напиши запрос.\n\n"
             "Например:\n"
             "/search новости"
         )
-
         return
 
-    msg = bot.reply_to(
-        message,
-        f"Ищу: {query}"
-    )
-
-    raw_data = perform_web_search(
-        query
-    )
+    msg = bot.reply_to( message, f"Ищу: {query}" )
+    raw_data = perform_web_search( query )
 
     prompt = (
         f"Вот результаты поиска из интернета "
         f"по запросу '{query}':\n\n"
         f"{raw_data}\n\n"
-
         "Сделай краткую и понятную выжимку "
         "на языке пользователя. "
         "Не используй Markdown."
     )
 
-    reply = ask_ai_with_history(
-        message.chat.id,
-        prompt
-    )
-
-    edit_or_send_long(
-        message.chat.id,
-        msg.message_id,
-        reply
-    )
-
+    reply = ask_ai_with_history( message.chat.id, prompt )
+    edit_or_send_long( message.chat.id, msg.message_id, reply )
 
 # ============================================================
 # AI COMMANDS
 # ============================================================
-
-@bot.message_handler(
-    commands=[
-        "gemini",
-        "code",
-        "sum",
-        "tr",
-        "fix"
-    ]
-)
+@bot.message_handler( commands=[ "gemini", "code", "sum", "tr", "fix" ] )
 def ai_tools_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
+    parts = message.text.split( maxsplit=1 )
     if len(parts) < 2:
-
-        bot.reply_to(
-            message,
-            "Напиши текст после команды."
-        )
-
+        bot.reply_to( message, "Напиши текст после команды." )
         return
 
-    msg = bot.reply_to(
-        message,
-        "Обрабатываю..."
-    )
-
-    reply = ask_ai_with_history(
-        message.chat.id,
-        parts[1]
-    )
-
-    edit_or_send_long(
-        message.chat.id,
-        msg.message_id,
-        reply
-    )
-
+    msg = bot.reply_to( message, "Обрабатываю..." )
+    reply = ask_ai_with_history( message.chat.id, parts[1] )
+    edit_or_send_long( message.chat.id, msg.message_id, reply )
 
 # ============================================================
 # IMAGE
 # ============================================================
-
-@bot.message_handler(
-    commands=["image"]
-)
+@bot.message_handler( commands=["image"] )
 def image_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    prompt = (
-        parts[1]
-        if len(parts) > 1
-        else ""
-    )
+    parts = message.text.split( maxsplit=1 )
+    prompt = ( parts[1] if len(parts) > 1 else "" )
 
     if not prompt:
-
         bot.reply_to(
             message,
             "Опиши картинку.\n\n"
             "Например:\n"
             "/image кот в космосе"
         )
-
         return
 
-    msg = bot.reply_to(
-        message,
-        "Генерирую..."
-    )
-
-    image_bytes = generate_image_dynamic(
-        prompt
-    )
+    msg = bot.reply_to( message, "Генерирую..." )
+    image_bytes = generate_image_dynamic( prompt )
 
     if image_bytes:
-
         bot.send_photo(
             message.chat.id,
             image_bytes,
             caption=f"Запрос: {prompt}"
         )
-
         try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
+            bot.delete_message( message.chat.id, msg.message_id )
         except Exception:
             pass
-
     else:
-
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
             "Не удалось сгенерировать изображение."
         )
 
-
 # ============================================================
 # TTS
 # ============================================================
-
-@bot.message_handler(
-    commands=["tts"]
-)
+@bot.message_handler( commands=["tts"] )
 def tts_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
+    parts = message.text.split( maxsplit=1 )
     if len(parts) < 2:
-
-        bot.reply_to(
-            message,
-            "Напиши текст для озвучки."
-        )
-
+        bot.reply_to( message, "Напиши текст для озвучки." )
         return
 
-    msg = bot.reply_to(
-        message,
-        "Озвучиваю..."
-    )
-
-    audio_path = tempfile.mktemp(
-        suffix=".mp3"
-    )
+    msg = bot.reply_to( message, "Озвучиваю..." )
+    audio_path = tempfile.mktemp( suffix=".mp3" )
 
     try:
-
-        asyncio.run(
-            generate_audio(
-                parts[1],
-                audio_path
-            )
-        )
-
-        with open(
-            audio_path,
-            "rb"
-        ) as audio:
-
-            bot.send_voice(
-                message.chat.id,
-                audio
-            )
+        asyncio.run( generate_audio( parts[1], audio_path ) )
+        with open( audio_path, "rb" ) as audio:
+            bot.send_voice( message.chat.id, audio )
 
         try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
+            bot.delete_message( message.chat.id, msg.message_id )
         except Exception:
             pass
 
     except Exception as e:
-
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
@@ -3118,268 +1738,129 @@ def tts_cmd(message):
         )
 
     finally:
-
-        if os.path.exists(
-            audio_path
-        ):
-
+        if os.path.exists( audio_path ):
             try:
-
-                os.remove(
-                    audio_path
-                )
-
+                os.remove( audio_path )
             except Exception:
                 pass
-
 
 # ============================================================
 # TEXT HANDLER
 # ============================================================
-
-@bot.message_handler(
-    content_types=["text"]
-)
+@bot.message_handler( content_types=["text"] )
 def handle_text(message):
-
     text = message.text or ""
-
     text_lower = text.lower()
 
     # ========================================================
     # URL
     # ========================================================
-
-    if (
-        "http://" in text_lower
-        or "https://" in text_lower
-    ):
-
-        msg = bot.reply_to(
-            message,
-            "Читаю ссылку..."
-        )
-
+    if ( "http://" in text_lower or "https://" in text_lower ):
+        msg = bot.reply_to( message, "Читаю ссылку..." )
         try:
-
             urls = [
-                word
-                for word in message.text.split()
+                word for word in message.text.split()
                 if word.startswith("http")
             ]
-
             if not urls:
-
-                raise ValueError(
-                    "Ссылка не найдена"
-                )
+                raise ValueError( "Ссылка не найдена" )
 
             url = urls[0]
-
             response = requests.get(
                 url,
                 timeout=10,
-                headers={
-                    "User-Agent":
-                        "Mozilla/5.0"
-                }
+                headers={ "User-Agent": "Mozilla/5.0" }
             )
-
-            soup = BeautifulSoup(
-                response.text,
-                "html.parser"
-            )
-
-            page_text = soup.get_text(
-                separator=" ",
-                strip=True
-            )[:5000]
+            soup = BeautifulSoup( response.text, "html.parser" )
+            page_text = soup.get_text( separator=" ", strip=True )[:5000]
 
             reply = ask_ai_with_history(
                 message.chat.id,
-
                 "Сделай краткую выжимку "
                 "этого текста. "
-                "Не используй Markdown:\n\n"
-                + page_text
+                "Не используй Markdown:\n\n" + page_text
             )
-
-            edit_or_send_long(
-                message.chat.id,
-                msg.message_id,
-                reply
-            )
-
+            edit_or_send_long( message.chat.id, msg.message_id, reply )
             return
 
         except Exception as e:
-
             edit_or_send_long(
                 message.chat.id,
                 msg.message_id,
                 f"Ошибка чтения ссылки: {e}"
             )
-
             return
 
     # ========================================================
     # ОБЫЧНЫЙ AI ЧАТ
     # ========================================================
-
-    msg = bot.reply_to(
-        message,
-        "Думаю..."
-    )
-
-    reply = ask_ai_with_history(
-        message.chat.id,
-        message.text
-    )
-
-    edit_or_send_long(
-        message.chat.id,
-        msg.message_id,
-        reply
-    )
-
+    msg = bot.reply_to( message, "Думаю..." )
+    reply = ask_ai_with_history( message.chat.id, message.text )
+    edit_or_send_long( message.chat.id, msg.message_id, reply )
 
 # ============================================================
 # PHOTO
 # ============================================================
-
-@bot.message_handler(
-    content_types=["photo"]
-)
+@bot.message_handler( content_types=["photo"] )
 def handle_photo(message):
-
-    msg = bot.reply_to(
-        message,
-        "Изучаю фото..."
-    )
-
+    msg = bot.reply_to( message, "Изучаю фото..." )
     try:
-
-        file_info = bot.get_file(
-            message.photo[-1].file_id
-        )
-
-        image_bytes = bot.download_file(
-            file_info.file_path
-        )
-
-        answer = analyze_image_gemini(
-            image_bytes
-        )
-
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            answer
-        )
-
+        file_info = bot.get_file( message.photo[-1].file_id )
+        image_bytes = bot.download_file( file_info.file_path )
+        answer = analyze_image_gemini( image_bytes )
+        edit_or_send_long( message.chat.id, msg.message_id, answer )
     except Exception as e:
-
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
             f"Ошибка анализа фото: {e}"
         )
 
-
 # ============================================================
 # PDF
 # ============================================================
-
-@bot.message_handler(
-    content_types=["document"]
-)
+@bot.message_handler( content_types=["document"] )
 def handle_doc(message):
-
-    if (
-        message.document.mime_type
-        != "application/pdf"
-    ):
-
+    if ( message.document.mime_type != "application/pdf" ):
         bot.reply_to(
             message,
             "Отправьте документ "
             "в формате PDF."
         )
-
         return
 
-    msg = bot.reply_to(
-        message,
-        "Читаю PDF..."
-    )
-
+    msg = bot.reply_to( message, "Читаю PDF..." )
     path = None
 
     try:
+        file_info = bot.get_file( message.document.file_id )
+        file_data = bot.download_file( file_info.file_path )
 
-        file_info = bot.get_file(
-            message.document.file_id
-        )
-
-        file_data = bot.download_file(
-            file_info.file_path
-        )
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".pdf"
-        ) as temp_file:
-
-            temp_file.write(
-                file_data
-            )
-
+        with tempfile.NamedTemporaryFile( delete=False, suffix=".pdf" ) as temp_file:
+            temp_file.write( file_data )
             path = temp_file.name
 
-        reader = PdfReader(
-            path
-        )
-
+        reader = PdfReader( path )
         extracted_pages = []
 
         for page in reader.pages[:5]:
-
             page_text = page.extract_text()
-
             if page_text:
+                extracted_pages.append( page_text )
 
-                extracted_pages.append(
-                    page_text
-                )
-
-        text = "\n".join(
-            extracted_pages
-        )
-
+        text = "\n".join( extracted_pages )
         if not text.strip():
-
-            raise ValueError(
-                "Не удалось извлечь текст из PDF."
-            )
+            raise ValueError( "Не удалось извлечь текст из PDF." )
 
         reply = ask_ai_with_history(
             message.chat.id,
-
             "Сделай краткую и понятную "
             "выжимку из этого PDF. "
-            "Не используй Markdown:\n\n"
-            +
-            text[:6000]
+            "Не используй Markdown:\n\n" + text[:6000]
         )
-
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            reply
-        )
+        edit_or_send_long( message.chat.id, msg.message_id, reply )
 
     except Exception as e:
-
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
@@ -3387,123 +1868,57 @@ def handle_doc(message):
         )
 
     finally:
-
-        if (
-            path
-            and os.path.exists(path)
-        ):
-
+        if ( path and os.path.exists(path) ):
             try:
-
                 os.remove(path)
-
             except Exception:
                 pass
-
 
 # ============================================================
 # ЗАПУСК
 # ============================================================
-
 if __name__ == "__main__":
-
-    print(
-        "=" * 60
-    )
-
-    print(
-        "🚀 Бот запускается..."
-    )
-
-    print(
-        "=" * 60
-    )
-
-    print(
-        "🎵 MusicGen: включён"
-    )
-
-    print(
-        "📁 Умное создание файлов: включено"
-    )
-
-    print(
-        "✨ Пасхалка Кира (/kira): включена"
-    )
-
-    print(
-        "💻 Режим программирования: включён"
-    )
-
-    print(
-        "📨 Длинные ответы: включены"
-    )
-
-    print(
-        "📋 Кодовые блоки: включены"
-    )
-
-    print(
-        "🚫 Markdown в обычных сообщениях: отключён"
-    )
-
-    print(
-        "🔄 AI fallback: G4F → Groq GPT-OSS 120B"
-    )
+    print( "=" * 60 )
+    print( "🚀 Бот запускается..." )
+    print( "=" * 60 )
+    print( "🎵 MusicGen: включён" )
+    print( "📁 Умное создание файлов: включено" )
+    print( "✨ Пасхалка Кира (/kira): включена" )
+    print( "💻 Режим программирования: включён" )
+    print( "📨 Длинные ответы: включены" )
+    print( "📋 Кодовые блоки: включены" )
+    print( "🚫 Markdown в обычных сообщениях: отключён" )
+    print( "🔄 AI fallback: G4F → Groq GPT-OSS 120B" )
 
     if GROQ_API_KEY:
-
-        print(
-            "✅ GROQ_API_KEY найден"
-        )
-
+        print( "✅ GROQ_API_KEY найден" )
     else:
-
         print(
             "⚠️ GROQ_API_KEY НЕ найден — "
             "резервный Groq отключён"
         )
-
-    print(
-        "=" * 60
-    )
+    print( "=" * 60 )
 
     # ========================================================
     # FLASK
     # ========================================================
-
-    threading.Thread(
-        target=run_web,
-        daemon=True
-    ).start()
+    threading.Thread( target=run_web, daemon=True ).start()
 
     # ========================================================
     # TELEGRAM
     # ========================================================
-
-    print(
-        "🤖 Telegram polling запущен"
-    )
-
+    print( "🤖 Telegram polling запущен" )
     while True:
-
         try:
-
             bot.infinity_polling(
                 skip_pending=True,
                 timeout=30,
                 long_polling_timeout=30
             )
-
         except Exception as e:
-
-            print(
-                f"⚠️ Telegram polling остановлен: {e}"
-            )
-
+            print( f"⚠️ Telegram polling остановлен: {e}" )
             print(
                 "🔄 Повторное подключение "
                 "через 5 секунд..."
             )
-
             time.sleep(5)
