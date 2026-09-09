@@ -1,4 +1,4 @@
-import os
+Import os
 import re
 import io
 import html
@@ -8,7 +8,6 @@ import asyncio
 import threading
 import tempfile
 import time
-import random
 
 import telebot
 import requests
@@ -126,6 +125,132 @@ AI_MAX_RESPONSE_LENGTH = 40000
 
 
 # ============================================================
+# MUSICGEN
+#
+# Google Gemini Lyria.
+# Replicate НЕ используется.
+# ============================================================
+
+MUSIC_MODEL_NAME = "lyria-3-clip-preview"
+
+
+def generate_music(
+    prompt,
+    duration=8
+):
+
+    import base64
+
+    if not GEMINI_API_KEY:
+
+        raise RuntimeError(
+            "Не задан GEMINI_API_KEY."
+        )
+
+    try:
+
+        from google import genai
+
+    except ImportError as e:
+
+        raise RuntimeError(
+            "Не установлена библиотека google-genai. "
+            "Установи её командой: pip install -U google-genai"
+        ) from e
+
+    print(
+        f"🎵 Генерация музыки через Gemini Lyria: {prompt}"
+    )
+
+    try:
+
+        client = genai.Client(
+            api_key=GEMINI_API_KEY
+        )
+
+        interaction = client.interactions.create(
+            model=MUSIC_MODEL_NAME,
+            input=(
+                f"Create a 30-second music clip. "
+                f"Use this description: {prompt}"
+            )
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Ошибка Google Gemini Lyria: {e}"
+        ) from e
+
+    generated_audio = (
+        interaction.output_audio
+    )
+
+    if not generated_audio:
+
+        raise RuntimeError(
+            "Google Gemini Lyria не вернула аудио."
+        )
+
+    if not generated_audio.data:
+
+        raise RuntimeError(
+            "Google Gemini Lyria вернула пустые аудиоданные."
+        )
+
+    try:
+
+        audio_bytes = base64.b64decode(
+            generated_audio.data
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Ошибка декодирования MP3: {e}"
+        ) from e
+
+    if not audio_bytes:
+
+        raise RuntimeError(
+            "Получен пустой MP3-файл."
+        )
+
+    output_file = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".mp3"
+    )
+
+    try:
+
+        output_file.write(
+            audio_bytes
+        )
+
+        output_file.close()
+
+    except Exception:
+
+        output_file.close()
+
+        if os.path.exists(
+            output_file.name
+        ):
+
+            os.remove(
+                output_file.name
+            )
+
+        raise
+
+    print(
+        f"✅ Музыка создана: {output_file.name}"
+    )
+
+    return output_file.name
+
+
+# ============================================================
 # SMART FILE GENERATOR
 # ============================================================
 
@@ -137,13 +262,13 @@ def safe_filename(
     name = str(name).strip()
 
     name = re.sub(
-        r"[^\wа-яА-ЯёЁ .()-]",
+        r"[^\\wа-яА-ЯёЁ .()-]",
         "_",
         name
     )
 
     name = re.sub(
-        r"\s+",
+        r"\\s+",
         "_",
         name
     )
@@ -153,6 +278,7 @@ def safe_filename(
     )
 
     if not name:
+
         name = "generated_file"
 
     extension = extension.lstrip(
@@ -172,6 +298,10 @@ def detect_file_format(
         request
     ).lower()
 
+    # ========================================================
+    # EXCEL
+    # ========================================================
+
     if any(
         word in text
         for word in [
@@ -186,6 +316,10 @@ def detect_file_format(
 
         return "xlsx"
 
+    # ========================================================
+    # WORD
+    # ========================================================
+
     if any(
         word in text
         for word in [
@@ -197,6 +331,10 @@ def detect_file_format(
 
         return "docx"
 
+    # ========================================================
+    # PDF
+    # ========================================================
+
     if any(
         word in text
         for word in [
@@ -206,6 +344,10 @@ def detect_file_format(
     ):
 
         return "pdf"
+
+    # ========================================================
+    # POWERPOINT
+    # ========================================================
 
     if any(
         word in text
@@ -218,11 +360,25 @@ def detect_file_format(
 
         return "pptx"
 
+    # ========================================================
+    # CSV
+    # ========================================================
+
     if "csv" in text:
+
         return "csv"
 
+    # ========================================================
+    # JSON
+    # ========================================================
+
     if "json" in text:
+
         return "json"
+
+    # ========================================================
+    # PYTHON
+    # ========================================================
 
     if any(
         word in text
@@ -235,6 +391,10 @@ def detect_file_format(
 
         return "py"
 
+    # ========================================================
+    # HTML
+    # ========================================================
+
     if any(
         word in text
         for word in [
@@ -246,8 +406,17 @@ def detect_file_format(
 
         return "html"
 
+    # ========================================================
+    # MARKDOWN
+    # ========================================================
+
     if "markdown" in text or ".md" in text:
+
         return "md"
+
+    # ========================================================
+    # ПО УМОЛЧАНИЮ
+    # ========================================================
 
     return "txt"
 
@@ -263,6 +432,8 @@ def make_multiplication_table_xlsx(
     sheet = workbook.active
 
     sheet.title = "Таблица умножения"
+
+    # Заголовки
 
     sheet.cell(
         row=1,
@@ -287,6 +458,8 @@ def make_multiplication_table_xlsx(
             value=number
         )
 
+    # Значения
+
     for row in range(
         1,
         11
@@ -303,6 +476,8 @@ def make_multiplication_table_xlsx(
                 value=row * column
             )
 
+    # Ширина колонок
+
     sheet.column_dimensions["A"].width = 8
 
     for column in range(
@@ -310,8 +485,10 @@ def make_multiplication_table_xlsx(
         12
     ):
 
-        letter = chr(
-            64 + column
+        letter = (
+            chr(
+                64 + column
+            )
         )
 
         sheet.column_dimensions[
@@ -424,6 +601,10 @@ def create_generated_file(
         prefix="telegram_generated_"
     )
 
+    # ========================================================
+    # СПЕЦИАЛЬНАЯ ТАБЛИЦА УМНОЖЕНИЯ
+    # ========================================================
+
     request_lower = str(
         request
     ).lower()
@@ -457,11 +638,19 @@ def create_generated_file(
             extension
         )
 
+    # ========================================================
+    # AI CONTENT
+    # ========================================================
+
     content = generate_ai_file_content(
         request,
         extension,
         user_id
     )
+
+    # ========================================================
+    # ИМЯ
+    # ========================================================
 
     filename_base = (
         str(request)
@@ -473,7 +662,10 @@ def create_generated_file(
     )
 
     if len(filename_base) > 45:
-        filename_base = filename_base[:45]
+
+        filename_base = (
+            filename_base[:45]
+        )
 
     filename = safe_filename(
         filename_base,
@@ -484,6 +676,10 @@ def create_generated_file(
         temp_directory,
         filename
     )
+
+    # ========================================================
+    # XLSX
+    # ========================================================
 
     if extension == "xlsx":
 
@@ -550,6 +746,10 @@ def create_generated_file(
             path
         )
 
+    # ========================================================
+    # DOCX
+    # ========================================================
+
     elif extension == "docx":
 
         from docx import Document
@@ -561,9 +761,7 @@ def create_generated_file(
             line = line.strip()
 
             if not line:
-
                 document.add_paragraph("")
-
                 continue
 
             if (
@@ -591,6 +789,10 @@ def create_generated_file(
         document.save(
             path
         )
+
+    # ========================================================
+    # PDF
+    # ========================================================
 
     elif extension == "pdf":
 
@@ -649,6 +851,10 @@ def create_generated_file(
         document.build(
             story
         )
+
+    # ========================================================
+    # PPTX
+    # ========================================================
 
     elif extension == "pptx":
 
@@ -757,6 +963,10 @@ def create_generated_file(
             path
         )
 
+    # ========================================================
+    # CSV
+    # ========================================================
+
     elif extension == "csv":
 
         with open(
@@ -781,6 +991,10 @@ def create_generated_file(
                             for cell in line.split(";")
                         ]
                     )
+
+    # ========================================================
+    # JSON
+    # ========================================================
 
     elif extension == "json":
 
@@ -823,6 +1037,10 @@ def create_generated_file(
                 ensure_ascii=False,
                 indent=2
             )
+
+    # ========================================================
+    # ОСТАЛЬНЫЕ ФОРМАТЫ
+    # ========================================================
 
     else:
 
@@ -989,7 +1207,7 @@ def clean_markdown(text):
     )
 
     text = re.sub(
-        r"[*_#~]",
+        r"[\*_#~]",
         "",
         text
     )
@@ -1002,41 +1220,6 @@ def clean_markdown(text):
             f"§CODEBLOCK{index}§",
             code_block
         )
-
-    return text.strip()
-
-
-# ============================================================
-# УДАЛЕНИЕ СЛУЧАЙНОГО КОДА
-# ============================================================
-
-def remove_code_blocks(text):
-
-    if not text:
-        return ""
-
-    text = str(text)
-
-    text = re.sub(
-        r"```(?:[a-zA-Z0-9_+#.-]+)?"
-        r"\s*\n?.*?```",
-        "",
-        text,
-        flags=re.DOTALL
-    )
-
-    text = re.sub(
-        r"`([^`]+)`",
-        r"\1",
-        text
-    )
-
-    text = re.sub(
-        r"(?mi)^\s*(python|javascript|typescript|java|"
-        r"html|css|sql|bash|json|php|c\+\+|c#)\s*$",
-        "",
-        text
-    )
 
     return text.strip()
 
@@ -1318,11 +1501,9 @@ def send_ai_response(
 
                 try:
 
-                    sent_messages.append(
-                        bot.send_message(
-                            chat_id,
-                            text_part
-                        )
+                    bot.send_message(
+                        chat_id,
+                        text_part
                     )
 
                 except Exception as e:
@@ -1430,11 +1611,10 @@ def ask_ai_with_history(
 
                 "Никакой нецензурной лексики. "
 
-                "Обычные ответы пиши простым текстом "
-                "без Markdown. "
+                "Не используй Markdown в обычном тексте. "
 
-                "Если пользователь просит код, "
-                "код можно показать."
+                "Если нужно показать программный код, "
+                "используй отдельный кодовый блок."
             )
 
         else:
@@ -1457,9 +1637,24 @@ def ask_ai_with_history(
 
                 "Не используй Markdown в обычных сообщениях. "
 
+                "Не используй **жирный текст**, "
+                "*курсив*, # заголовки, "
+                "[Markdown-ссылки](...) "
+                "или другие Markdown-конструкции "
+                "в обычном тексте. "
+
                 "Если ответ содержит программный код, "
                 "помещай его только в отдельный "
-                "Markdown-кодовый блок."
+                "Markdown-кодовый блок "
+                "с тройными обратными кавычками. "
+
+                "Например:\n\n"
+
+                "```python\n"
+                "print('Hello')\n"
+                "```\n\n"
+
+                "Код внутри такого блока не изменяй."
             )
 
         user_histories[user_id] = [
@@ -1571,11 +1766,24 @@ def ask_ai_with_history(
 
             "Если пользователь прислал существующий "
             "проект и просит изменить конкретную часть, "
-            "сохраняй остальные функции.\n\n"
+            "сохраняй остальные функции, если он "
+            "не попросил их удалить.\n\n"
+
+            "Учитывай импорты, зависимости, "
+            "переменные окружения, функции, "
+            "обработчики и связи между компонентами.\n\n"
+
+            "Если исправляешь ошибку, исправляй "
+            "причину проблемы.\n\n"
+
+            "Большие фрагменты кода можно выдавать "
+            "полностью.\n\n"
+
+            "Обычное объяснение пиши без Markdown.\n\n"
 
             "Каждый отдельный фрагмент программного "
             "кода обязательно помещай в отдельный "
-            "кодовый блок."
+            "кодовый блок с тройными обратными кавычками."
         )
 
         effective_prompt = (
@@ -1617,7 +1825,10 @@ def ask_ai_with_history(
         messages_to_send[-1]["content"] = (
             "[Ответь в стиле саркастичного "
             "и ворчливого мизантропа. "
-            "Без мата.]\n\n"
+            "Без мата. "
+            "Обычный текст без Markdown. "
+            "Код помещай в отдельные "
+            "кодовые блоки.]\n\n"
             +
             messages_to_send[-1]["content"]
         )
@@ -1632,9 +1843,25 @@ def ask_ai_with_history(
     answer = ""
     success = False
 
+    print(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    print(
+        f"🤖 Новый запрос от {user_id}"
+    )
+
+    print(
+        "🔄 Запускаю G4F..."
+    )
+
     for model_name in models_to_try:
 
         try:
+
+            print(
+                f"🔄 G4F → {model_name}"
+            )
 
             response = (
                 ai_client
@@ -1654,6 +1881,12 @@ def ask_ai_with_history(
             )
 
             if not answer:
+
+                print(
+                    f"⚠️ G4F → {model_name}: "
+                    "пустой ответ"
+                )
+
                 continue
 
             answer = str(
@@ -1662,47 +1895,88 @@ def ask_ai_with_history(
 
             success = True
 
+            print(
+                f"✅ G4F → {model_name}: "
+                "ответ получен"
+            )
+
             break
 
         except Exception as e:
 
             print(
-                f"❌ G4F → {model_name}: {e}"
+                f"❌ G4F → {model_name}: "
+                f"{e}"
             )
 
-    if not success and groq_client:
+    if not success:
 
-        try:
+        print(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
 
-            response = (
-                groq_client
-                .chat
-                .completions
-                .create(
-                    model="llama-3.3-70b-versatile",
-                    messages=messages_to_send
-                )
-            )
+        print(
+            "⚠️ Все G4F провайдеры "
+            "не ответили."
+        )
 
-            answer = (
-                response
-                .choices[0]
-                .message
-                .content
-            )
-
-            if answer:
-
-                answer = str(
-                    answer
-                ).strip()
-
-                success = True
-
-        except Exception as e:
+        if groq_client:
 
             print(
-                f"❌ Groq ошибка: {e}"
+                "🔄 Переключаюсь на "
+                "Groq GPT-OSS 120B..."
+            )
+
+            try:
+
+                response = (
+                    groq_client
+                    .chat
+                    .completions
+                    .create(
+                        model="openai/gpt-oss-120b",
+                        messages=messages_to_send
+                    )
+                )
+
+                answer = (
+                    response
+                    .choices[0]
+                    .message
+                    .content
+                )
+
+                if answer:
+
+                    answer = str(
+                        answer
+                    ).strip()
+
+                    success = True
+
+                    print(
+                        "✅ Groq GPT-OSS 120B: "
+                        "ответ успешно получен!"
+                    )
+
+                else:
+
+                    print(
+                        "❌ Groq GPT-OSS 120B: "
+                        "пустой ответ."
+                    )
+
+            except Exception as e:
+
+                print(
+                    "❌ Groq GPT-OSS 120B: "
+                    f"{e}"
+                )
+
+        else:
+
+            print(
+                "❌ GROQ_API_KEY не найден."
             )
 
     if success:
@@ -1714,9 +1988,21 @@ def ask_ai_with_history(
             }
         )
 
+        print(
+            "🤖 Ответ успешно получен."
+        )
+
+        print(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+
         return answer
 
     user_histories[user_id].pop()
+
+    print(
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
 
     if mode == "neuroham":
 
@@ -1727,6 +2013,8 @@ def ask_ai_with_history(
 
     return (
         "Не удалось получить ответ от ИИ.\n\n"
+        "Я попробовал все доступные G4F-провайдеры "
+        "и резервный Groq GPT-OSS 120B. "
         "Попробуй ещё раз немного позже."
     )
 
@@ -1735,243 +2023,21 @@ def ask_ai_with_history(
 # ПАСХАЛКА КИРА
 # ============================================================
 
-kira_last_theme = {}
+def generate_kira_text():
 
+    prompt = """
+Напиши красивый, искренний и оригинальный текст о девушке по имени Кира.
 
-def generate_kira_text(user_id=None):
+Это специальная команда /kira в Telegram-боте. 
 
-    themes = [
-
-        {
-            "name": "тепло",
-            "description": (
-                "Главная мысль — Кира является человеком, "
-                "рядом с которым становится немного теплее "
-                "и спокойнее."
-            )
-        },
-
-        {
-            "name": "особенность",
-            "description": (
-                "Главная мысль — Кира особенная, "
-                "и таких людей трудно встретить случайно."
-            )
-        },
-
-        {
-            "name": "улыбка",
-            "description": (
-                "Главная мысль — Кира ассоциируется "
-                "с хорошим настроением, улыбкой "
-                "и приятными моментами."
-            )
-        },
-
-        {
-            "name": "доброта",
-            "description": (
-                "Главная мысль — в Кире есть что-то "
-                "доброе и человечески тёплое."
-            )
-        },
-
-        {
-            "name": "атмосфера",
-            "description": (
-                "Главная мысль — у Киры есть особенная "
-                "атмосфера, которую трудно объяснить словами."
-            )
-        },
-
-        {
-            "name": "память",
-            "description": (
-                "Главная мысль — Кира относится к тем людям, "
-                "которых трудно забыть."
-            )
-        },
-
-        {
-            "name": "спокойствие",
-            "description": (
-                "Главная мысль — присутствие Киры может "
-                "создавать ощущение спокойствия и уюта."
-            )
-        },
-
-        {
-            "name": "свет",
-            "description": (
-                "Главная мысль — Кира сравнивается "
-                "с чем-то светлым и добрым."
-            )
-        },
-
-        {
-            "name": "ценность",
-            "description": (
-                "Главная мысль — Кира является человеком, "
-                "которого хочется ценить."
-            )
-        },
-
-        {
-            "name": "неповторимость",
-            "description": (
-                "Главная мысль — Кира неповторима, "
-                "и её невозможно заменить другим человеком."
-            )
-        },
-
-        {
-            "name": "присутствие",
-            "description": (
-                "Главная мысль — само присутствие Киры "
-                "может сделать обычный момент приятнее."
-            )
-        },
-
-        {
-            "name": "важный человек",
-            "description": (
-                "Главная мысль — Кира очень дорогой "
-                "и важный человек."
-            )
-        }
-    ]
-
-    openings = [
-
-        "Кира — это человек, о котором хочется говорить тепло.",
-
-        "Кира — тот человек, которого сложно описать одним словом.",
-
-        "Кира — человек с той самой особенной атмосферой.",
-
-        "Есть люди, которых встречаешь и не забываешь. Кира — одна из них.",
-
-        "Кира — человек, чьё присутствие само по себе многое значит.",
-
-        "Если говорить о людях, которые оставляют после себя тепло, Кира точно среди них.",
-
-        "Кира — человек, которого хочется описывать красивыми словами.",
-
-        "Иногда одного человека достаточно, чтобы вокруг стало немного светлее. Кира — именно такой человек."
-    ]
-
-    fallbacks = [
-
-        (
-            "Кира — человек, рядом с которым становится "
-            "немного теплее. В ней есть особенная атмосфера, "
-            "которую сложно объяснить словами. Некоторые люди "
-            "просто остаются в памяти как что-то по-настоящему "
-            "хорошее. ✨❤️"
-        ),
-
-        (
-            "Кира — тот человек, которого трудно описать "
-            "одним словом. В ней есть что-то светлое, "
-            "доброе и по-своему неповторимое. Такие люди "
-            "оставляют после себя тёплое чувство. 🌷✨"
-        ),
-
-        (
-            "Есть люди, которых невозможно забыть, потому что "
-            "после них остаётся особенное ощущение. Кира — "
-            "именно такой человек. Её можно назвать тёплой "
-            "страницей среди обычных дней. ❤️✨"
-        ),
-
-        (
-            "Кира — человек, чьё присутствие может сделать "
-            "обычный момент немного приятнее. В ней есть "
-            "что-то спокойное, доброе и настоящее. Иногда "
-            "именно такие люди становятся самыми ценными. 🌸"
-        )
-    ]
-
-    previous_theme = None
-
-    if user_id is not None:
-
-        previous_theme = kira_last_theme.get(
-            user_id
-        )
-
-    available_themes = [
-        theme
-        for theme in themes
-        if theme["name"] != previous_theme
-    ]
-
-    if not available_themes:
-        available_themes = themes
-
-    theme = random.choice(
-        available_themes
-    )
-
-    if user_id is not None:
-
-        kira_last_theme[user_id] = (
-            theme["name"]
-        )
-
-    opening = random.choice(
-        openings
-    )
-
-    prompt = f"""
-Напиши красивый, тёплый и приятный текст о человеке
-по имени Кира.
-
-Это специальная пасхалка Telegram-бота.
-
-ОБЯЗАТЕЛЬНО:
-Пиши только в третьем лице.
-
-Не обращайся к Кире напрямую.
-
-Запрещено использовать:
-"ты",
-"тебе",
-"тебя",
-"твоя",
-"твоей",
-"твою"
-и любые другие обращения к Кире.
-
-Кира должна описываться как отдельный человек.
-
-ТЕМА ЭТОГО ЗАПУСКА:
-{theme["description"]}
-
-НАЧАЛО:
-{opening}
-
-Напиши 3–5 красивых предложений.
-
-Текст должен отличаться от предыдущих
-и не выглядеть как простой перефразированный
-вариант одного и того же текста.
-
-Не придумывай конкретные факты о жизни Киры,
-её возрасте, внешности, биографии или событиях,
-которых тебе не сообщили.
-
-Можно использовать красивые метафоры:
-свет, тепло, спокойствие, улыбка,
-атмосфера, доброта и особенное чувство.
-
-Можно использовать 2–4 приятных эмодзи.
-
-Не используй Markdown.
-
-Не добавляй заголовок.
-
-Сразу напиши сам текст.
+ВАЖНО:
+- Не используй избитые и заезженные шаблоны вроде "Кира — это человек, рядом с которым...".
+- Придумай каждый раз уникальную подачу, метафору или мысль (например, сравнение с атмосферной музыкой, редким явлением, уютным вечером или утренним светом).
+- Текст должен звучать тёпло, эстетично и глубоко, но без излишнего пафоса и приторности.
+- Не придумывай конкретные факты о её жизни, возрасте или внешности.
+- Длина: примерно 3–5 предложений.
+- Используй 2–3 подходящих эмодзи.
+- Не используй Markdown в тексте.
 """
 
     models_to_try = [
@@ -1995,13 +2061,9 @@ def generate_kira_text(user_id=None):
                         {
                             "role": "system",
                             "content": (
-                                "Ты пишешь красивые "
-                                "и добрые тексты. "
-                                "Всегда пиши о Кире "
-                                "только в третьем лице. "
-                                "Никогда не обращайся "
-                                "к Кире напрямую. "
-                                "Не используй Markdown."
+                                "Ты умеешь писать уникальные, "
+                                "эстетичные и искренние тексты. "
+                                "Никакого Маркдауна. Избегай шаблонов."
                             )
                         },
                         {
@@ -2021,13 +2083,9 @@ def generate_kira_text(user_id=None):
 
             if answer:
 
-                answer = clean_markdown(
+                return clean_markdown(
                     str(answer).strip()
                 )
-
-                if answer:
-
-                    return answer
 
         except Exception as e:
 
@@ -2045,15 +2103,13 @@ def generate_kira_text(user_id=None):
                 .chat
                 .completions
                 .create(
-                    model="llama-3.3-70b-versatile",
+                    model="openai/gpt-oss-120b",
                     messages=[
                         {
                             "role": "system",
                             "content": (
-                                "Пиши красивый текст "
-                                "о Кире только "
-                                "в третьем лице. "
-                                "Не обращайся к ней напрямую. "
+                                "Пиши уникальные, "
+                                "тёплые и приятные тексты. "
                                 "Без Markdown."
                             )
                         },
@@ -2074,13 +2130,9 @@ def generate_kira_text(user_id=None):
 
             if answer:
 
-                answer = clean_markdown(
+                return clean_markdown(
                     str(answer).strip()
                 )
-
-                if answer:
-
-                    return answer
 
         except Exception as e:
 
@@ -2088,8 +2140,12 @@ def generate_kira_text(user_id=None):
                 f"❌ Groq Kira ошибка: {e}"
             )
 
-    return random.choice(
-        fallbacks
+    return (
+        "Кира — словно редкая виниловая пластинка с любимой музыкой, "
+        "которую хочется слушать в тишине. ✨ "
+        "Она приносит с собой особый ритм, внутреннюю гармонию и "
+        "удивительное ощущение уюта. Рядом с ней всё вокруг становится "
+        "немного понятнее и светлее. ❤️"
     )
 
 
@@ -2100,14 +2156,12 @@ def kira_cmd(message):
 
     msg = bot.reply_to(
         message,
-        "✨ Думаю, как лучше рассказать о Кире..."
+        "✨ Нахожу нужные слова..."
     )
 
     try:
 
-        kira_text = generate_kira_text(
-            message.chat.id
-        )
+        kira_text = generate_kira_text()
 
         edit_or_send_long(
             message.chat.id,
@@ -2118,17 +2172,15 @@ def kira_cmd(message):
     except Exception as e:
 
         print(
-            f"❌ Ошибка команды /kira: {e}"
+            f"❌ Ошибка пасхалки Кира: {e}"
         )
 
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
             (
-                "Кира — человек, который умеет "
-                "делать мир немного теплее. ✨ "
-                "В ней есть что-то особенное, "
-                "что сложно объяснить словами. ❤️"
+                "Кира — это не просто имя, а целое настроение, "
+                "наполненное светом и особенной теплотой. ✨❤️"
             )
         )
 
@@ -2265,251 +2317,63 @@ def analyze_image_gemini(
     image_bytes
 ):
 
-    if not GEMINI_API_KEY:
+    if (
+        not GEMINI_API_KEY
+        or not genai
+    ):
 
         return (
             "Анализ фото недоступен: "
             "не задан GEMINI_API_KEY."
         )
 
-    if not genai or not Image:
-
-        return (
-            "Анализ фото недоступен: "
-            "библиотека Gemini/PIL не загрузилась."
-        )
-
-    if not image_bytes:
-
-        return (
-            "Не удалось получить данные фотографии."
-        )
-
-    image = None
-
-    try:
-
-        image = Image.open(
-            io.BytesIO(image_bytes)
-        )
-
-        image.verify()
-
-        image = Image.open(
-            io.BytesIO(image_bytes)
-        )
-
-        if image.mode not in (
-            "RGB",
-            "RGBA"
-        ):
-
-            image = image.convert(
-                "RGB"
-            )
-
-        max_side = 2048
-
-        if (
-            image.width > max_side
-            or image.height > max_side
-        ):
-
-            image.thumbnail(
-                (
-                    max_side,
-                    max_side
-                ),
-                Image.Resampling.LANCZOS
-            )
-
-    except Exception as e:
-
-        print(
-            f"❌ Ошибка открытия изображения: {e}"
-        )
-
-        return (
-            "Не удалось открыть фотографию. "
-            "Попробуй отправить её ещё раз."
-        )
-
-    models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
-    ]
-
-    last_error = None
-
-    for model_name in models_to_try:
+    for model_name in [
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
+    ]:
 
         try:
-
-            print(
-                f"🖼️ Gemini анализ фото → "
-                f"{model_name}"
-            )
 
             model = genai.GenerativeModel(
                 model_name
             )
 
-            prompt = (
-                "Внимательно изучи эту фотографию "
-                "и опиши, что на ней изображено.\n\n"
-
-                "Укажи основные объекты, людей, "
-                "предметы, окружение, действия, "
-                "текст на изображении, если он хорошо "
-                "читается, и другие заметные детали.\n\n"
-
-                "Если пользователь ничего отдельно "
-                "не спросил, просто дай понятное "
-                "описание фотографии.\n\n"
-
-                "Не выдумывай детали, которых нельзя "
-                "уверенно увидеть на фотографии.\n\n"
-
-                "Отвечай на русском языке.\n"
-                "Не используй Markdown."
+            image = Image.open(
+                io.BytesIO(image_bytes)
             )
 
             response = model.generate_content(
                 [
-                    prompt,
+                    (
+                        "Опиши подробно, что изображено "
+                        "на этой фотографии. "
+                        "Ответь на русском языке. "
+                        "Не используй Markdown."
+                    ),
                     image
-                ],
-                generation_config={
-                    "temperature": 0.2,
-                    "max_output_tokens": 2048
-                }
+                ]
             )
 
-            if not response:
-
-                raise RuntimeError(
-                    "Gemini вернула пустой response."
-                )
-
-            answer = ""
-
-            try:
-
-                answer = (
-                    response.text
-                    or ""
-                )
-
-            except Exception:
-
-                answer = ""
-
-            if not answer:
-
-                try:
-
-                    candidates = (
-                        getattr(
-                            response,
-                            "candidates",
-                            []
-                        )
-                        or []
-                    )
-
-                    collected_parts = []
-
-                    for candidate in candidates:
-
-                        content = getattr(
-                            candidate,
-                            "content",
-                            None
-                        )
-
-                        if not content:
-                            continue
-
-                        parts = getattr(
-                            content,
-                            "parts",
-                            []
-                        )
-
-                        for part in parts:
-
-                            text_part = getattr(
-                                part,
-                                "text",
-                                None
-                            )
-
-                            if text_part:
-
-                                collected_parts.append(
-                                    str(text_part)
-                                )
-
-                    answer = "\n".join(
-                        collected_parts
-                    ).strip()
-
-                except Exception as extract_error:
-
-                    print(
-                        "⚠️ Не удалось извлечь "
-                        f"текст ответа Gemini: "
-                        f"{extract_error}"
-                    )
-
-            if answer:
-
-                print(
-                    f"✅ Gemini → {model_name}: "
-                    "описание получено"
-                )
+            if (
+                response
+                and response.text
+            ):
 
                 return clean_markdown(
-                    answer
+                    str(
+                        response.text
+                    ).strip()
                 )
-
-            feedback = getattr(
-                response,
-                "prompt_feedback",
-                None
-            )
-
-            if feedback:
-
-                last_error = (
-                    f"Gemini не вернула текст. "
-                    f"Prompt feedback: {feedback}"
-                )
-
-            else:
-
-                last_error = (
-                    "Gemini не вернула текстовый ответ."
-                )
-
-            print(
-                f"⚠️ Gemini {model_name}: "
-                f"{last_error}"
-            )
 
         except Exception as e:
 
-            last_error = str(e)
-
             print(
-                f"❌ Gemini {model_name}: "
-                f"{e}"
+                f"⚠️ Gemini {model_name}: {e}"
             )
 
     return (
-        "Не удалось получить описание фотографии "
-        "от Gemini.\n\n"
-        f"Последняя ошибка: {last_error}"
+        "Не удалось получить ответ от Gemini."
     )
 
 
@@ -2552,6 +2416,7 @@ def help_cmd(message):
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
         "/image <описание> — создать изображение\n"
+        "/music <описание> — создать музыку 🎵\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
@@ -2560,6 +2425,7 @@ def help_cmd(message):
         "/tr <текст> — перевод\n"
         "/fix <текст> — исправление текста\n"
         "/tts <текст> — озвучка\n"
+        "/kira — послание о Кире ✨\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
 
@@ -2571,6 +2437,118 @@ def help_cmd(message):
         message,
         help_text
     )
+
+
+# ============================================================
+# MUSIC
+# ============================================================
+
+@bot.message_handler(
+    commands=["music"]
+)
+def music_cmd(message):
+
+    parts = message.text.split(
+        maxsplit=1
+    )
+
+    if len(parts) < 2:
+
+        bot.reply_to(
+            message,
+            "Напиши описание музыки.\n\n"
+            "Например:\n"
+            "/music спокойная фортепианная мелодия "
+            "для ночного города"
+        )
+
+        return
+
+    prompt = parts[1].strip()
+
+    if len(prompt) > 500:
+
+        bot.reply_to(
+            message,
+            "Описание музыки слишком длинное. "
+            "Сделай его короче."
+        )
+
+        return
+
+    msg = bot.reply_to(
+        message,
+        "🎵 Создаю музыку...\n"
+        "Это может занять некоторое время."
+    )
+
+    music_path = None
+
+    try:
+
+        music_path = generate_music(
+            prompt,
+            duration=8
+        )
+
+        with open(
+            music_path,
+            "rb"
+        ) as audio:
+
+            bot.send_audio(
+                message.chat.id,
+                audio,
+                title="MusicGen",
+                performer="AI MusicGen",
+                caption=(
+                    "🎵 Готово!\n\n"
+                    f"Описание: {prompt}"
+                )
+            )
+
+        try:
+
+            bot.delete_message(
+                message.chat.id,
+                msg.message_id
+            )
+
+        except Exception:
+            pass
+
+    except Exception as e:
+
+        print(
+            f"❌ Ошибка MusicGen: {e}"
+        )
+
+        edit_or_send_long(
+            message.chat.id,
+            msg.message_id,
+            (
+                "Не удалось создать музыку.\n\n"
+                f"Ошибка: {e}"
+            )
+        )
+
+    finally:
+
+        if (
+            music_path
+            and os.path.exists(
+                music_path
+            )
+        ):
+
+            try:
+
+                os.remove(
+                    music_path
+                )
+
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -2687,7 +2665,9 @@ def file_cmd(message):
 
             try:
 
-                os.remove(path)
+                os.remove(
+                    path
+                )
 
             except Exception:
                 pass
@@ -2858,7 +2838,7 @@ def weather_cmd(message):
     try:
 
         response = requests.get(
-            f"[https://wttr.in/](https://wttr.in/){city}",
+            f"https://wttr.in/{city}",
             params={
                 "format":
                     "Город: %l\n"
@@ -3287,12 +3267,6 @@ def handle_photo(message):
             file_info.file_path
         )
 
-        if not image_bytes:
-
-            raise ValueError(
-                "Telegram не вернул файл фотографии."
-            )
-
         answer = analyze_image_gemini(
             image_bytes
         )
@@ -3305,17 +3279,10 @@ def handle_photo(message):
 
     except Exception as e:
 
-        print(
-            f"❌ Ошибка анализа фото: {e}"
-        )
-
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
-            (
-                "Ошибка анализа фото.\n\n"
-                f"Ошибка: {e}"
-            )
+            f"Ошибка анализа фото: {e}"
         )
 
 
@@ -3453,11 +3420,15 @@ if __name__ == "__main__":
     )
 
     print(
+        "🎵 MusicGen: включён"
+    )
+
+    print(
         "📁 Умное создание файлов: включено"
     )
 
     print(
-        "✨ Пасхалка Кира: включена"
+        "✨ Пасхалка Кира (/kira): включена"
     )
 
     print(
@@ -3477,7 +3448,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "🔄 AI fallback: G4F → Groq Llama 3.3 70B"
+        "🔄 AI fallback: G4F → Groq GPT-OSS 120B"
     )
 
     if GROQ_API_KEY:
@@ -3497,10 +3468,18 @@ if __name__ == "__main__":
         "=" * 60
     )
 
+    # ========================================================
+    # FLASK
+    # ========================================================
+
     threading.Thread(
         target=run_web,
         daemon=True
     ).start()
+
+    # ========================================================
+    # TELEGRAM
+    # ========================================================
 
     print(
         "🤖 Telegram polling запущен"
