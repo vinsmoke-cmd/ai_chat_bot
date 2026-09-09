@@ -125,132 +125,6 @@ AI_MAX_RESPONSE_LENGTH = 40000
 
 
 # ============================================================
-# MUSICGEN
-#
-# Google Gemini Lyria.
-# Replicate НЕ используется.
-# ============================================================
-
-MUSIC_MODEL_NAME = "lyria-3-clip-preview"
-
-
-def generate_music(
-    prompt,
-    duration=8
-):
-
-    import base64
-
-    if not GEMINI_API_KEY:
-
-        raise RuntimeError(
-            "Не задан GEMINI_API_KEY."
-        )
-
-    try:
-
-        from google import genai
-
-    except ImportError as e:
-
-        raise RuntimeError(
-            "Не установлена библиотека google-genai. "
-            "Установи её командой: pip install -U google-genai"
-        ) from e
-
-    print(
-        f"🎵 Генерация музыки через Gemini Lyria: {prompt}"
-    )
-
-    try:
-
-        client = genai.Client(
-            api_key=GEMINI_API_KEY
-        )
-
-        interaction = client.interactions.create(
-            model=MUSIC_MODEL_NAME,
-            input=(
-                f"Create a 30-second music clip. "
-                f"Use this description: {prompt}"
-            )
-        )
-
-    except Exception as e:
-
-        raise RuntimeError(
-            f"Ошибка Google Gemini Lyria: {e}"
-        ) from e
-
-    generated_audio = (
-        interaction.output_audio
-    )
-
-    if not generated_audio:
-
-        raise RuntimeError(
-            "Google Gemini Lyria не вернула аудио."
-        )
-
-    if not generated_audio.data:
-
-        raise RuntimeError(
-            "Google Gemini Lyria вернула пустые аудиоданные."
-        )
-
-    try:
-
-        audio_bytes = base64.b64decode(
-            generated_audio.data
-        )
-
-    except Exception as e:
-
-        raise RuntimeError(
-            f"Ошибка декодирования MP3: {e}"
-        ) from e
-
-    if not audio_bytes:
-
-        raise RuntimeError(
-            "Получен пустой MP3-файл."
-        )
-
-    output_file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp3"
-    )
-
-    try:
-
-        output_file.write(
-            audio_bytes
-        )
-
-        output_file.close()
-
-    except Exception:
-
-        output_file.close()
-
-        if os.path.exists(
-            output_file.name
-        ):
-
-            os.remove(
-                output_file.name
-            )
-
-        raise
-
-    print(
-        f"✅ Музыка создана: {output_file.name}"
-    )
-
-    return output_file.name
-
-
-# ============================================================
 # SMART FILE GENERATOR
 # ============================================================
 
@@ -433,8 +307,6 @@ def make_multiplication_table_xlsx(
 
     sheet.title = "Таблица умножения"
 
-    # Заголовки
-
     sheet.cell(
         row=1,
         column=1,
@@ -458,8 +330,6 @@ def make_multiplication_table_xlsx(
             value=number
         )
 
-    # Значения
-
     for row in range(
         1,
         11
@@ -475,8 +345,6 @@ def make_multiplication_table_xlsx(
                 column=column + 1,
                 value=row * column
             )
-
-    # Ширина колонок
 
     sheet.column_dimensions["A"].width = 8
 
@@ -601,10 +469,6 @@ def create_generated_file(
         prefix="telegram_generated_"
     )
 
-    # ========================================================
-    # СПЕЦИАЛЬНАЯ ТАБЛИЦА УМНОЖЕНИЯ
-    # ========================================================
-
     request_lower = str(
         request
     ).lower()
@@ -638,19 +502,11 @@ def create_generated_file(
             extension
         )
 
-    # ========================================================
-    # AI CONTENT
-    # ========================================================
-
     content = generate_ai_file_content(
         request,
         extension,
         user_id
     )
-
-    # ========================================================
-    # ИМЯ
-    # ========================================================
 
     filename_base = (
         str(request)
@@ -676,10 +532,6 @@ def create_generated_file(
         temp_directory,
         filename
     )
-
-    # ========================================================
-    # XLSX
-    # ========================================================
 
     if extension == "xlsx":
 
@@ -746,10 +598,6 @@ def create_generated_file(
             path
         )
 
-    # ========================================================
-    # DOCX
-    # ========================================================
-
     elif extension == "docx":
 
         from docx import Document
@@ -761,7 +609,9 @@ def create_generated_file(
             line = line.strip()
 
             if not line:
+
                 document.add_paragraph("")
+
                 continue
 
             if (
@@ -789,10 +639,6 @@ def create_generated_file(
         document.save(
             path
         )
-
-    # ========================================================
-    # PDF
-    # ========================================================
 
     elif extension == "pdf":
 
@@ -851,10 +697,6 @@ def create_generated_file(
         document.build(
             story
         )
-
-    # ========================================================
-    # PPTX
-    # ========================================================
 
     elif extension == "pptx":
 
@@ -963,10 +805,6 @@ def create_generated_file(
             path
         )
 
-    # ========================================================
-    # CSV
-    # ========================================================
-
     elif extension == "csv":
 
         with open(
@@ -991,10 +829,6 @@ def create_generated_file(
                             for cell in line.split(";")
                         ]
                     )
-
-    # ========================================================
-    # JSON
-    # ========================================================
 
     elif extension == "json":
 
@@ -1037,10 +871,6 @@ def create_generated_file(
                 ensure_ascii=False,
                 indent=2
             )
-
-    # ========================================================
-    # ОСТАЛЬНЫЕ ФОРМАТЫ
-    # ========================================================
 
     else:
 
@@ -2340,63 +2170,253 @@ def analyze_image_gemini(
     image_bytes
 ):
 
-    if (
-        not GEMINI_API_KEY
-        or not genai
-    ):
+    if not GEMINI_API_KEY:
 
         return (
             "Анализ фото недоступен: "
             "не задан GEMINI_API_KEY."
         )
 
-    for model_name in [
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash"
-    ]:
+    if not genai or not Image:
+
+        return (
+            "Анализ фото недоступен: "
+            "библиотека Gemini/PIL не загрузилась."
+        )
+
+    if not image_bytes:
+
+        return (
+            "Не удалось получить данные фотографии."
+        )
+
+    image = None
+
+    try:
+
+        image = Image.open(
+            io.BytesIO(image_bytes)
+        )
+
+        image.verify()
+
+        image = Image.open(
+            io.BytesIO(image_bytes)
+        )
+
+        if image.mode not in (
+            "RGB",
+            "RGBA"
+        ):
+
+            image = image.convert(
+                "RGB"
+            )
+
+        # Уменьшаем слишком большие фотографии,
+        # чтобы не отправлять Gemini лишние данные.
+        max_side = 2048
+
+        if (
+            image.width > max_side
+            or image.height > max_side
+        ):
+
+            image.thumbnail(
+                (
+                    max_side,
+                    max_side
+                ),
+                Image.Resampling.LANCZOS
+            )
+
+    except Exception as e:
+
+        print(
+            f"❌ Ошибка открытия изображения: {e}"
+        )
+
+        return (
+            "Не удалось открыть фотографию. "
+            "Попробуй отправить её ещё раз."
+        )
+
+    models_to_try = [
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash"
+    ]
+
+    last_error = None
+
+    for model_name in models_to_try:
 
         try:
+
+            print(
+                f"🖼️ Gemini анализ фото → "
+                f"{model_name}"
+            )
 
             model = genai.GenerativeModel(
                 model_name
             )
 
-            image = Image.open(
-                io.BytesIO(image_bytes)
+            prompt = (
+                "Внимательно изучи эту фотографию "
+                "и опиши, что на ней изображено.\n\n"
+
+                "Укажи основные объекты, людей, "
+                "предметы, окружение, действия, "
+                "текст на изображении, если он хорошо "
+                "читается, и другие заметные детали.\n\n"
+
+                "Если пользователь ничего отдельно "
+                "не спросил, просто дай понятное "
+                "описание фотографии.\n\n"
+
+                "Не выдумывай детали, которых нельзя "
+                "уверенно увидеть на фотографии.\n\n"
+
+                "Отвечай на русском языке.\n"
+                "Не используй Markdown."
             )
 
             response = model.generate_content(
                 [
-                    (
-                        "Опиши подробно, что изображено "
-                        "на этой фотографии. "
-                        "Ответь на русском языке. "
-                        "Не используй Markdown."
-                    ),
+                    prompt,
                     image
-                ]
+                ],
+                generation_config={
+                    "temperature": 0.2,
+                    "max_output_tokens": 2048
+                }
             )
 
-            if (
-                response
-                and response.text
-            ):
+            if not response:
+
+                raise RuntimeError(
+                    "Gemini вернула пустой response."
+                )
+
+            answer = ""
+
+            try:
+
+                answer = (
+                    response.text
+                    or ""
+                )
+
+            except Exception:
+
+                answer = ""
+
+            if not answer:
+
+                try:
+
+                    candidates = (
+                        getattr(
+                            response,
+                            "candidates",
+                            []
+                        )
+                        or []
+                    )
+
+                    collected_parts = []
+
+                    for candidate in candidates:
+
+                        content = getattr(
+                            candidate,
+                            "content",
+                            None
+                        )
+
+                        if not content:
+                            continue
+
+                        parts = getattr(
+                            content,
+                            "parts",
+                            []
+                        )
+
+                        for part in parts:
+
+                            text_part = getattr(
+                                part,
+                                "text",
+                                None
+                            )
+
+                            if text_part:
+
+                                collected_parts.append(
+                                    str(text_part)
+                                )
+
+                    answer = "\n".join(
+                        collected_parts
+                    ).strip()
+
+                except Exception as extract_error:
+
+                    print(
+                        "⚠️ Не удалось извлечь "
+                        f"текст ответа Gemini: "
+                        f"{extract_error}"
+                    )
+
+            if answer:
+
+                print(
+                    f"✅ Gemini → {model_name}: "
+                    "описание получено"
+                )
 
                 return clean_markdown(
-                    str(
-                        response.text
-                    ).strip()
+                    answer
                 )
+
+            feedback = getattr(
+                response,
+                "prompt_feedback",
+                None
+            )
+
+            if feedback:
+
+                last_error = (
+                    f"Gemini не вернула текст. "
+                    f"Prompt feedback: {feedback}"
+                )
+
+            else:
+
+                last_error = (
+                    "Gemini не вернула текстовый ответ."
+                )
+
+            print(
+                f"⚠️ Gemini {model_name}: "
+                f"{last_error}"
+            )
 
         except Exception as e:
 
+            last_error = str(e)
+
             print(
-                f"⚠️ Gemini {model_name}: {e}"
+                f"❌ Gemini {model_name}: "
+                f"{e}"
             )
 
     return (
-        "Не удалось получить ответ от Gemini."
+        "Не удалось получить описание фотографии "
+        "от Gemini.\n\n"
+        f"Последняя ошибка: {last_error}"
     )
 
 
@@ -2439,7 +2459,6 @@ def help_cmd(message):
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
         "/image <описание> — создать изображение\n"
-        "/music <описание> — создать музыку 🎵\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
@@ -2459,118 +2478,6 @@ def help_cmd(message):
         message,
         help_text
     )
-
-
-# ============================================================
-# MUSIC
-# ============================================================
-
-@bot.message_handler(
-    commands=["music"]
-)
-def music_cmd(message):
-
-    parts = message.text.split(
-        maxsplit=1
-    )
-
-    if len(parts) < 2:
-
-        bot.reply_to(
-            message,
-            "Напиши описание музыки.\n\n"
-            "Например:\n"
-            "/music спокойная фортепианная мелодия "
-            "для ночного города"
-        )
-
-        return
-
-    prompt = parts[1].strip()
-
-    if len(prompt) > 500:
-
-        bot.reply_to(
-            message,
-            "Описание музыки слишком длинное. "
-            "Сделай его короче."
-        )
-
-        return
-
-    msg = bot.reply_to(
-        message,
-        "🎵 Создаю музыку...\n"
-        "Это может занять некоторое время."
-    )
-
-    music_path = None
-
-    try:
-
-        music_path = generate_music(
-            prompt,
-            duration=8
-        )
-
-        with open(
-            music_path,
-            "rb"
-        ) as audio:
-
-            bot.send_audio(
-                message.chat.id,
-                audio,
-                title="MusicGen",
-                performer="AI MusicGen",
-                caption=(
-                    "🎵 Готово!\n\n"
-                    f"Описание: {prompt}"
-                )
-            )
-
-        try:
-
-            bot.delete_message(
-                message.chat.id,
-                msg.message_id
-            )
-
-        except Exception:
-            pass
-
-    except Exception as e:
-
-        print(
-            f"❌ Ошибка MusicGen: {e}"
-        )
-
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            (
-                "Не удалось создать музыку.\n\n"
-                f"Ошибка: {e}"
-            )
-        )
-
-    finally:
-
-        if (
-            music_path
-            and os.path.exists(
-                music_path
-            )
-        ):
-
-            try:
-
-                os.remove(
-                    music_path
-                )
-
-            except Exception:
-                pass
 
 
 # ============================================================
@@ -3330,6 +3237,12 @@ def handle_photo(message):
             file_info.file_path
         )
 
+        if not image_bytes:
+
+            raise ValueError(
+                "Telegram не вернул файл фотографии."
+            )
+
         answer = analyze_image_gemini(
             image_bytes
         )
@@ -3342,10 +3255,17 @@ def handle_photo(message):
 
     except Exception as e:
 
+        print(
+            f"❌ Ошибка анализа фото: {e}"
+        )
+
         edit_or_send_long(
             message.chat.id,
             msg.message_id,
-            f"Ошибка анализа фото: {e}"
+            (
+                "Ошибка анализа фото.\n\n"
+                f"Ошибка: {e}"
+            )
         )
 
 
@@ -3480,10 +3400,6 @@ if __name__ == "__main__":
 
     print(
         "=" * 60
-    )
-
-    print(
-        "🎵 MusicGen: включён"
     )
 
     print(
