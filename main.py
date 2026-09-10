@@ -75,9 +75,8 @@ tavily_client = (
 # ============================================================
 if GEMINI_API_KEY:
     try:
-        import google.generativeai as genai
+        from google import genai
         from PIL import Image
-        genai.configure(api_key=GEMINI_API_KEY)
         print("✅ Gemini подключён")
     except Exception as e:
         print(f"⚠️ Gemini недоступен: {e}")
@@ -277,11 +276,15 @@ def create_generated_file(request, user_id):
         document.save(path)
 
     elif extension == "pdf":
-        # Автоматическое скачивание кириллического шрифта
+        # Автоматическое скачивание кириллического шрифта с надежных источников
         font_path = "DejaVuSans.ttf"
         if not os.path.exists(font_path):
-            url = "https://raw.githubusercontent.com/a-bur/dejavu-fonts-ttf/master/ttf/DejaVuSans.ttf"
-            urllib.request.urlretrieve(url, font_path)
+            url = "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@version_2_37/ttf/DejaVuSans.ttf"
+            try:
+                urllib.request.urlretrieve(url, font_path)
+            except Exception as e:
+                alt_url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf"
+                urllib.request.urlretrieve(alt_url, font_path)
 
         pdfmetrics.registerFont(TTFont('DejaVu', font_path))
 
