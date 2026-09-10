@@ -6,11 +6,10 @@ pypdf
 edge-tts
 g4f
 groq
-google-generativeai
 google-genai
 pillow
 tavily-python
-duckduckgo-search
+duckduckgo_search
 openpyxl
 python-docx
 reportlab
