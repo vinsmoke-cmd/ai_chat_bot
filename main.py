@@ -9,14 +9,27 @@ import threading
 import tempfile
 import time
 import base64
+import urllib.request
 import telebot
 import requests
 from flask import Flask
 from bs4 import BeautifulSoup
-from pypdf import PdfReader
 import edge_tts
 from g4f.client import Client
 from groq import Groq
+
+# Библиотеки для работы с документами
+from pypdf import PdfReader
+import docx
+import openpyxl
+from pptx import Presentation
+
+# Импорты для генерации PDF
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # ============================================================
 # ENVIRONMENT
@@ -75,16 +88,57 @@ else:
     Image = None
 
 # ============================================================
-# ПАМЯТЬ
+# ПАМЯТЬ И НАСТРОЙКИ
 # ============================================================
 user_histories = {}
 user_modes = {}
 
-# ============================================================
-# НАСТРОЙКИ
-# ============================================================
 TELEGRAM_MESSAGE_LIMIT = 4096
 AI_MAX_RESPONSE_LENGTH = 40000
+
+# ============================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ЧТЕНИЯ ФАЙЛОВ
+# ============================================================
+def extract_text_from_file(file_path):
+    """Извлечение текста из различных форматов файлов"""
+    ext = file_path.split('.')[-1].lower()
+    text = ""
+
+    if ext == 'pdf':
+        reader = PdfReader(file_path)
+        for page in reader.pages:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
+
+    elif ext == 'docx':
+        doc = docx.Document(file_path)
+        text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+
+    elif ext == 'xlsx':
+        wb = openpyxl.load_workbook(file_path, data_only=True)
+        for sheet in wb.worksheets:
+            text += f"--- Лист: {sheet.title} ---\n"
+            for row in sheet.iter_rows(values_only=True):
+                row_str = " | ".join([str(cell) for cell in row if cell is not None])
+                if row_str:
+                    text += row_str + "\n"
+
+    elif ext == 'pptx':
+        prs = Presentation(file_path)
+        for i, slide in enumerate(prs.slides, 1):
+            text += f"--- Слайд {i} ---\n"
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text:
+                    text += shape.text + "\n"
+
+    elif ext in ['txt', 'py', 'js', 'json', 'csv', 'md', 'html', 'log', 'xml', 'css']:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            text = f.read()
+    else:
+        raise ValueError(f"Формат .{ext} не поддерживается")
+
+    return text.strip()
 
 # ============================================================
 # SMART FILE GENERATOR
@@ -122,8 +176,7 @@ def detect_file_format(request):
     return "txt"
 
 def make_multiplication_table_xlsx(output_path):
-    from openpyxl import Workbook
-    workbook = Workbook()
+    workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Таблица умножения"
 
@@ -184,8 +237,7 @@ def create_generated_file(request, user_id):
     path = os.path.join(temp_directory, filename)
 
     if extension == "xlsx":
-        from openpyxl import Workbook
-        workbook = Workbook()
+        workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "Данные"
 
@@ -211,8 +263,7 @@ def create_generated_file(request, user_id):
         workbook.save(path)
 
     elif extension == "docx":
-        from docx import Document
-        document = Document()
+        document = docx.Document()
         for line in content.splitlines():
             line = line.strip()
             if not line:
@@ -226,12 +277,24 @@ def create_generated_file(request, user_id):
         document.save(path)
 
     elif extension == "pdf":
-        from reportlab.lib.pagesizes import A4
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet
+        # Автоматическое скачивание кириллического шрифта
+        font_path = "DejaVuSans.ttf"
+        if not os.path.exists(font_path):
+            url = "https://raw.githubusercontent.com/a-bur/dejavu-fonts-ttf/master/ttf/DejaVuSans.ttf"
+            urllib.request.urlretrieve(url, font_path)
+
+        pdfmetrics.registerFont(TTFont('DejaVu', font_path))
 
         document = SimpleDocTemplate(path, pagesize=A4)
         styles = getSampleStyleSheet()
+        
+        cyrillic_style = ParagraphStyle(
+            'CyrillicStyle',
+            parent=styles['Normal'],
+            fontName='DejaVu',
+            fontSize=10,
+            leading=14
+        )
         story = []
 
         for line in content.splitlines():
@@ -240,13 +303,12 @@ def create_generated_file(request, user_id):
                 story.append(Spacer(1, 8))
                 continue
             safe_text = html.escape(line)
-            story.append(Paragraph(safe_text, styles["BodyText"]))
+            story.append(Paragraph(safe_text, cyrillic_style))
             story.append(Spacer(1, 6))
 
         document.build(story)
 
     elif extension == "pptx":
-        from pptx import Presentation
         presentation = Presentation()
         current_title = None
         current_body = []
@@ -320,7 +382,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 # ============================================================
-# ОЧИСТКА MARKDOWN
+# ОЧИСТКА MARKDOWN & УТИЛИТЫ
 # ============================================================
 def clean_markdown(text):
     if not text:
@@ -350,9 +412,6 @@ def clean_markdown(text):
 
     return text.strip()
 
-# ============================================================
-# РАЗБИВКА ДЛИННЫХ СООБЩЕНИЙ
-# ============================================================
 def split_long_message(text, max_length=TELEGRAM_MESSAGE_LIMIT - 100):
     if not text:
         return [""]
@@ -377,9 +436,6 @@ def split_long_message(text, max_length=TELEGRAM_MESSAGE_LIMIT - 100):
         parts.append(text)
     return parts
 
-# ============================================================
-# ИЗВЛЕЧЕНИЕ КОДОВЫХ БЛОКОВ
-# ============================================================
 def extract_code_blocks(text):
     if not text:
         return []
@@ -408,9 +464,6 @@ def extract_code_blocks(text):
 
     return parts
 
-# ============================================================
-# ОТПРАВКА КОДА
-# ============================================================
 def send_code_block(chat_id, code, language=""):
     if not code:
         return None
@@ -426,9 +479,6 @@ def send_code_block(chat_id, code, language=""):
             print(f"❌ Ошибка fallback кодового блока: {e2}")
     return None
 
-# ============================================================
-# ОТПРАВКА AI-ОТВЕТА
-# ============================================================
 def send_ai_response(chat_id, text):
     if not text:
         return []
@@ -457,9 +507,6 @@ def send_ai_response(chat_id, text):
                     print(f"⚠️ Ошибка отправки текста: {e}")
     return sent_messages
 
-# ============================================================
-# ИЗМЕНИТЬ ВРЕМЕННОЕ СООБЩЕНИЕ
-# ============================================================
 def edit_or_send_long(chat_id, message_id, text):
     if not text:
         text = "Пустой ответ."
@@ -653,7 +700,7 @@ def kira_cmd(message):
         edit_or_send_long(message.chat.id, msg.message_id, "Кира — это не просто имя, а целое настроение, наполненное светом и теплотой. ✨❤️")
 
 # ============================================================
-# WEB SEARCH
+# WEB SEARCH И ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
 # ============================================================
 def perform_web_search(query):
     results_text = ""
@@ -677,9 +724,6 @@ def perform_web_search(query):
 
     return results_text
 
-# ============================================================
-# ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЯ
-# ============================================================
 def generate_image_dynamic(prompt):
     for model in ["flux", "dall-e-3"]:
         try:
@@ -698,57 +742,6 @@ def generate_image_dynamic(prompt):
     return None
 
 # ============================================================
-# РАБОТА С ИЗОБРАЖЕНИЯМИ (ОБНОВЛЕННЫЙ FALLBACK)
-# ============================================================
-def analyze_image_gemini(image_bytes):
-    # 1. Пробуем Gemini (если есть ключ)
-    if GEMINI_API_KEY and genai:
-        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-2.5-flash"]:
-            try:
-                model = genai.GenerativeModel(model_name)
-                prompt_text = "Опиши подробно, что изображено на этой фотографии. Ответь на русском языке. Не используй Markdown."
-                
-                # Передаем байты с MIME-типом напрямую в Gemini
-                response = model.generate_content([
-                    prompt_text,
-                    {"mime_type": "image/jpeg", "data": image_bytes}
-                ])
-                
-                if response and response.text:
-                    return clean_markdown(str(response.text).strip())
-            except Exception as e:
-                print(f"⚠️ Gemini ({model_name}) ошибка: {e}")
-
-    # 2. Переключение на Groq Vision (если Gemini упал или недоступен)
-    if groq_client:
-        try:
-            print("🔄 Анализ изображения через Groq Vision...")
-            base64_image = base64.b64encode(image_bytes).decode('utf-8')
-            
-            response = groq_client.chat.completions.create(
-                model="llama-3.2-90b-vision-preview",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Опиши подробно, что изображено на этой картинке. Ответь на русском языке. Без Markdown."},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                            }
-                        ]
-                    }
-                ]
-            )
-            answer = response.choices[0].message.content
-            if answer:
-                return clean_markdown(str(answer).strip())
-        except Exception as e:
-            print(f"⚠️ Groq Vision ошибка: {e}")
-
-    return "Не удалось распознать изображение. Попробуйте проверить API-ключи или отправить его позже."
-
-# ============================================================
 # TTS
 # ============================================================
 async def generate_audio(text, output_file):
@@ -756,7 +749,7 @@ async def generate_audio(text, output_file):
     await communicate.save(output_file)
 
 # ============================================================
-# START / HELP
+# START / HELP (БЕЗ УПОМИНАНИЯ КАРТИНКИ)
 # ============================================================
 @bot.message_handler(commands=["start", "help"])
 def help_cmd(message):
@@ -776,7 +769,7 @@ def help_cmd(message):
         "/tts <текст> — озвучка\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос обычным сообщением или прислать картинку/PDF."
+        "Также можешь просто написать мне любой вопрос или прислать документ (PDF, DOCX, XLSX и др.)."
     )
     bot.reply_to(message, help_text)
 
@@ -831,7 +824,7 @@ def file_cmd(message):
                 pass
 
 # ============================================================
-# NEUROHAM
+# NEUROHAM / CLEAR / FACT / WEATHER / SEARCH / AI TOOLS / IMAGE / TTS
 # ============================================================
 @bot.message_handler(commands=["neuroham", "rude"])
 def toggle_neuroham_mode(message):
@@ -848,9 +841,6 @@ def toggle_neuroham_mode(message):
     if user_id in user_histories:
         del user_histories[user_id]
 
-# ============================================================
-# CLEAR
-# ============================================================
 @bot.message_handler(commands=["clear"])
 def clear_cmd(message):
     user_id = message.chat.id
@@ -858,9 +848,6 @@ def clear_cmd(message):
         del user_histories[user_id]
     bot.reply_to(message, "Память диалога очищена.")
 
-# ============================================================
-# FACT
-# ============================================================
 @bot.message_handler(commands=["fact"])
 def fact_cmd(message):
     parts = message.text.split(maxsplit=1)
@@ -871,9 +858,6 @@ def fact_cmd(message):
     fact = ask_ai_with_history(message.chat.id, prompt)
     edit_or_send_long(message.chat.id, msg.message_id, fact)
 
-# ============================================================
-# WEATHER
-# ============================================================
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
     parts = message.text.split(maxsplit=1)
@@ -900,9 +884,6 @@ def weather_cmd(message):
     except Exception as e:
         bot.reply_to(message, f"Ошибка погоды: {e}")
 
-# ============================================================
-# SEARCH
-# ============================================================
 @bot.message_handler(commands=["search"])
 def search_cmd(message):
     parts = message.text.split(maxsplit=1)
@@ -919,9 +900,6 @@ def search_cmd(message):
     reply = ask_ai_with_history(message.chat.id, prompt)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
-# ============================================================
-# AI COMMANDS
-# ============================================================
 @bot.message_handler(commands=["gemini", "code", "sum", "tr", "fix"])
 def ai_tools_cmd(message):
     parts = message.text.split(maxsplit=1)
@@ -933,9 +911,6 @@ def ai_tools_cmd(message):
     reply = ask_ai_with_history(message.chat.id, parts[1])
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
-# ============================================================
-# IMAGE
-# ============================================================
 @bot.message_handler(commands=["image"])
 def image_cmd(message):
     parts = message.text.split(maxsplit=1)
@@ -957,9 +932,6 @@ def image_cmd(message):
     else:
         edit_or_send_long(message.chat.id, msg.message_id, "Не удалось сгенерировать изображение.")
 
-# ============================================================
-# TTS
-# ============================================================
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
     parts = message.text.split(maxsplit=1)
@@ -1022,59 +994,43 @@ def handle_text(message):
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
 # ============================================================
-# PHOTO
+# PHOTO (РАСПОЗНАВАНИЕ ОТКЛЮЧЕНО)
 # ============================================================
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
-    msg = bot.reply_to(message, "Изучаю фото...")
-    try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        image_bytes = bot.download_file(file_info.file_path)
-        answer = analyze_image_gemini(image_bytes)
-        edit_or_send_long(message.chat.id, msg.message_id, answer)
-    except Exception as e:
-        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка анализа фото: {e}")
+    bot.reply_to(message, "⚠️ Я не умею распознавать или обрабатывать изображения.")
 
 # ============================================================
-# PDF
+# УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ДОКУМЕНТОВ (PDF, DOCX, XLSX, PPTX, TXT и др.)
 # ============================================================
 @bot.message_handler(content_types=["document"])
 def handle_doc(message):
-    if message.document.mime_type != "application/pdf":
-        bot.reply_to(message, "Отправьте документ в формате PDF.")
-        return
-
-    msg = bot.reply_to(message, "Читаю PDF...")
+    msg = bot.reply_to(message, "Читаю документ...")
     path = None
 
     try:
         file_info = bot.get_file(message.document.file_id)
         file_data = bot.download_file(file_info.file_path)
+        file_name = message.document.file_name or "document.bin"
+        ext = os.path.splitext(file_name)[1]
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
             temp_file.write(file_data)
             path = temp_file.name
 
-        reader = PdfReader(path)
-        extracted_pages = []
+        text = extract_text_from_file(path)
 
-        for page in reader.pages[:5]:
-            page_text = page.extract_text()
-            if page_text:
-                extracted_pages.append(page_text)
-
-        text = "\n".join(extracted_pages)
         if not text.strip():
-            raise ValueError("Не удалось извлечь текст из PDF.")
+            raise ValueError("Не удалось извлечь текст из файла или он пуст.")
 
         reply = ask_ai_with_history(
             message.chat.id,
-            "Сделай краткую и понятную выжимку из этого PDF. Не используй Markdown:\n\n" + text[:6000]
+            "Сделай краткую и понятную выжимку из этого документа. Не используй Markdown:\n\n" + text[:6000]
         )
         edit_or_send_long(message.chat.id, msg.message_id, reply)
 
     except Exception as e:
-        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка PDF: {e}")
+        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка обработки документа: {e}")
 
     finally:
         if path and os.path.exists(path):
