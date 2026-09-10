@@ -10,6 +10,7 @@ import tempfile
 import time
 import base64
 import urllib.request
+import urllib.parse
 import telebot
 import requests
 from flask import Flask
@@ -276,7 +277,7 @@ def create_generated_file(request, user_id):
         document.save(path)
 
     elif extension == "pdf":
-        # Автоматическое скачивание кириллического шрифта с надежных источников
+        # Автоматическое скачивание кириллического шрифта с надежных CDN
         font_path = "DejaVuSans.ttf"
         if not os.path.exists(font_path):
             url = "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@version_2_37/ttf/DejaVuSans.ttf"
@@ -703,7 +704,7 @@ def kira_cmd(message):
         edit_or_send_long(message.chat.id, msg.message_id, "Кира — это не просто имя, а целое настроение, наполненное светом и теплотой. ✨❤️")
 
 # ============================================================
-# WEB SEARCH И ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
+# WEB SEARCH И УЛУЧШЕННАЯ ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
 # ============================================================
 def perform_web_search(query):
     results_text = ""
@@ -727,21 +728,61 @@ def perform_web_search(query):
 
     return results_text
 
+def enhance_image_prompt(user_prompt):
+    """Превращает короткий запрос пользователя в подробный промпт высокой детализации"""
+    try:
+        sys_prompt = (
+            "You are an expert AI image prompt engineer. Expand the user's request into a highly detailed, "
+            "vivid, beautiful image description in English. Add specifics about lighting, textures, composition, "
+            "and style (e.g., photorealistic, 8k resolution, cinematic lighting, highly detailed). "
+            "Return ONLY the enhanced English prompt without any commentary or quotation marks."
+        )
+        enhanced = ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+        result = enhanced.choices[0].message.content.strip()
+        return result if result else user_prompt
+    except Exception as e:
+        print(f"⚠️ Ошибка улучшения промпта: {e}")
+        return user_prompt
+
 def generate_image_dynamic(prompt):
-    for model in ["flux", "dall-e-3"]:
+    """Генерация высококачественных изображений с увеличенным временем ожидания и обогащенным промптом"""
+    detailed_prompt = enhance_image_prompt(prompt)
+    print(f"🎨 Детализированный промпт: {detailed_prompt}")
+
+    models_to_try = ["flux-realism", "flux", "dall-e-3"]
+
+    for model in models_to_try:
         try:
+            print(f"🖼 Попытка генерации через {model}...")
             response = ai_client.images.generate(
                 model=model,
-                prompt=prompt,
+                prompt=detailed_prompt,
                 response_format="url"
             )
             image_url = response.data[0].url
             if image_url:
-                response_image = requests.get(image_url, timeout=25)
+                response_image = requests.get(image_url, timeout=60)
                 if response_image.status_code == 200:
                     return response_image.content
         except Exception as e:
-            print(f"⚠️ Генерация {model}: {e}")
+            print(f"⚠️ Ошибка генерации {model}: {e}")
+
+    try:
+        print("🖼 Пробуем резервный генератор Pollinations HD...")
+        encoded_prompt = urllib.parse.quote(detailed_prompt)
+        fallback_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={int(time.time())}&model=flux&nologo=true"
+        res = requests.get(fallback_url, timeout=60)
+        if res.status_code == 200:
+            return res.content
+    except Exception as e:
+        print(f"❌ Ошибка резервной генерации: {e}")
+
     return None
 
 # ============================================================
@@ -752,7 +793,7 @@ async def generate_audio(text, output_file):
     await communicate.save(output_file)
 
 # ============================================================
-# START / HELP (БЕЗ УПОМИНАНИЯ КАРТИНКИ)
+# START / HELP
 # ============================================================
 @bot.message_handler(commands=["start", "help"])
 def help_cmd(message):
@@ -761,7 +802,7 @@ def help_cmd(message):
         "Мои команды:\n\n"
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
-        "/image <описание> — создать изображение\n"
+        "/image <описание> — создать изображение (HD quality)\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
@@ -920,10 +961,10 @@ def image_cmd(message):
     prompt = parts[1] if len(parts) > 1 else ""
 
     if not prompt:
-        bot.reply_to(message, "Опиши картинку.\n\nНапример:\n/image кот в космосе")
+        bot.reply_to(message, "Опиши картинку.\n\nНапример:\n/image киберпанк город под дождем")
         return
 
-    msg = bot.reply_to(message, "Генерирую...")
+    msg = bot.reply_to(message, "🎨 Прорабатываю детализацию и генерирую фото в высоком качестве... Пожалуйста, подождите (это может занять до 30-40 секунд).")
     image_bytes = generate_image_dynamic(prompt)
 
     if image_bytes:
@@ -933,7 +974,7 @@ def image_cmd(message):
         except Exception:
             pass
     else:
-        edit_or_send_long(message.chat.id, msg.message_id, "Не удалось сгенерировать изображение.")
+        edit_or_send_long(message.chat.id, msg.message_id, "Не удалось сгенерировать изображение высокого качества. Попробуй изменить запрос.")
 
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
