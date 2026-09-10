@@ -698,31 +698,35 @@ def generate_image_dynamic(prompt):
     return None
 
 # ============================================================
-# РАБОТА С ИЗОБРАЖЕНИЯМИ (FALLBACK РЕЖИМ)
+# РАБОТА С ИЗОБРАЖЕНИЯМИ (ОБНОВЛЕННЫЙ FALLBACK)
 # ============================================================
 def analyze_image_gemini(image_bytes):
     # 1. Пробуем Gemini (если есть ключ)
     if GEMINI_API_KEY and genai:
-        for model_name in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-2.5-flash"]:
             try:
                 model = genai.GenerativeModel(model_name)
-                image = Image.open(io.BytesIO(image_bytes))
+                prompt_text = "Опиши подробно, что изображено на этой фотографии. Ответь на русском языке. Не используй Markdown."
+                
+                # Передаем байты с MIME-типом напрямую в Gemini
                 response = model.generate_content([
-                    "Опиши подробно, что изображено на этой фотографии. Ответь на русском языке. Не используй Markdown.",
-                    image
+                    prompt_text,
+                    {"mime_type": "image/jpeg", "data": image_bytes}
                 ])
+                
                 if response and response.text:
                     return clean_markdown(str(response.text).strip())
             except Exception as e:
-                print(f"⚠️ Gemini {model_name} не сработал: {e}")
+                print(f"⚠️ Gemini ({model_name}) ошибка: {e}")
 
-    # 2. Переключение на Groq Vision (если Gemini упал)
+    # 2. Переключение на Groq Vision (если Gemini упал или недоступен)
     if groq_client:
         try:
             print("🔄 Анализ изображения через Groq Vision...")
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
+            
             response = groq_client.chat.completions.create(
-                model="llama-3.2-11b-vision-preview",
+                model="llama-3.2-90b-vision-preview",
                 messages=[
                     {
                         "role": "user",
@@ -740,9 +744,9 @@ def analyze_image_gemini(image_bytes):
             if answer:
                 return clean_markdown(str(answer).strip())
         except Exception as e:
-            print(f"⚠️ Groq Vision не сработал: {e}")
+            print(f"⚠️ Groq Vision ошибка: {e}")
 
-    return "Не удалось распознать изображение. Попробуйте отправить его позже."
+    return "Не удалось распознать изображение. Попробуйте проверить API-ключи или отправить его позже."
 
 # ============================================================
 # TTS
