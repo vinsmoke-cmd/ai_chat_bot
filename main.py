@@ -8,6 +8,7 @@ import asyncio
 import threading
 import tempfile
 import time
+import base64
 import telebot
 import requests
 from flask import Flask
@@ -84,55 +85,6 @@ user_modes = {}
 # ============================================================
 TELEGRAM_MESSAGE_LIMIT = 4096
 AI_MAX_RESPONSE_LENGTH = 40000
-
-# ============================================================
-# MUSICGEN
-# ============================================================
-MUSIC_MODEL_NAME = "lyria-3-clip-preview"
-
-def generate_music(prompt, duration=8):
-    import base64
-    if not GEMINI_API_KEY:
-        raise RuntimeError("Не задан GEMINI_API_KEY.")
-    try:
-        from google import genai
-    except ImportError as e:
-        raise RuntimeError("Не установлена библиотека google-genai. Установи её командой: pip install -U google-genai") from e
-
-    print(f"🎵 Генерация музыки через Gemini Lyria: {prompt}")
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        interaction = client.interactions.create(
-            model=MUSIC_MODEL_NAME,
-            input=f"Create a 30-second music clip. Use this description: {prompt}"
-        )
-    except Exception as e:
-        raise RuntimeError(f"Ошибка Google Gemini Lyria: {e}") from e
-
-    generated_audio = interaction.output_audio
-    if not generated_audio or not generated_audio.data:
-        raise RuntimeError("Google Gemini Lyria не вернула аудиоданные.")
-
-    try:
-        audio_bytes = base64.b64decode(generated_audio.data)
-    except Exception as e:
-        raise RuntimeError(f"Ошибка декодирования MP3: {e}") from e
-
-    if not audio_bytes:
-        raise RuntimeError("Получен пустой MP3-файл.")
-
-    output_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    try:
-        output_file.write(audio_bytes)
-        output_file.close()
-    except Exception:
-        output_file.close()
-        if os.path.exists(output_file.name):
-            os.remove(output_file.name)
-        raise
-
-    print(f"✅ Музыка создана: {output_file.name}")
-    return output_file.name
 
 # ============================================================
 # SMART FILE GENERATOR
@@ -746,26 +698,51 @@ def generate_image_dynamic(prompt):
     return None
 
 # ============================================================
-# GEMINI IMAGE ANALYSIS
+# РАБОТА С ИЗОБРАЖЕНИЯМИ (FALLBACK РЕЖИМ)
 # ============================================================
 def analyze_image_gemini(image_bytes):
-    if not GEMINI_API_KEY or not genai:
-        return "Анализ фото недоступен: не задан GEMINI_API_KEY."
+    # 1. Пробуем Gemini (если есть ключ)
+    if GEMINI_API_KEY and genai:
+        for model_name in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+            try:
+                model = genai.GenerativeModel(model_name)
+                image = Image.open(io.BytesIO(image_bytes))
+                response = model.generate_content([
+                    "Опиши подробно, что изображено на этой фотографии. Ответь на русском языке. Не используй Markdown.",
+                    image
+                ])
+                if response and response.text:
+                    return clean_markdown(str(response.text).strip())
+            except Exception as e:
+                print(f"⚠️ Gemini {model_name} не сработал: {e}")
 
-    for model_name in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]:
+    # 2. Переключение на Groq Vision (если Gemini упал)
+    if groq_client:
         try:
-            model = genai.GenerativeModel(model_name)
-            image = Image.open(io.BytesIO(image_bytes))
-            response = model.generate_content([
-                "Опиши подробно, что изображено на этой фотографии. Ответь на русском языке. Не используй Markdown.",
-                image
-            ])
-            if response and response.text:
-                return clean_markdown(str(response.text).strip())
+            print("🔄 Анализ изображения через Groq Vision...")
+            base64_image = base64.b64encode(image_bytes).decode('utf-8')
+            response = groq_client.chat.completions.create(
+                model="llama-3.2-11b-vision-preview",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Опиши подробно, что изображено на этой картинке. Ответь на русском языке. Без Markdown."},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ]
+            )
+            answer = response.choices[0].message.content
+            if answer:
+                return clean_markdown(str(answer).strip())
         except Exception as e:
-            print(f"⚠️ Gemini {model_name}: {e}")
+            print(f"⚠️ Groq Vision не сработал: {e}")
 
-    return "Не удалось получить ответ от Gemini."
+    return "Не удалось распознать изображение. Попробуйте отправить его позже."
 
 # ============================================================
 # TTS
@@ -785,7 +762,6 @@ def help_cmd(message):
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
         "/image <описание> — создать изображение\n"
-        "/music <описание> — создать музыку 🎵\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
@@ -796,51 +772,9 @@ def help_cmd(message):
         "/tts <текст> — озвучка\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос обычным сообщением."
+        "Также можешь просто написать мне любой вопрос обычным сообщением или прислать картинку/PDF."
     )
     bot.reply_to(message, help_text)
-
-# ============================================================
-# MUSIC
-# ============================================================
-@bot.message_handler(commands=["music"])
-def music_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(message, "Напиши описание музыки.\n\nНапример:\n/music спокойная фортепианная мелодия")
-        return
-
-    prompt = parts[1].strip()
-    if len(prompt) > 500:
-        bot.reply_to(message, "Описание музыки слишком длинное. Сделай его короче.")
-        return
-
-    msg = bot.reply_to(message, "🎵 Создаю музыку...\nЭто может занять некоторое время.")
-    music_path = None
-
-    try:
-        music_path = generate_music(prompt, duration=8)
-        with open(music_path, "rb") as audio:
-            bot.send_audio(
-                message.chat.id,
-                audio,
-                title="MusicGen",
-                performer="AI MusicGen",
-                caption=f"🎵 Готово!\n\nОписание: {prompt}"
-            )
-        try:
-            bot.delete_message(message.chat.id, msg.message_id)
-        except Exception:
-            pass
-    except Exception as e:
-        print(f"❌ Ошибка MusicGen: {e}")
-        edit_or_send_long(message.chat.id, msg.message_id, f"Не удалось создать музыку.\n\nОшибка: {e}")
-    finally:
-        if music_path and os.path.exists(music_path):
-            try:
-                os.remove(music_path)
-            except Exception:
-                pass
 
 # ============================================================
 # FILE
