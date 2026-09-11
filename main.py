@@ -8,7 +8,6 @@ import asyncio
 import threading
 import tempfile
 import time
-import base64
 import urllib.request
 import urllib.parse
 import telebot
@@ -212,6 +211,36 @@ def generate_ai_file_content(request, extension, user_id):
     answer = ask_ai_with_history(user_id, prompt)
     return str(answer).strip()
 
+def get_cyrillic_font():
+    font_path = "DejaVuSans.ttf"
+    if os.path.exists(font_path):
+        return font_path
+
+    system_fonts = [
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\calibri.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf"
+    ]
+    for sys_f in system_fonts:
+        if os.path.exists(sys_f):
+            return sys_f
+
+    urls = [
+        "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf",
+        "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf"
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp, open(font_path, 'wb') as f:
+                f.write(resp.read())
+            return font_path
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки шрифта {url}: {e}")
+
+    return None
+
 def create_generated_file(request, user_id):
     extension = detect_file_format(request)
     temp_directory = tempfile.mkdtemp(prefix="telegram_generated_")
@@ -273,16 +302,15 @@ def create_generated_file(request, user_id):
         document.save(path)
 
     elif extension == "pdf":
-        font_path = "DejaVuSans.ttf"
-        if not os.path.exists(font_path):
-            url = "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@version_2_37/ttf/DejaVuSans.ttf"
+        font_file = get_cyrillic_font()
+        font_name = 'Helvetica'
+        
+        if font_file:
             try:
-                urllib.request.urlretrieve(url, font_path)
-            except Exception:
-                alt_url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf"
-                urllib.request.urlretrieve(alt_url, font_path)
-
-        pdfmetrics.registerFont(TTFont('DejaVu', font_path))
+                pdfmetrics.registerFont(TTFont('CyrillicFont', font_file))
+                font_name = 'CyrillicFont'
+            except Exception as e:
+                print(f"⚠️ Ошибка регистрации шрифта: {e}")
 
         document = SimpleDocTemplate(path, pagesize=A4)
         styles = getSampleStyleSheet()
@@ -290,7 +318,7 @@ def create_generated_file(request, user_id):
         cyrillic_style = ParagraphStyle(
             'CyrillicStyle',
             parent=styles['Normal'],
-            fontName='DejaVu',
+            fontName=font_name,
             fontSize=10,
             leading=14
         )
@@ -390,14 +418,12 @@ def clean_markdown(text):
     text = str(text)
     code_blocks = []
 
-    # Сохраняем только блоки с кодом
     def protect_code(match):
         code_blocks.append(match.group(0))
         return f"§CODEBLOCK{len(code_blocks) - 1}§"
 
     text = re.sub(r"```(?:[a-zA-Z0-9_+#.-]+)?\s*\n?.*?```", protect_code, text, flags=re.DOTALL)
     
-    # Полная зачистка всех остаточных тегов и символов разметки
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
     text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"_{1,3}(.*?)_{1,3}", r"\1", text, flags=re.DOTALL)
@@ -407,7 +433,6 @@ def clean_markdown(text):
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = text.replace("*", "").replace("_", "").replace("`", "").replace("~", "")
 
-    # Возвращаем защищенный код
     for index, code_block in enumerate(code_blocks):
         text = text.replace(f"§CODEBLOCK{index}§", code_block)
 
@@ -662,7 +687,7 @@ def kira_cmd(message):
     edit_or_send_long(message.chat.id, msg.message_id, kira_text)
 
 # ============================================================
-# WEB SEARCH & JINA AI PARSER
+# WEB SEARCH
 # ============================================================
 def perform_web_search(query):
     results_text = ""
@@ -857,10 +882,9 @@ def file_cmd(message):
     extension = detect_file_format(request)
     msg = bot.reply_to(message, f"Создаю файл...\nФормат: .{extension}")
 
-    path, temp_dir = None, None
+    path = None
     try:
         path, filename, extension = create_generated_file(request, message.chat.id)
-        temp_dir = os.path.dirname(path)
 
         with open(path, "rb") as doc:
             bot.send_document(message.chat.id, doc, caption=f"Файл готов!\nФормат: .{extension}")
@@ -872,7 +896,10 @@ def file_cmd(message):
         edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка создания файла: {e}")
     finally:
         if path and os.path.exists(path):
-            os.remove(path)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
 
 @bot.message_handler(commands=["neuroham", "rude"])
 def toggle_neuroham_mode(message):
@@ -908,14 +935,23 @@ def fact_cmd(message):
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
     parts = message.text.split(maxsplit=1)
-    city = parts[1] if len(parts) > 1 else ""
+    city_raw = parts[1] if len(parts) > 1 else ""
 
-    if not city:
+    if not city_raw:
         bot.reply_to(message, "Укажи город.\nНапример: /weather Ташкент")
         return
 
+    city = re.sub(r"\[.*?\]\(.*?\)", "", city_raw)
+    city = re.sub(r"https?://\S+", "", city)
+    city = re.sub(r"[^\w\sа-яА-ЯёЁ-]", "", city).strip()
+
+    if not city:
+        bot.reply_to(message, "Некорректно указан город.")
+        return
+
     try:
-        response = requests.get(f"[https://wttr.in/](https://wttr.in/){city}", params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}, timeout=8)
+        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(city)}"
+        response = requests.get(url, params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}, timeout=8)
         if response.status_code == 200:
             bot.reply_to(message, response.text.strip())
         else:
@@ -1016,7 +1052,6 @@ def tts_cmd(message):
 def handle_text(message):
     text = message.text or ""
 
-    # Чтение ссылок через Jina AI
     if "http://" in text.lower() or "https://" in text.lower():
         msg = bot.reply_to(message, "Читаю ссылку...")
         try:
