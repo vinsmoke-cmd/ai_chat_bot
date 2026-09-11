@@ -98,7 +98,7 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 AI_MAX_RESPONSE_LENGTH = 40000
 
 # ============================================================
-# ВСПАМОГАТЕЛЬНЫЕ ФУНКЦИИ И ЧТЕНИЕ ФАЙЛОВ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И ЧТЕНИЕ ФАЙЛОВ
 # ============================================================
 def extract_text_from_file(file_path):
     ext = file_path.split('.')[-1].lower()
@@ -353,7 +353,7 @@ def create_generated_file(request, user_id):
             text_frame = slide.placeholders[1].text_frame
             text_frame.clear()
             for index, line in enumerate(body):
-                paragraph = text_frame.paragraphs[0] if index == 0 else text_frame.add_paragraph()
+                paragraph = text_frame.paragraphs[0] if index == 0 and len(text_frame.paragraphs) > 0 else text_frame.add_paragraph()
                 paragraph.text = line
 
         for line in content.splitlines():
@@ -919,9 +919,14 @@ def file_cmd(message):
         return
     execute_file_creation(message, parts[1].strip())
 
-def execute_file_creation(message, request_text):
+def execute_file_creation(message, request_text, edit_message_id=None):
     extension = detect_file_format(request_text)
-    msg = bot.reply_to(message, f"Создаю файл...\nФормат: .{extension}")
+    if edit_message_id:
+        msg_id = edit_message_id
+        bot.edit_message_text(f"Создаю файл...\nФормат: .{extension}", message.chat.id, msg_id)
+    else:
+        msg = bot.reply_to(message, f"Создаю файл...\nФормат: .{extension}")
+        msg_id = msg.message_id
 
     path = None
     try:
@@ -930,11 +935,11 @@ def execute_file_creation(message, request_text):
         with open(path, "rb") as doc:
             bot.send_document(message.chat.id, doc, caption=f"Файл готов!\nФормат: .{extension}")
         try:
-            bot.delete_message(message.chat.id, msg.message_id)
+            bot.delete_message(message.chat.id, msg_id)
         except Exception:
             pass
     except Exception as e:
-        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка создания файла: {e}")
+        edit_or_send_long(message.chat.id, msg_id, f"Ошибка создания файла: {e}")
     finally:
         if path and os.path.exists(path):
             try:
@@ -1018,7 +1023,7 @@ def execute_weather(message, city_raw):
                 weather_desc = current_condition['weatherDesc'][0]['value']
 
             text = (
-                f"Погода в городe {area_name}:\n\n"
+                f"Погода в городе {area_name}:\n\n"
                 f"Состояние: {weather_desc}\n"
                 f"Температура: {temp}°C (ощущается как {feels_like}°C)\n"
                 f"Влажность: {humidity}%\n"
@@ -1067,8 +1072,14 @@ def image_cmd(message):
         return
     execute_image_generation(message, prompt)
 
-def execute_image_generation(message, prompt):
-    msg = bot.reply_to(message, "Генерирую фото...")
+def execute_image_generation(message, prompt, edit_message_id=None):
+    if edit_message_id:
+        msg_id = edit_message_id
+        bot.edit_message_text("Генерирую фото...", message.chat.id, msg_id)
+    else:
+        msg = bot.reply_to(message, "Генерирую фото...")
+        msg_id = msg.message_id
+
     image_bytes = generate_image_dynamic(prompt)
 
     if image_bytes:
@@ -1076,11 +1087,11 @@ def execute_image_generation(message, prompt):
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
         bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
         try:
-            bot.delete_message(message.chat.id, msg.message_id)
+            bot.delete_message(message.chat.id, msg_id)
         except Exception:
             pass
     else:
-        edit_or_send_long(message.chat.id, msg.message_id, "Не удалось сгенерировать изображение. Попробуй изменить запрос.")
+        edit_or_send_long(message.chat.id, msg_id, "Не удалось сгенерировать изображение. Попробуй изменить запрос.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reimage:"))
 def callback_reimage(call):
@@ -1102,8 +1113,14 @@ def tts_cmd(message):
         return
     execute_tts(message, parts[1])
 
-def execute_tts(message, text_to_speak):
-    msg = bot.reply_to(message, "Озвучиваю...")
+def execute_tts(message, text_to_speak, edit_message_id=None):
+    if edit_message_id:
+        msg_id = edit_message_id
+        bot.edit_message_text("Озвучиваю...", message.chat.id, msg_id)
+    else:
+        msg = bot.reply_to(message, "Озвучиваю...")
+        msg_id = msg.message_id
+
     audio_path = tempfile.mktemp(suffix=".mp3")
 
     try:
@@ -1111,11 +1128,11 @@ def execute_tts(message, text_to_speak):
         with open(audio_path, "rb") as audio:
             bot.send_voice(message.chat.id, audio)
         try:
-            bot.delete_message(message.chat.id, msg.message_id)
+            bot.delete_message(message.chat.id, msg_id)
         except Exception:
             pass
     except Exception as e:
-        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка TTS: {e}")
+        edit_or_send_long(message.chat.id, msg_id, f"Ошибка TTS: {e}")
     finally:
         if os.path.exists(audio_path):
             os.remove(audio_path)
@@ -1133,7 +1150,7 @@ def process_natural_language_request(message, text, edit_message_id=None):
         if kw in lower_text:
             prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
             if prompt:
-                execute_image_generation(message, prompt)
+                execute_image_generation(message, prompt, edit_message_id)
                 return
             break
 
@@ -1143,7 +1160,7 @@ def process_natural_language_request(message, text, edit_message_id=None):
         if kw in lower_text:
             prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
             if prompt:
-                execute_file_creation(message, prompt)
+                execute_file_creation(message, prompt, edit_message_id)
                 return
             break
 
@@ -1153,7 +1170,7 @@ def process_natural_language_request(message, text, edit_message_id=None):
         if kw in lower_text:
             prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
             if prompt:
-                execute_tts(message, prompt)
+                execute_tts(message, prompt, edit_message_id)
                 return
             break
 
