@@ -710,6 +710,11 @@ def clean_bot_mentions(text):
         text = re.sub(rf"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE)
     return re.sub(r"^(бот|bot)[,\s]*", "", text, flags=re.IGNORECASE).strip()
 
+def clean_command_args(text, command_name):
+    """ Очищает текст команды от самой команды и упоминания бота """
+    pattern = rf"^/{command_name}(?:@\w+)?\s*"
+    return re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+
 # ============================================================ # START / HELP # ============================================================
 @bot.message_handler(commands=["start", "help"])
 def help_cmd(message):
@@ -787,11 +792,11 @@ def handle_voice(message):
 # ============================================================ # ОБРАБОТКА КОМАНД # ============================================================
 @bot.message_handler(commands=["file"])
 def file_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
+    args = clean_command_args(message.text, "file")
+    if not args:
         bot.reply_to(message, "Напиши, какой файл создать.\n\nНапример:\n/file Таблица умножения в Excel\n/file Резюме в PDF")
         return
-    execute_file_creation(message, parts[1].strip())
+    execute_file_creation(message, args)
 
 def execute_file_creation(message, request_text, edit_message_id=None):
     extension = detect_file_format(request_text)
@@ -842,8 +847,7 @@ def clear_cmd(message):
 
 @bot.message_handler(commands=["fact"])
 def fact_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    topic = parts[1] if len(parts) > 1 else ""
+    topic = clean_command_args(message.text, "fact")
     prompt = f"Расскажи интересный факт на тему: {topic}. Будь краток." if topic else "Расскажи случайный интересный факт."
     msg = bot.reply_to(message, "Ищу факт...")
     fact = ask_ai_with_history(message.chat.id, prompt)
@@ -852,7 +856,11 @@ def fact_cmd(message):
 # ============================================================ # WEATHER # ============================================================
 def get_weather(city):
     try:
-        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(city)}"
+        clean_city = re.sub(r"/weather(@\w+)?", "", city, flags=re.IGNORECASE).strip()
+        if not clean_city:
+            return "Укажите город после команды."
+
+        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(clean_city)}"
         params = {"format": "%l:\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, params=params, headers=headers, timeout=8)
@@ -860,28 +868,29 @@ def get_weather(city):
         if response.status_code == 200 and response.text.strip():
             text = response.text.strip()
             if "Unknown location" in text or "404" in text:
-                return f"Город '{city}' не найден."
+                return f"Город '{clean_city}' не найден."
             return text
-        return f"Не удалось найти город '{city}'."
+        return f"Не удалось найти город '{clean_city}'."
     except Exception as e:
         return f"Ошибка получения погоды: {e}"
 
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    city = parts[1] if len(parts) > 1 else ""
-    if not city:
+    args = clean_command_args(message.text, "weather")
+    if not args:
         bot.reply_to(message, "Укажи город.\nНапример: /weather Ташкент")
         return
     msg = bot.reply_to(message, "Узнаю погоду...")
-    weather_info = get_weather(city)
-    edit_or_send_long(message.chat.id, msg.message_id, weather_info)
+    weather_info = get_weather(args)
+    try:
+        bot.edit_message_text(weather_info, chat_id=message.chat.id, message_id=msg.message_id)
+    except Exception:
+        bot.send_message(message.chat.id, weather_info)
 
 # ============================================================ # SEARCH # ============================================================
 @bot.message_handler(commands=["search"])
 def search_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    query = parts[1] if len(parts) > 1 else ""
+    query = clean_command_args(message.text, "search")
     if not query:
         bot.reply_to(message, "Напиши запрос.\nНапример: /search последние новости ИИ")
         return
@@ -897,19 +906,19 @@ def execute_search(message, query):
 # ============================================================ # AI TOOLS # ============================================================
 @bot.message_handler(commands=["gemini", "code", "sum", "tr", "fix"])
 def ai_tools_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
+    cmd_name = message.text.split()[0].replace("/", "").split("@")[0]
+    args = clean_command_args(message.text, cmd_name)
+    if not args:
         bot.reply_to(message, "Напиши текст после команды.")
         return
     msg = bot.reply_to(message, "Обрабатываю...")
-    reply = ask_ai_with_history(message.chat.id, parts[1])
+    reply = ask_ai_with_history(message.chat.id, args)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
 # ============================================================ # IMAGE # ============================================================
 @bot.message_handler(commands=["image"])
 def image_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    prompt = parts[1] if len(parts) > 1 else ""
+    prompt = clean_command_args(message.text, "image")
     if not prompt:
         bot.reply_to(message, "Опиши картинку.\nПример: /image 16:9 киберпанк город под дождем")
         return
@@ -949,11 +958,11 @@ def callback_reimage(call):
 # ============================================================ # TTS # ============================================================
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2:
+    text_to_speak = clean_command_args(message.text, "tts")
+    if not text_to_speak:
         bot.reply_to(message, "Напиши текст для озвучки.")
         return
-    execute_tts(message, parts[1])
+    execute_tts(message, text_to_speak)
 
 def execute_tts(message, text_to_speak, edit_message_id=None):
     if edit_message_id:
@@ -1018,7 +1027,10 @@ def process_natural_language_request(message, text, edit_message_id=None):
             if city:
                 weather_text = get_weather(city)
                 if edit_message_id:
-                    edit_or_send_long(message.chat.id, edit_message_id, weather_text)
+                    try:
+                        bot.edit_message_text(weather_text, chat_id=message.chat.id, message_id=edit_message_id)
+                    except Exception:
+                        bot.send_message(message.chat.id, weather_text)
                 else:
                     bot.reply_to(message, weather_text)
                 return
