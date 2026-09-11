@@ -853,39 +853,48 @@ def fact_cmd(message):
     fact = ask_ai_with_history(message.chat.id, prompt)
     edit_or_send_long(message.chat.id, msg.message_id, fact)
 
-# ============================================================ # WEATHER # ============================================================
+# ============================================================
+# WEATHER (С поддержкой Markdown)
+# ============================================================
 def get_weather(city):
     try:
         clean_city = re.sub(r"/weather(@\w+)?", "", city, flags=re.IGNORECASE).strip()
         if not clean_city:
             return "Укажите город после команды."
 
-        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(clean_city)}"
+        encoded_city = urllib.parse.quote(clean_city)
+        url = f"[https://wttr.in/](https://wttr.in/){encoded_city}"
+        
         params = {"format": "%l:\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}
         headers = {"User-Agent": "Mozilla/5.0"}
+        
         response = requests.get(url, params=params, headers=headers, timeout=8)
         
         if response.status_code == 200 and response.text.strip():
             text = response.text.strip()
             if "Unknown location" in text or "404" in text:
-                return f"Город '{clean_city}' не найден."
-            return text
-        return f"Не удалось найти город '{clean_city}'."
+                return f"Город *{clean_city}* не найден."
+            
+            return (
+                f"🌤 *Погода в городе {clean_city.capitalize()}*\n\n"
+                f"```\n{text}\n```"
+            )
+        return f"Не удалось найти информацию по городу *{clean_city}*."
     except Exception as e:
-        return f"Ошибка получения погоды: {e}"
+        return f"Ошибка получения погоды: `{e}`"
 
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
     args = clean_command_args(message.text, "weather")
     if not args:
-        bot.reply_to(message, "Укажи город.\nНапример: /weather Ташкент")
+        bot.reply_to(message, "Укажи город.\nНапример: `/weather Ташкент`", parse_mode="Markdown")
         return
-    msg = bot.reply_to(message, "Узнаю погоду...")
+    msg = bot.reply_to(message, "⏳ Узнаю погоду...")
     weather_info = get_weather(args)
     try:
-        bot.edit_message_text(weather_info, chat_id=message.chat.id, message_id=msg.message_id)
+        bot.edit_message_text(weather_info, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
     except Exception:
-        bot.send_message(message.chat.id, weather_info)
+        bot.edit_message_text(weather_info, chat_id=message.chat.id, message_id=msg.message_id)
 
 # ============================================================ # SEARCH # ============================================================
 @bot.message_handler(commands=["search"])
@@ -1028,11 +1037,11 @@ def process_natural_language_request(message, text, edit_message_id=None):
                 weather_text = get_weather(city)
                 if edit_message_id:
                     try:
-                        bot.edit_message_text(weather_text, chat_id=message.chat.id, message_id=edit_message_id)
+                        bot.edit_message_text(weather_text, chat_id=message.chat.id, message_id=edit_message_id, parse_mode="Markdown")
                     except Exception:
-                        bot.send_message(message.chat.id, weather_text)
+                        bot.send_message(message.chat.id, weather_text, parse_mode="Markdown")
                 else:
-                    bot.reply_to(message, weather_text)
+                    bot.reply_to(message, weather_text, parse_mode="Markdown")
                 return
 
     # 5. Поиск в интернете
