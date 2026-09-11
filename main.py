@@ -852,16 +852,19 @@ def fact_cmd(message):
 # ============================================================ # WEATHER # ============================================================
 def get_weather(city):
     try:
-        response = requests.get(
-            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(city)}",
-            params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"},
-            timeout=8
-        )
+        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(city)}"
+        params = {"format": "%l:\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, params=params, headers=headers, timeout=8)
+        
         if response.status_code == 200 and response.text.strip():
-            return response.text.strip()
-        return "Город не найден."
+            text = response.text.strip()
+            if "Unknown location" in text or "404" in text:
+                return f"Город '{city}' не найден."
+            return text
+        return f"Не удалось найти город '{city}'."
     except Exception as e:
-        return f"Ошибка погоды: {e}"
+        return f"Ошибка получения погоды: {e}"
 
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
@@ -870,7 +873,9 @@ def weather_cmd(message):
     if not city:
         bot.reply_to(message, "Укажи город.\nНапример: /weather Ташкент")
         return
-    bot.reply_to(message, get_weather(city))
+    msg = bot.reply_to(message, "Узнаю погоду...")
+    weather_info = get_weather(city)
+    edit_or_send_long(message.chat.id, msg.message_id, weather_info)
 
 # ============================================================ # SEARCH # ============================================================
 @bot.message_handler(commands=["search"])
