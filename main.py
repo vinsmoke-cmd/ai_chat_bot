@@ -992,10 +992,39 @@ def execute_weather(message, city_raw):
         return
 
     try:
-        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(city)}"
-        response = requests.get(url, params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}, timeout=8)
+        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(city)}?format=j1"
+        headers = {"Accept-Language": "ru"}
+        response = requests.get(url, headers=headers, timeout=8)
+        
         if response.status_code == 200:
-            bot.reply_to(message, response.text.strip())
+            data = response.json()
+            current_condition = data['current_condition'][0]
+            
+            # Название места и температура
+            area_name = city.capitalize()
+            if data.get('nearest_area') and data['nearest_area'][0].get('areaName'):
+                area_name = data['nearest_area'][0]['areaName'][0]['value']
+                
+            temp = current_condition.get('temp_C', 'Н/Д')
+            feels_like = current_condition.get('FeelsLikeC', 'Н/Д')
+            humidity = current_condition.get('humidity', 'Н/Д')
+            wind_speed = current_condition.get('windspeedKmph', 'Н/Д')
+            
+            # Описание погоды (ru или fallback)
+            weather_desc = "Ясно"
+            if current_condition.get('lang_ru') and len(current_condition['lang_ru']) > 0:
+                weather_desc = current_condition['lang_ru'][0]['value']
+            elif current_condition.get('weatherDesc') and len(current_condition['weatherDesc']) > 0:
+                weather_desc = current_condition['weatherDesc'][0]['value']
+
+            text = (
+                f"Погода в городe {area_name}:\n\n"
+                f"Состояние: {weather_desc}\n"
+                f"Температура: {temp}°C (ощущается как {feels_like}°C)\n"
+                f"Влажность: {humidity}%\n"
+                f"Ветер: {wind_speed} км/ч"
+            )
+            bot.reply_to(message, text)
         else:
             bot.reply_to(message, "Город не найден.")
     except Exception as e:
