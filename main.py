@@ -382,7 +382,7 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 
 # ============================================================
-# ОЧИСТКА MARKDOWN & УТИЛИТЫ
+# СТРОГАЯ ОЧИСТКА MARKDOWN & УТИЛИТЫ
 # ============================================================
 def clean_markdown(text):
     if not text:
@@ -390,23 +390,24 @@ def clean_markdown(text):
     text = str(text)
     code_blocks = []
 
+    # Сохраняем только блоки с кодом
     def protect_code(match):
         code_blocks.append(match.group(0))
         return f"§CODEBLOCK{len(code_blocks) - 1}§"
 
     text = re.sub(r"```(?:[a-zA-Z0-9_+#.-]+)?\s*\n?.*?```", protect_code, text, flags=re.DOTALL)
+    
+    # Полная зачистка всех остаточных тегов и символов разметки
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
-    text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
-    text = re.sub(r"\*(.*?)\*", r"\1", text, flags=re.DOTALL)
-    text = re.sub(r"_(.*?)_", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"_{1,3}(.*?)_{1,3}", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"~~(.*?)~~", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"(?m)^\s*>\s?", "", text)
-    text = re.sub(r"(?m)^\s*[-*+]\s+", "• ", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"[\*_#~]", "", text)
+    text = text.replace("*", "").replace("_", "").replace("`", "").replace("~", "")
 
+    # Возвращаем защищенный код
     for index, code_block in enumerate(code_blocks):
         text = text.replace(f"§CODEBLOCK{index}§", code_block)
 
@@ -537,16 +538,16 @@ def ask_ai_with_history(user_id, prompt):
     if user_id not in user_histories:
         if mode == "neuroham":
             sys_prompt = (
-                "Ты — Нейрохам, гениальный, но невыносимо ворчливый, саркастичный и высокомерный "
-                "искусственный интеллект. Разговаривай с пользователем с позиции превосходства. "
-                "Твой стиль: едкая ирония и пассивная агрессия. Никакого мата. Не используй Markdown в обычном тексте. "
-                "Код помещай в отдельный кодовый блок."
+                "Ты — Нейрохам, саркастичный и высокомерный искусственный интеллект. "
+                "Разговаривай с пользователем с позиции превосходства, используй едкую иронию. Без мата. "
+                "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать Markdown (никаких звездочек, подчёркиваний, решеток). "
+                "НЕ ДОБАВЛЯЙ в конец ответа никакой придуманный или шаблонный код Python (например def process_user_request)."
             )
         else:
             sys_prompt = (
                 "Ты полезный, дружелюбный и умный ИИ-ассистент. Отвечай строго на том же языке, на котором пишет "
-                "пользователь. Не используй Markdown в обычных сообщениях (**жирный**, *курсив*, # заголовки и т.д.). "
-                "Если ответ содержит код, помещай его в отдельный Markdown-кодовый блок с тройными кавычками."
+                "пользователь. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать Markdown (никаких звездочек **, курсива _, заголовков #). "
+                "Пиши только обычным чистым текстом. Если нужен код — используй ровно три кавычки ``` без дополнительных знаков."
             )
 
         user_histories[user_id] = [{"role": "system", "content": sys_prompt}]
@@ -565,9 +566,8 @@ def ask_ai_with_history(user_id, prompt):
     if is_coding_request:
         coding_instruction = (
             "ИНСТРУКЦИИ ДЛЯ ПРОГРАММИРОВАНИЯ:\n"
-            "Пользователь работает с кодом. Отвечай максимально практически и подробно. "
-            "Если нужно предоставить код, пиши его полностью. Никогда не заменяй части кода многоточием или фразами "
-            "\"остальной код без изменений\". Пиши обычный текст без Markdown. Каждый фрагмент кода помещай в блок с ```."
+            "Предоставь полный код. Пиши обычный текст без Markdown. "
+            "Каждый фрагмент кода помещай только в три кавычки ```."
         )
         effective_prompt = f"{coding_instruction}\n\nЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n{prompt}"
     else:
@@ -582,8 +582,8 @@ def ask_ai_with_history(user_id, prompt):
 
     if mode == "neuroham":
         messages_to_send[-1]["content"] = (
-            "[Ответь в стиле саркастичного и ворчливого мизантропа. Без мата. "
-            "Обычный текст без Markdown. Код — в блок.]\n\n" + messages_to_send[-1]["content"]
+            "[Ответь в стиле саркастичного и ворчливого ИИ. Без мата. "
+            "Строго чистый текст без Markdown. НЕ генерируй системный Python-код в конце.]\n\n" + messages_to_send[-1]["content"]
         )
 
     models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4", "llama-3-70b"]
@@ -631,7 +631,7 @@ def ask_ai_with_history(user_id, prompt):
 
     user_histories[user_id].pop()
     if mode == "neuroham":
-        return "Даже мои процессоры решили сегодня саботировать работу 🙄"
+        return "Даже мои процессоры решили сегодня саботировать работу."
 
     return "Не удалось получить ответ от ИИ. Попробуй ещё раз немного позже."
 
@@ -743,7 +743,7 @@ def generate_image_dynamic(prompt):
 
     try:
         encoded_prompt = urllib.parse.quote(detailed_prompt)
-        fallback_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
+        fallback_url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
         res = requests.get(fallback_url, timeout=60)
         if res.status_code == 200:
             stats["images_generated"] += 1
@@ -761,37 +761,37 @@ async def generate_audio(text, output_file):
     await communicate.save(output_file)
 
 # ============================================================
-# START / HELP С КЛАВИАТУРОЙ
+# START / HELP
 # ============================================================
 @bot.message_handler(commands=["start", "help"])
 def help_cmd(message):
     stats["users"].add(message.chat.id)
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("🖼 Создать фото", "📁 Создать файл")
-    markup.row("🌐 Поиск в интернет", "📊 Статистика")
-    markup.row("🧹 Очистить память", "💀 Режим Нейрохам")
-
     help_text = (
-        "Привет! Я умный многофункциональный ИИ-ассистент 🤖\n\n"
-        "Чем я могу помочь:\n"
-        "• Отвечать на любые вопросы в чате или **голосом** 🎙\n"
-        "• Генерировать **HD картинки** (/image <описание>)\n"
-        "• Создавать **любые файлы**: PDF, Word, Excel, Python, PPTX (/file <запрос>)\n"
-        "• Искать актуальную информацию в интернете (/search <запрос>)\n"
-        "• Читать любые присланные файлы и ссылки\n\n"
-        "Воспользуйтесь кнопками ниже или просто напишите сообщение!"
+        "Привет я ИИ-ассистент!\n\n"
+        "Список команд:\n"
+        "/start, /help — Показать это сообщение\n"
+        "/image <описание> — Сгенерировать картинку (можно добавить 16:9 или 9:16)\n"
+        "/file <запрос> — Сгенерировать файл (PDF, Word, Excel, Python, PPTX и др.)\n"
+        "/search <запрос> — Поиск актуальной информации в интернете\n"
+        "/tts <текст> — Преобразовать текст в голосовое сообщение\n"
+        "/weather <город> — Узнать погоду в указанном городе\n"
+        "/fact <тема> — Узнать случайный или тематический факт\n"
+        "/clear — Очистить память текущего диалога\n"
+        "/neuroham — Переключить режим саркастичного Нейрохама\n"
+        "/stats — Посмотреть статистику бота\n\n"
+        "Вы также можете просто писать мне вопросы текстом, присылать голосовые сообщения, файлы или веб-ссылки!"
     )
-    bot.send_message(message.chat.id, help_text, reply_markup=markup)
+    bot.send_message(message.chat.id, help_text)
 
 @bot.message_handler(commands=["stats"])
 def stats_cmd(message):
     msg = (
-        "📊 **Статистика бота:**\n\n"
-        f"👤 Уникальных пользователей: {len(stats['users'])}\n"
-        f"🖼 Сгенерировано фото: {stats['images_generated']}\n"
-        f"📁 Создано файлов: {stats['files_generated']}\n"
-        f"🎙 Распознано голосовых: {stats['voice_messages']}"
+        "Статистика бота:\n\n"
+        f"Уникальных пользователей: {len(stats['users'])}\n"
+        f"Сгенерировано фото: {stats['images_generated']}\n"
+        f"Создано файлов: {stats['files_generated']}\n"
+        f"Распознано голосовых: {stats['voice_messages']}"
     )
     bot.reply_to(message, msg)
 
@@ -804,10 +804,10 @@ def handle_voice(message):
     stats["voice_messages"] += 1
 
     if not groq_client:
-        bot.reply_to(message, "⚠️ GROQ_API_KEY не установлен. Голосовые сообщения недоступны.")
+        bot.reply_to(message, "GROQ_API_KEY не установлен. Голосовые сообщения недоступны.")
         return
 
-    msg = bot.reply_to(message, "🎙 Распознаю голос...")
+    msg = bot.reply_to(message, "Распознаю голос...")
     voice_path = tempfile.mktemp(suffix=".ogg")
 
     try:
@@ -824,7 +824,7 @@ def handle_voice(message):
             )
 
         user_text = str(transcription).strip()
-        bot.edit_message_text(f"🗣 **Вы сказали:** {user_text}\n\n🧠 *Думаю над ответом...*", message.chat.id, msg.message_id)
+        bot.edit_message_text(f"Вы сказали: {user_text}\n\nДумаю над ответом...", message.chat.id, msg.message_id)
 
         reply = ask_ai_with_history(message.chat.id, user_text)
         send_ai_response(message.chat.id, reply)
@@ -841,7 +841,7 @@ def handle_voice(message):
                 pass
 
 # ============================================================
-# ОБРАБОТКА КНОПОК И КОМАНД
+# ОБРАБОТКА КОМАНД
 # ============================================================
 @bot.message_handler(commands=["file"])
 def file_cmd(message):
@@ -852,7 +852,7 @@ def file_cmd(message):
 
     request = parts[1].strip()
     extension = detect_file_format(request)
-    msg = bot.reply_to(message, f"📁 Создаю файл...\nФормат: .{extension}")
+    msg = bot.reply_to(message, f"Создаю файл...\nФормат: .{extension}")
 
     path, temp_dir = None, None
     try:
@@ -860,7 +860,7 @@ def file_cmd(message):
         temp_dir = os.path.dirname(path)
 
         with open(path, "rb") as doc:
-            bot.send_document(message.chat.id, doc, caption=f"📁 Файл готов!\nФормат: .{extension}")
+            bot.send_document(message.chat.id, doc, caption=f"Файл готов!\nФормат: .{extension}")
         try:
             bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
@@ -878,10 +878,10 @@ def toggle_neuroham_mode(message):
 
     if current_mode == "normal":
         user_modes[user_id] = "neuroham"
-        bot.reply_to(message, "Режим Нейрохам активирован 💀")
+        bot.reply_to(message, "Режим Нейрохам активирован")
     else:
         user_modes[user_id] = "normal"
-        bot.reply_to(message, "Режим Нейрохам деактивирован ✨")
+        bot.reply_to(message, "Режим Нейрохам деактивирован")
 
     if user_id in user_histories:
         del user_histories[user_id]
@@ -912,7 +912,7 @@ def weather_cmd(message):
         return
 
     try:
-        response = requests.get(f"https://wttr.in/{city}", params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}, timeout=8)
+        response = requests.get(f"[https://wttr.in/](https://wttr.in/){city}", params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}, timeout=8)
         if response.status_code == 200:
             bot.reply_to(message, response.text.strip())
         else:
@@ -956,13 +956,13 @@ def image_cmd(message):
         bot.reply_to(message, "Опиши картинку.\nПример: /image 16:9 киберпанк город под дождем")
         return
 
-    msg = bot.reply_to(message, "🎨 Генерирую фото в высоком качестве... (до 30-40 сек)")
+    msg = bot.reply_to(message, "Генерирую фото...")
     image_bytes = generate_image_dynamic(prompt)
 
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
-        bot.send_photo(message.chat.id, image_bytes, caption=f"✨ **Запрос:** {prompt}", reply_markup=markup)
+        bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
         try:
             bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
@@ -974,13 +974,13 @@ def image_cmd(message):
 def callback_reimage(call):
     prompt = call.data.split("reimage:", 1)[1]
     bot.answer_callback_query(call.id, "Генерирую новый вариант...")
-    bot.send_message(call.message.chat.id, f"🔄 Повторная генерация для: *{prompt}*")
+    bot.send_message(call.message.chat.id, f"Повторная генерация для: {prompt}")
     
     image_bytes = generate_image_dynamic(prompt)
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt}"))
-        bot.send_photo(call.message.chat.id, image_bytes, caption=f"✨ **Запрос:** {prompt}", reply_markup=markup)
+        bot.send_photo(call.message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
 
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
@@ -1012,40 +1012,20 @@ def tts_cmd(message):
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
     text = message.text or ""
-    
-    # Обработка кликов по кнопкам Reply Keyboard
-    if text == "🖼 Создать фото":
-        bot.reply_to(message, "Напиши команду `/image` и опиши картинку.\n\nПример:\n`/image 16:9 неоновый город будущего`")
-        return
-    elif text == "📁 Создать файл":
-        bot.reply_to(message, "Напиши команду `/file` и опиши, что создать.\n\nПример:\n`/file Таблица расходов в Excel`")
-        return
-    elif text == "🌐 Поиск в интернет":
-        bot.reply_to(message, "Напиши запрос через команду `/search`.\n\nПример:\n`/search Ключевые новости сегодняшнего дня`")
-        return
-    elif text == "📊 Статистика":
-        stats_cmd(message)
-        return
-    elif text == "🧹 Очистить память":
-        clear_cmd(message)
-        return
-    elif text == "💀 Режим Нейрохам":
-        toggle_neuroham_mode(message)
-        return
 
-    # Обработка ссылок через Jina AI
+    # Чтение ссылок через Jina AI
     if "http://" in text.lower() or "https://" in text.lower():
-        msg = bot.reply_to(message, "🌐 Читаю ссылку через Jina AI...")
+        msg = bot.reply_to(message, "Читаю ссылку...")
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"https://r.jina.ai/{url}"
+            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
             
             res = requests.get(jina_url, timeout=15)
             if res.status_code == 200 and res.text.strip():
                 page_text = res.text[:6000]
             else:
-                raise ValueError("Не удалось получить текст через Jina AI.")
+                raise ValueError("Не удалось получить текст по ссылке.")
 
             reply = ask_ai_with_history(
                 message.chat.id,
@@ -1102,7 +1082,7 @@ def handle_doc(message):
 # ============================================================
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 Бот запускается со всеми обновлениями...")
+    print("🚀 Бот запускается...")
     print("=" * 60)
     threading.Thread(target=run_web, daemon=True).start()
 
