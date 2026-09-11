@@ -502,6 +502,88 @@ def edit_or_send_long(chat_id, message_id, text):
     send_ai_response(chat_id, text)
 
 # ============================================================
+# ПОГОДА (OPEN-METEO)
+# ============================================================
+def get_weather_data(location_name):
+    try:
+        # 1. Геокодинг: поиск координат региона
+        geo_url = f"[https://geocoding-api.open-meteo.com/v1/search?name=](https://geocoding-api.open-meteo.com/v1/search?name=){urllib.parse.quote(location_name)}&count=1&language=ru&format=json"
+        geo_res = requests.get(geo_url, timeout=10).json()
+        
+        if not geo_res.get("results"):
+            return f"К сожалению, населённый пункт '{location_name}' не найден."
+            
+        place = geo_res["results"][0]
+        lat = place["latitude"]
+        lon = place["longitude"]
+        city = place.get("name", location_name)
+        country = place.get("country", "")
+        
+        # 2. Получение данных о погоде
+        weather_url = (
+            f"[https://api.open-meteo.com/v1/forecast?latitude=](https://api.open-meteo.com/v1/forecast?latitude=){lat}&longitude={lon}"
+            f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,"
+            f"weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m"
+            f"&wind_speed_unit=ms&timezone=auto"
+        )
+        data = requests.get(weather_url, timeout=10).json()
+        current = data.get("current", {})
+        
+        temp = current.get("temperature_2m", "N/A")
+        feels_like = current.get("apparent_temperature", "N/A")
+        humidity = current.get("relative_humidity_2m", "N/A")
+        wind_speed = current.get("wind_speed_10m", "N/A")
+        wind_dir = current.get("wind_direction_10m", 0)
+        precipitation = current.get("precipitation", 0)
+        cloud = current.get("cloud_cover", 0)
+        pressure = round(current.get("pressure_msl", 0) * 0.750063, 1) if current.get("pressure_msl") else "N/A"
+        w_code = current.get("weather_code", 0)
+        
+        # Расшифровка кода погоды
+        weather_descriptions = {
+            0: "Ясно ☀️",
+            1: "Преимущественно ясно 🌤️",
+            2: "Переменная облачность ⛅",
+            3: "Пасмурно ☁️",
+            45: "Туман 🌫️",
+            48: "Изморозь 🌫️",
+            51: "Лёгкая морось 🌧️",
+            53: "Умеренная морось 🌧️",
+            55: "Плотная морось 🌧️",
+            61: "Небольшой дождь 🌧️",
+            63: "Умеренный дождь 🌧️",
+            65: "Сильный дождь 🌧️",
+            71: "Небольшой снег 🌨️",
+            73: "Умеренный снег 🌨️",
+            75: "Сильный снег 🌨️",
+            80: "Cлабый ливень 🌦️",
+            81: "Умеренный ливень 🌦️",
+            82: "Сильный ливень ⛈️",
+            95: "Гроза ⛈️"
+        }
+        description = weather_descriptions.get(w_code, "Переменная погода")
+
+        # Направление ветра
+        dirs = ["Северный", "С-В", "Восточный", "Ю-В", "Южный", "Ю-З", "Западный", "С-З"]
+        wind_dir_str = dirs[int((wind_dir + 22.5) // 45) % 8] if isinstance(wind_dir, (int, float)) else ""
+
+        title = f"Погода: {city}" + (f", {country}" if country else "")
+        res_text = (
+            f"🌍 {title}\n"
+            f"Состояние: {description}\n\n"
+            f"🌡️ Температура: {temp}°C (ощущается как {feels_like}°C)\n"
+            f"💧 Влажность: {humidity}%\n"
+            f"💨 Ветер: {wind_speed} м/с ({wind_dir_str})\n"
+            f"🌩️ Осадки: {precipitation} мм\n"
+            f"☁️ Облачность: {cloud}%\n"
+            f"⏲️ Давление: {pressure} мм рт. ст."
+        )
+        return res_text
+    except Exception as e:
+        print(f"⚠️ Ошибка получения погоды: {e}")
+        return f"Не удалось получить данные о погоде для '{location_name}'."
+
+# ============================================================
 # AI С ИСТОРИЕЙ
 # ============================================================
 def ask_ai_with_history(user_id, prompt):
@@ -590,7 +672,9 @@ def ask_ai_with_history(user_id, prompt):
     user_histories[user_id].pop()
     return "Даже мои процессоры решили сегодня саботировать работу." if mode == "neuroham" else "Не удалось получить ответ от ИИ. Попробуй ещё раз немного позже."
 
-# ============================================================ # ПАСХАЛКА КИРА # ============================================================
+# ============================================================
+# ПАСХАЛКА КИРА
+# ============================================================
 def generate_kira_text():
     prompt = "Напиши красивый, искренний и оригинальный текст о девушке по имени Кира. 3-5 предложений. 2-3 эмодзи. Без Markdown."
     for model_name in ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4"]:
@@ -608,7 +692,9 @@ def kira_cmd(message):
     msg = bot.reply_to(message, "✨ Нахожу нужные слова...")
     edit_or_send_long(message.chat.id, msg.message_id, generate_kira_text())
 
-# ============================================================ # WEB SEARCH # ============================================================
+# ============================================================
+# WEB SEARCH
+# ============================================================
 def perform_web_search(query):
     results_text = ""
     if tavily_client:
@@ -630,7 +716,9 @@ def perform_web_search(query):
             
     return results_text
 
-# ============================================================ # ИЗОБРАЖЕНИЯ # ============================================================
+# ============================================================
+# ИЗОБРАЖЕНИЯ
+# ============================================================
 def enhance_image_prompt(user_prompt):
     try:
         sys_prompt = (
@@ -685,12 +773,16 @@ def generate_image_dynamic(prompt):
         
     return None
 
-# ============================================================ # TTS # ============================================================
+# ============================================================
+# TTS
+# ============================================================
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
     await communicate.save(output_file)
 
-# ============================================================ # HELPER FOR GROUPS & INTENTS # ============================================================
+# ============================================================
+# HELPER FOR GROUPS & INTENTS
+# ============================================================
 def is_addressed_to_bot(message):
     if message.chat.type == "private":
         return True
@@ -715,15 +807,17 @@ def clean_command_args(text, command_name):
     pattern = rf"^/{command_name}(?:@\w+)?\s*"
     return re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
 
-# ============================================================ # START / HELP # ============================================================
+# ============================================================
+# START / HELP
+# ============================================================
 @bot.message_handler(commands=["start", "help"])
 def help_cmd(message):
     stats["users"].add(message.chat.id)
     help_text = (
         "Привет! Я ИИ-ассистент 🤖\n\n"
         "Мои команды:\n\n"
+        "/weather <город> — прогноз погоды 🌤️\n"
         "/search <запрос> — поиск в интернете\n"
-        "/weather <город> — погода\n"
         "/image <описание> — создать изображение (HD quality)\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
@@ -750,7 +844,9 @@ def stats_cmd(message):
     )
     bot.reply_to(message, msg)
 
-# ============================================================ # ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ # ============================================================
+# ============================================================
+# ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ
+# ============================================================
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     if not is_addressed_to_bot(message):
@@ -789,7 +885,28 @@ def handle_voice(message):
             except Exception:
                 pass
 
-# ============================================================ # ОБРАБОТКА КОМАНД # ============================================================
+# ============================================================
+# ОБРАБОТКА КОМАНД
+# ============================================================
+@bot.message_handler(commands=["weather"])
+def weather_cmd(message):
+    location = clean_command_args(message.text, "weather")
+    if not location:
+        bot.reply_to(message, "Укажите город или регион.\nПример: /weather Ташкент")
+        return
+    execute_weather(message, location)
+
+def execute_weather(message, location, edit_message_id=None):
+    if edit_message_id:
+        msg_id = edit_message_id
+        bot.edit_message_text(f"Узнаю погоду в {location}...", message.chat.id, msg_id)
+    else:
+        msg = bot.reply_to(message, f"Узнаю погоду в {location}...")
+        msg_id = msg.message_id
+
+    weather_text = get_weather_data(location)
+    edit_or_send_long(message.chat.id, msg_id, weather_text)
+
 @bot.message_handler(commands=["file"])
 def file_cmd(message):
     args = clean_command_args(message.text, "file")
@@ -854,49 +971,8 @@ def fact_cmd(message):
     edit_or_send_long(message.chat.id, msg.message_id, fact)
 
 # ============================================================
-# WEATHER (С поддержкой Markdown)
+# SEARCH
 # ============================================================
-def get_weather(city):
-    try:
-        clean_city = re.sub(r"/weather(@\w+)?", "", city, flags=re.IGNORECASE).strip()
-        if not clean_city:
-            return "Укажите город после команды."
-
-        encoded_city = urllib.parse.quote(clean_city)
-        url = f"[https://wttr.in/](https://wttr.in/){encoded_city}"
-        
-        params = {"format": "%l:\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}
-        headers = {"User-Agent": "Mozilla/5.0"}
-        
-        response = requests.get(url, params=params, headers=headers, timeout=8)
-        
-        if response.status_code == 200 and response.text.strip():
-            text = response.text.strip()
-            if "Unknown location" in text or "404" in text:
-                return f"Город *{clean_city}* не найден."
-            
-            return (
-                f"🌤 *Погода в городе {clean_city.capitalize()}*\n\n"
-                f"```\n{text}\n```"
-            )
-        return f"Не удалось найти информацию по городу *{clean_city}*."
-    except Exception as e:
-        return f"Ошибка получения погоды: `{e}`"
-
-@bot.message_handler(commands=["weather"])
-def weather_cmd(message):
-    args = clean_command_args(message.text, "weather")
-    if not args:
-        bot.reply_to(message, "Укажи город.\nНапример: `/weather Ташкент`", parse_mode="Markdown")
-        return
-    msg = bot.reply_to(message, "⏳ Узнаю погоду...")
-    weather_info = get_weather(args)
-    try:
-        bot.edit_message_text(weather_info, chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown")
-    except Exception:
-        bot.edit_message_text(weather_info, chat_id=message.chat.id, message_id=msg.message_id)
-
-# ============================================================ # SEARCH # ============================================================
 @bot.message_handler(commands=["search"])
 def search_cmd(message):
     query = clean_command_args(message.text, "search")
@@ -912,7 +988,9 @@ def execute_search(message, query):
     reply = ask_ai_with_history(message.chat.id, prompt)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
-# ============================================================ # AI TOOLS # ============================================================
+# ============================================================
+# AI TOOLS
+# ============================================================
 @bot.message_handler(commands=["gemini", "code", "sum", "tr", "fix"])
 def ai_tools_cmd(message):
     cmd_name = message.text.split()[0].replace("/", "").split("@")[0]
@@ -924,7 +1002,9 @@ def ai_tools_cmd(message):
     reply = ask_ai_with_history(message.chat.id, args)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
-# ============================================================ # IMAGE # ============================================================
+# ============================================================
+# IMAGE
+# ============================================================
 @bot.message_handler(commands=["image"])
 def image_cmd(message):
     prompt = clean_command_args(message.text, "image")
@@ -964,7 +1044,9 @@ def callback_reimage(call):
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt}"))
         bot.send_photo(call.message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
 
-# ============================================================ # TTS # ============================================================
+# ============================================================
+# TTS
+# ============================================================
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
     text_to_speak = clean_command_args(message.text, "tts")
@@ -996,12 +1078,23 @@ def execute_tts(message, text_to_speak, edit_message_id=None):
         if os.path.exists(audio_path):
             os.remove(audio_path)
 
-# ============================================================ # ПАРСЕР ЕСТЕСТВЕННОГО ЯЗЫКА # ============================================================
+# ============================================================
+# ПАРСЕР ЕСТЕСТВЕННОГО ЯЗЫКА
+# ============================================================
 def process_natural_language_request(message, text, edit_message_id=None):
     clean_text = clean_bot_mentions(text)
     lower_text = clean_text.lower()
 
-    # 1. Картинки
+    # 1. Погода
+    weather_keywords = ["погода в", "какая погода в", "прогноз погоды в", "погода"]
+    for kw in weather_keywords:
+        if kw in lower_text:
+            location = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.?!")
+            if location:
+                execute_weather(message, location, edit_message_id)
+                return
+
+    # 2. Картинки
     img_keywords = ["сгенерируй фото", "нарисуй", "сделай картинку", "сгенерируй картинку", "создай фото", "нарисуй мне", "сгенерируй изображение"]
     for kw in img_keywords:
         if kw in lower_text:
@@ -1010,7 +1103,7 @@ def process_natural_language_request(message, text, edit_message_id=None):
                 execute_image_generation(message, prompt, edit_message_id)
                 return
 
-    # 2. Файлы
+    # 3. Файлы
     file_keywords = ["создай файл", "сделай файл", "сгенерируй файл", "создай документ", "сделай документ", "создай таблицу", "сделай таблицу"]
     for kw in file_keywords:
         if kw in lower_text:
@@ -1019,29 +1112,13 @@ def process_natural_language_request(message, text, edit_message_id=None):
                 execute_file_creation(message, prompt, edit_message_id)
                 return
 
-    # 3. Озвучка
+    # 4. Озвучка
     tts_keywords = ["озвучь", "скажи", "проговори", "преврати в голос", "озвучь текст"]
     for kw in tts_keywords:
         if kw in lower_text:
             prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
             if prompt:
                 execute_tts(message, prompt, edit_message_id)
-                return
-
-    # 4. Погода
-    weather_keywords = ["какая погода в", "погода в", "погода"]
-    for kw in weather_keywords:
-        if kw in lower_text and len(lower_text.split()) <= 5:
-            city = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" ?,.:")
-            if city:
-                weather_text = get_weather(city)
-                if edit_message_id:
-                    try:
-                        bot.edit_message_text(weather_text, chat_id=message.chat.id, message_id=edit_message_id, parse_mode="Markdown")
-                    except Exception:
-                        bot.send_message(message.chat.id, weather_text, parse_mode="Markdown")
-                else:
-                    bot.reply_to(message, weather_text, parse_mode="Markdown")
                 return
 
     # 5. Поиск в интернете
@@ -1062,7 +1139,9 @@ def process_natural_language_request(message, text, edit_message_id=None):
         reply = ask_ai_with_history(message.chat.id, clean_text)
         edit_or_send_long(message.chat.id, msg.message_id, reply)
 
-# ============================================================ # TEXT HANDLER # ============================================================
+# ============================================================
+# TEXT HANDLER
+# ============================================================
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
     if not is_addressed_to_bot(message):
@@ -1092,7 +1171,9 @@ def handle_text(message):
 
     process_natural_language_request(message, text)
 
-# ============================================================ # РАБОТА С ДОКУМЕНТАМИ # ============================================================
+# ============================================================
+# РАБОТА С ДОКУМЕНТАМИ
+# ============================================================
 @bot.message_handler(content_types=["document"])
 def handle_doc(message):
     if not is_addressed_to_bot(message):
@@ -1124,7 +1205,9 @@ def handle_doc(message):
         if path and os.path.exists(path):
             os.remove(path)
 
-# ============================================================ # ЗАПУСК # ============================================================
+# ============================================================
+# ЗАПУСК
+# ============================================================
 if __name__ == "__main__":
     print("=" * 60 + "\n🚀 Бот запускается...\n" + "=" * 60)
     threading.Thread(target=run_web, daemon=True).start()
