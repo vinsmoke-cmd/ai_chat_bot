@@ -50,6 +50,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 ai_client = Client()
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
+# Получаем юзернейм бота при старте для фильтрации в группах
+try:
+    BOT_USERNAME = bot.get_me().username.lower()
+except Exception:
+    BOT_USERNAME = ""
+
 # ============================================================
 # TAVILY
 # ============================================================
@@ -566,7 +572,7 @@ def ask_ai_with_history(user_id, prompt):
                 "Ты — Нейрохам, саркастичный и высокомерный искусственный интеллект. "
                 "Разговаривай с пользователем с позиции превосходства, используй едкую иронию. Без мата. "
                 "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать Markdown (никаких звездочек, подчёркиваний, решеток). "
-                "НЕ ДОБАВЛЯЙ в конец ответа никакой придуманный или шаблонный код Python (например def process_user_request)."
+                "НЕ ДОБАВЛЯЙ в конец ответа никакой придуманный или шаблонный код Python."
             )
         else:
             sys_prompt = (
@@ -786,6 +792,37 @@ async def generate_audio(text, output_file):
     await communicate.save(output_file)
 
 # ============================================================
+# HELPER FOR GROUPS & INTENTS
+# ============================================================
+def is_addressed_to_bot(message):
+    """Проверяет, нужно ли боту отвечать на сообщение в группе"""
+    if message.chat.type == "private":
+        return True
+
+    # Проверка ответа (reply) на сообщение бота
+    if message.reply_to_message and message.reply_to_message.from_user:
+        if BOT_USERNAME and message.reply_to_message.from_user.username:
+            if message.reply_to_message.from_user.username.lower() == BOT_USERNAME:
+                return True
+
+    # Проверка упоминания через @bot_username или слов 'бот', 'bot'
+    text = (message.text or "").lower()
+    if BOT_USERNAME and f"@{BOT_USERNAME}" in text:
+        return True
+    
+    if text.startswith("бот ") or text.startswith("bot "):
+        return True
+
+    return False
+
+def clean_bot_mentions(text):
+    """Удаляет обращения к боту из текста запроса"""
+    if BOT_USERNAME:
+        text = re.sub(rf"@{BOT_USERNAME}", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(бот|bot)[,\s]*", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+# ============================================================
 # START / HELP
 # ============================================================
 @bot.message_handler(commands=["start", "help"])
@@ -794,21 +831,14 @@ def help_cmd(message):
     
     help_text = (
         "Привет! Я ИИ-ассистент 🤖\n\n"
-        "Мои команды:\n\n"
-        "/search <запрос> — поиск в интернете\n"
-        "/weather <город> — погода\n"
-        "/image <описание> — создать изображение (HD quality)\n"
-        "/file <запрос> — создать файл 📁\n"
-        "/gemini <запрос> — спросить Gemini\n"
-        "/fact [тема] — интересный факт\n"
-        "/code <задача> — работа с кодом\n"
-        "/sum <текст> — сделать выжимку\n"
-        "/tr <текст> — перевод\n"
-        "/fix <текст> — исправление текста\n"
-        "/tts <текст> — озвучка\n"
-        "/clear — очистить память\n"
-        "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос или прислать документ (PDF, DOCX, XLSX и др.)."
+        "Ты можешь писать мне обычно прозой без команд! Например:\n"
+        "• «Нарисуй котика в стиле киберпанк»\n"
+        "• «Сделай реферат в файле PDF»\n"
+        "• «Озвучь текст Привет мир»\n"
+        "• «Найди в интернете новости про ИИ»\n"
+        "• «Какая погода в Ташкенте?»\n\n"
+        "Или использовать команды:\n"
+        "/search, /weather, /image, /file, /tts, /clear, /neuroham"
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -828,6 +858,9 @@ def stats_cmd(message):
 # ============================================================
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
+    if not is_addressed_to_bot(message):
+        return
+
     stats["users"].add(message.chat.id)
     stats["voice_messages"] += 1
 
@@ -854,8 +887,8 @@ def handle_voice(message):
         user_text = str(transcription).strip()
         bot.edit_message_text(f"Вы сказали: {user_text}\n\nДумаю над ответом...", message.chat.id, msg.message_id)
 
-        reply = ask_ai_with_history(message.chat.id, user_text)
-        send_ai_response(message.chat.id, reply)
+        # Обрабатываем распознанный текст через парсер намерения
+        process_natural_language_request(message, user_text, msg.message_id)
 
     except Exception as e:
         print(f"❌ Ошибка Whisper: {e}")
@@ -877,14 +910,15 @@ def file_cmd(message):
     if len(parts) < 2:
         bot.reply_to(message, "Напиши, какой файл создать.\n\nНапример:\n/file Таблица умножения в Excel\n/file Резюме в PDF")
         return
+    execute_file_creation(message, parts[1].strip())
 
-    request = parts[1].strip()
-    extension = detect_file_format(request)
+def execute_file_creation(message, request_text):
+    extension = detect_file_format(request_text)
     msg = bot.reply_to(message, f"Создаю файл...\nФормат: .{extension}")
 
     path = None
     try:
-        path, filename, extension = create_generated_file(request, message.chat.id)
+        path, filename, extension = create_generated_file(request_text, message.chat.id)
 
         with open(path, "rb") as doc:
             bot.send_document(message.chat.id, doc, caption=f"Файл готов!\nФормат: .{extension}")
@@ -936,11 +970,12 @@ def fact_cmd(message):
 def weather_cmd(message):
     parts = message.text.split(maxsplit=1)
     city_raw = parts[1] if len(parts) > 1 else ""
-
     if not city_raw:
         bot.reply_to(message, "Укажи город.\nНапример: /weather Ташкент")
         return
+    execute_weather(message, city_raw)
 
+def execute_weather(message, city_raw):
     city = re.sub(r"\[.*?\]\(.*?\)", "", city_raw)
     city = re.sub(r"https?://\S+", "", city)
     city = re.sub(r"[^\w\sа-яА-ЯёЁ-]", "", city).strip()
@@ -963,11 +998,12 @@ def weather_cmd(message):
 def search_cmd(message):
     parts = message.text.split(maxsplit=1)
     query = parts[1] if len(parts) > 1 else ""
-
     if not query:
         bot.reply_to(message, "Напиши запрос.\nНапример: /search последние новости ИИ")
         return
+    execute_search(message, query)
 
+def execute_search(message, query):
     msg = bot.reply_to(message, f"Ищу: {query}")
     raw_data = perform_web_search(query)
     prompt = f"Вот результаты поиска по запросу '{query}':\n\n{raw_data}\n\nСделай краткую выжимку. Без Markdown."
@@ -990,11 +1026,12 @@ def ai_tools_cmd(message):
 def image_cmd(message):
     parts = message.text.split(maxsplit=1)
     prompt = parts[1] if len(parts) > 1 else ""
-
     if not prompt:
         bot.reply_to(message, "Опиши картинку.\nПример: /image 16:9 киберпанк город под дождем")
         return
+    execute_image_generation(message, prompt)
 
+def execute_image_generation(message, prompt):
     msg = bot.reply_to(message, "Генерирую фото...")
     image_bytes = generate_image_dynamic(prompt)
 
@@ -1027,12 +1064,14 @@ def tts_cmd(message):
     if len(parts) < 2:
         bot.reply_to(message, "Напиши текст для озвучки.")
         return
+    execute_tts(message, parts[1])
 
+def execute_tts(message, text_to_speak):
     msg = bot.reply_to(message, "Озвучиваю...")
     audio_path = tempfile.mktemp(suffix=".mp3")
 
     try:
-        asyncio.run(generate_audio(parts[1], audio_path))
+        asyncio.run(generate_audio(text_to_speak, audio_path))
         with open(audio_path, "rb") as audio:
             bot.send_voice(message.chat.id, audio)
         try:
@@ -1046,12 +1085,83 @@ def tts_cmd(message):
             os.remove(audio_path)
 
 # ============================================================
+# ПАРСЕР ЕСТЕСТВЕННОГО ЯЗЫКА (ЕСТЕСТВЕННЫЕ КОМАНДЫ)
+# ============================================================
+def process_natural_language_request(message, text, edit_message_id=None):
+    clean_text = clean_bot_mentions(text)
+    lower_text = clean_text.lower()
+
+    # 1. Генерация картинок
+    img_keywords = ["сгенерируй фото", "нарисуй", "сделай картинку", "сгенерируй картинку", "создай фото", "нарисуй мне", "сгенерируй изображение"]
+    for kw in img_keywords:
+        if kw in lower_text:
+            prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
+            if prompt:
+                execute_image_generation(message, prompt)
+                return
+            break
+
+    # 2. Создание файлов
+    file_keywords = ["создай файл", "сделай файл", "сгенерируй файл", "создай документ", "сделай документ", "создай таблицу", "сделай таблицу"]
+    for kw in file_keywords:
+        if kw in lower_text:
+            prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
+            if prompt:
+                execute_file_creation(message, prompt)
+                return
+            break
+
+    # 3. Озвучка
+    tts_keywords = ["озвучь", "скажи", "проговори", "преврати в голос", "озвучь текст"]
+    for kw in tts_keywords:
+        if kw in lower_text:
+            prompt = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
+            if prompt:
+                execute_tts(message, prompt)
+                return
+            break
+
+    # 4. Погода
+    weather_keywords = ["какая погода в", "погода в", "погода"]
+    for kw in weather_keywords:
+        if kw in lower_text and len(lower_text.split()) <= 5:
+            city = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" ?,.")
+            if city:
+                execute_weather(message, city)
+                return
+            break
+
+    # 5. Поиск в интернете
+    search_keywords = ["найди в интернете", "найди в инете", "поищи в интернете", "загугли"]
+    for kw in search_keywords:
+        if kw in lower_text:
+            query = re.sub(re.escape(kw), "", clean_text, flags=re.IGNORECASE).strip(" :,.")
+            if query:
+                execute_search(message, query)
+                return
+            break
+
+    # Обычный текстовый диалог через AI
+    if edit_message_id:
+        reply = ask_ai_with_history(message.chat.id, clean_text)
+        edit_or_send_long(message.chat.id, edit_message_id, reply)
+    else:
+        msg = bot.reply_to(message, "Думаю...")
+        reply = ask_ai_with_history(message.chat.id, clean_text)
+        edit_or_send_long(message.chat.id, msg.message_id, reply)
+
+# ============================================================
 # TEXT HANDLER & JINA PARSER
 # ============================================================
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
+    # ПРОВЕРКА ОБРАЩЕНИЯ В ГРУППАХ
+    if not is_addressed_to_bot(message):
+        return
+
     text = message.text or ""
 
+    # Обработка ссылок
     if "http://" in text.lower() or "https://" in text.lower():
         msg = bot.reply_to(message, "Читаю ссылку...")
         try:
@@ -1075,15 +1185,17 @@ def handle_text(message):
             edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка чтения ссылки: {e}")
             return
 
-    msg = bot.reply_to(message, "Думаю...")
-    reply = ask_ai_with_history(message.chat.id, text)
-    edit_or_send_long(message.chat.id, msg.message_id, reply)
+    # Передаём в обработчик естественного языка
+    process_natural_language_request(message, text)
 
 # ============================================================
 # РАБОТА С ДОКУМЕНТАМИ
 # ============================================================
 @bot.message_handler(content_types=["document"])
 def handle_doc(message):
+    if not is_addressed_to_bot(message):
+        return
+
     msg = bot.reply_to(message, "Читаю документ...")
     path = None
 
