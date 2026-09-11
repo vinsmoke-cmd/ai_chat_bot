@@ -12,6 +12,7 @@ import base64
 import urllib.request
 import urllib.parse
 import telebot
+from telebot import types
 import requests
 from flask import Flask
 from bs4 import BeautifulSoup
@@ -40,24 +41,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ============================================================
-# ПРОВЕРКА BOT TOKEN
-# ============================================================
 if not BOT_TOKEN:
     raise RuntimeError("❌ Не задан BOT_TOKEN")
 
 # ============================================================
-# TELEGRAM
+# TELEGRAM & CLIENTS
 # ============================================================
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# ============================================================
-# AI CLIENTS
-# ============================================================
 ai_client = Client()
-groq_client = (
-    Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
-)
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ============================================================
 # TAVILY
@@ -67,9 +59,7 @@ try:
 except ImportError:
     TavilyClient = None
 
-tavily_client = (
-    TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
-)
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
 
 # ============================================================
 # GEMINI
@@ -88,19 +78,24 @@ else:
     Image = None
 
 # ============================================================
-# ПАМЯТЬ И НАСТРОЙКИ
+# ПАМЯТЬ, СТАТИСТИКА И НАСТРОЙКИ
 # ============================================================
 user_histories = {}
 user_modes = {}
+stats = {
+    "users": set(),
+    "images_generated": 0,
+    "files_generated": 0,
+    "voice_messages": 0
+}
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 AI_MAX_RESPONSE_LENGTH = 40000
 
 # ============================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ЧТЕНИЯ ФАЙЛОВ
+# ВСПАМОГАТЕЛЬНЫЕ ФУНКЦИИ И ЧТЕНИЕ ФАЙЛОВ
 # ============================================================
 def extract_text_from_file(file_path):
-    """Извлечение текста из различных форматов файлов"""
     ext = file_path.split('.')[-1].lower()
     text = ""
 
@@ -226,6 +221,7 @@ def create_generated_file(request, user_id):
         filename = safe_filename("Таблица_умножения", "xlsx")
         path = os.path.join(temp_directory, filename)
         make_multiplication_table_xlsx(path)
+        stats["files_generated"] += 1
         return (path, filename, extension)
 
     content = generate_ai_file_content(request, extension, user_id)
@@ -277,13 +273,12 @@ def create_generated_file(request, user_id):
         document.save(path)
 
     elif extension == "pdf":
-        # Автоматическое скачивание кириллического шрифта с надежных CDN
         font_path = "DejaVuSans.ttf"
         if not os.path.exists(font_path):
             url = "https://cdn.jsdelivr.net/gh/dejavu-fonts/dejavu-fonts@version_2_37/ttf/DejaVuSans.ttf"
             try:
                 urllib.request.urlretrieve(url, font_path)
-            except Exception as e:
+            except Exception:
                 alt_url = "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf"
                 urllib.request.urlretrieve(alt_url, font_path)
 
@@ -370,6 +365,7 @@ def create_generated_file(request, user_id):
         with open(path, "w", encoding="utf-8") as file:
             file.write(clean_content)
 
+    stats["files_generated"] += 1
     return (path, filename, extension)
 
 # ============================================================
@@ -535,6 +531,7 @@ def edit_or_send_long(chat_id, message_id, text):
 # AI С ИСТОРИЕЙ
 # ============================================================
 def ask_ai_with_history(user_id, prompt):
+    stats["users"].add(user_id)
     mode = user_modes.get(user_id, "normal")
 
     if user_id not in user_histories:
@@ -559,8 +556,7 @@ def ask_ai_with_history(user_id, prompt):
         "c#", "php", "html", "css", "sql", "bash", "telegram bot", "telegram бот",
         "бот", "api", "sdk", "функция", "класс", "метод", "библиотек", "скрипт",
         "исправь", "исправить", "ошибка", "ошибку", "перепиши", "переделай", "добавь функцию",
-        "сделай код", "напиши код", "полный код", "готовый код", "source code", "debug",
-        "stack trace", "exception", "import", "pip", "npm", "json", "regex", "база данных"
+        "сделай код", "напиши код", "полный код", "готовый код", "source code", "debug"
     ]
 
     prompt_lower = str(prompt).lower()
@@ -596,7 +592,6 @@ def ask_ai_with_history(user_id, prompt):
 
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"🤖 Новый запрос от {user_id}")
-    print("🔄 Запускаю G4F...")
 
     for model_name in models_to_try:
         try:
@@ -607,7 +602,6 @@ def ask_ai_with_history(user_id, prompt):
             )
             answer = response.choices[0].message.content
             if not answer:
-                print(f"⚠️ G4F → {model_name}: пустой ответ")
                 continue
             answer = str(answer).strip()
             success = True
@@ -616,37 +610,26 @@ def ask_ai_with_history(user_id, prompt):
         except Exception as e:
             print(f"❌ G4F → {model_name}: {e}")
 
-    if not success:
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print("⚠️ Все G4F провайдеры не ответили.")
-        if groq_client:
-            print("🔄 Переключаюсь на Groq GPT-OSS 120B...")
-            try:
-                response = groq_client.chat.completions.create(
-                    model="openai/gpt-oss-120b",
-                    messages=messages_to_send
-                )
-                answer = response.choices[0].message.content
-                if answer:
-                    answer = str(answer).strip()
-                    success = True
-                    print("✅ Groq GPT-OSS 120B: ответ успешно получен!")
-                else:
-                    print("❌ Groq GPT-OSS 120B: пустой ответ.")
-            except Exception as e:
-                print(f"❌ Groq GPT-OSS 120B: {e}")
-        else:
-            print("❌ GROQ_API_KEY не найден.")
+    if not success and groq_client:
+        print("🔄 Переключаюсь на Groq GPT-OSS 120B...")
+        try:
+            response = groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=messages_to_send
+            )
+            answer = response.choices[0].message.content
+            if answer:
+                answer = str(answer).strip()
+                success = True
+                print("✅ Groq GPT-OSS 120B: ответ успешно получен!")
+        except Exception as e:
+            print(f"❌ Groq ошибка: {e}")
 
     if success:
         user_histories[user_id].append({"role": "assistant", "content": answer})
-        print("🤖 Ответ успешно получен.")
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         return answer
 
     user_histories[user_id].pop()
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-
     if mode == "neuroham":
         return "Даже мои процессоры решили сегодня саботировать работу 🙄"
 
@@ -656,55 +639,30 @@ def ask_ai_with_history(user_id, prompt):
 # ПАСХАЛКА КИРА
 # ============================================================
 def generate_kira_text():
-    prompt = """Напиши красивый, искренний и оригинальный текст о девушке по имени Кира.
-- Избегай избитых шаблонов.
-- Длина: 3–5 предложений. 2–3 эмодзи. Без Markdown."""
-
-    models_to_try = ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4", "llama-3-70b"]
+    prompt = "Напиши красивый, искренний и оригинальный текст о девушке по имени Кира. 3-5 предложений. 2-3 эмодзи. Без Markdown."
+    models_to_try = ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4"]
     for model_name in models_to_try:
         try:
             response = ai_client.chat.completions.create(
                 model=model_name,
-                messages=[
-                    {"role": "system", "content": "Пиши уникальные и искренние тексты. Без Markdown."},
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "user", "content": prompt}]
             )
             answer = response.choices[0].message.content
             if answer:
                 return clean_markdown(str(answer).strip())
-        except Exception as e:
-            print(f"⚠️ Kira G4F {model_name}: {e}")
-
-    if groq_client:
-        try:
-            response = groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[
-                    {"role": "system", "content": "Пиши уникальные и приятные тексты. Без Markdown."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            answer = response.choices[0].message.content
-            if answer:
-                return clean_markdown(str(answer).strip())
-        except Exception as e:
-            print(f"❌ Groq Kira ошибка: {e}")
+        except Exception:
+            pass
 
     return "Кира — словно редкая виниловая пластинка с любимой музыкой. Она приносит с собой особый ритм и уют. ✨❤️"
 
 @bot.message_handler(commands=["kira"])
 def kira_cmd(message):
     msg = bot.reply_to(message, "✨ Нахожу нужные слова...")
-    try:
-        kira_text = generate_kira_text()
-        edit_or_send_long(message.chat.id, msg.message_id, kira_text)
-    except Exception as e:
-        print(f"❌ Ошибка пасхалки Кира: {e}")
-        edit_or_send_long(message.chat.id, msg.message_id, "Кира — это не просто имя, а целое настроение, наполненное светом и теплотой. ✨❤️")
+    kira_text = generate_kira_text()
+    edit_or_send_long(message.chat.id, msg.message_id, kira_text)
 
 # ============================================================
-# WEB SEARCH И УЛУЧШЕННАЯ ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ
+# WEB SEARCH & JINA AI PARSER
 # ============================================================
 def perform_web_search(query):
     results_text = ""
@@ -728,8 +686,10 @@ def perform_web_search(query):
 
     return results_text
 
+# ============================================================
+# ИЗОБРАЖЕНИЯ И АСПЕКТЫ РАЗРЕШЕНИЙ
+# ============================================================
 def enhance_image_prompt(user_prompt):
-    """Превращает короткий запрос пользователя в подробный промпт высокой детализации"""
     try:
         sys_prompt = (
             "You are an expert AI image prompt engineer. Expand the user's request into a highly detailed, "
@@ -751,7 +711,15 @@ def enhance_image_prompt(user_prompt):
         return user_prompt
 
 def generate_image_dynamic(prompt):
-    """Генерация высококачественных изображений с увеличенным временем ожидания и обогащенным промптом"""
+    width, height = 1024, 1024
+
+    if "16:9" in prompt:
+        width, height = 1280, 720
+        prompt = prompt.replace("16:9", "").strip()
+    elif "9:16" in prompt:
+        width, height = 720, 1280
+        prompt = prompt.replace("9:16", "").strip()
+
     detailed_prompt = enhance_image_prompt(prompt)
     print(f"🎨 Детализированный промпт: {detailed_prompt}")
 
@@ -759,7 +727,6 @@ def generate_image_dynamic(prompt):
 
     for model in models_to_try:
         try:
-            print(f"🖼 Попытка генерации через {model}...")
             response = ai_client.images.generate(
                 model=model,
                 prompt=detailed_prompt,
@@ -767,18 +734,19 @@ def generate_image_dynamic(prompt):
             )
             image_url = response.data[0].url
             if image_url:
-                response_image = requests.get(image_url, timeout=60)
-                if response_image.status_code == 200:
-                    return response_image.content
+                res = requests.get(image_url, timeout=60)
+                if res.status_code == 200:
+                    stats["images_generated"] += 1
+                    return res.content
         except Exception as e:
             print(f"⚠️ Ошибка генерации {model}: {e}")
 
     try:
-        print("🖼 Пробуем резервный генератор Pollinations HD...")
         encoded_prompt = urllib.parse.quote(detailed_prompt)
-        fallback_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={int(time.time())}&model=flux&nologo=true"
+        fallback_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
         res = requests.get(fallback_url, timeout=60)
         if res.status_code == 200:
+            stats["images_generated"] += 1
             return res.content
     except Exception as e:
         print(f"❌ Ошибка резервной генерации: {e}")
@@ -793,83 +761,116 @@ async def generate_audio(text, output_file):
     await communicate.save(output_file)
 
 # ============================================================
-# START / HELP
+# START / HELP С КЛАВИАТУРОЙ
 # ============================================================
 @bot.message_handler(commands=["start", "help"])
 def help_cmd(message):
+    stats["users"].add(message.chat.id)
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("🖼 Создать фото", "📁 Создать файл")
+    markup.row("🌐 Поиск в интернет", "📊 Статистика")
+    markup.row("🧹 Очистить память", "💀 Режим Нейрохам")
+
     help_text = (
-        "Привет! Я ИИ-ассистент 🤖\n\n"
-        "Мои команды:\n\n"
-        "/search <запрос> — поиск в интернете\n"
-        "/weather <город> — погода\n"
-        "/image <описание> — создать изображение (HD quality)\n"
-        "/file <запрос> — создать файл 📁\n"
-        "/gemini <запрос> — спросить Gemini\n"
-        "/fact [тема] — интересный факт\n"
-        "/code <задача> — работа с кодом\n"
-        "/sum <текст> — сделать выжимку\n"
-        "/tr <текст> — перевод\n"
-        "/fix <текст> — исправление текста\n"
-        "/tts <текст> — озвучка\n"
-        "/clear — очистить память\n"
-        "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос или прислать документ (PDF, DOCX, XLSX и др.)."
+        "Привет! Я умный многофункциональный ИИ-ассистент 🤖\n\n"
+        "Чем я могу помочь:\n"
+        "• Отвечать на любые вопросы в чате или **голосом** 🎙\n"
+        "• Генерировать **HD картинки** (/image <описание>)\n"
+        "• Создавать **любые файлы**: PDF, Word, Excel, Python, PPTX (/file <запрос>)\n"
+        "• Искать актуальную информацию в интернете (/search <запрос>)\n"
+        "• Читать любые присланные файлы и ссылки\n\n"
+        "Воспользуйтесь кнопками ниже или просто напишите сообщение!"
     )
-    bot.reply_to(message, help_text)
+    bot.send_message(message.chat.id, help_text, reply_markup=markup)
+
+@bot.message_handler(commands=["stats"])
+def stats_cmd(message):
+    msg = (
+        "📊 **Статистика бота:**\n\n"
+        f"👤 Уникальных пользователей: {len(stats['users'])}\n"
+        f"🖼 Сгенерировано фото: {stats['images_generated']}\n"
+        f"📁 Создано файлов: {stats['files_generated']}\n"
+        f"🎙 Распознано голосовых: {stats['voice_messages']}"
+    )
+    bot.reply_to(message, msg)
 
 # ============================================================
-# FILE
+# ОБРАБОТКА ГОЛОСОВЫХ СООБЩЕНИЙ (WHISPER)
+# ============================================================
+@bot.message_handler(content_types=["voice"])
+def handle_voice(message):
+    stats["users"].add(message.chat.id)
+    stats["voice_messages"] += 1
+
+    if not groq_client:
+        bot.reply_to(message, "⚠️ GROQ_API_KEY не установлен. Голосовые сообщения недоступны.")
+        return
+
+    msg = bot.reply_to(message, "🎙 Распознаю голос...")
+    voice_path = tempfile.mktemp(suffix=".ogg")
+
+    try:
+        file_info = bot.get_file(message.voice.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        with open(voice_path, 'wb') as new_file:
+            new_file.write(downloaded_file)
+
+        with open(voice_path, "rb") as audio_file:
+            transcription = groq_client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file,
+                response_format="text"
+            )
+
+        user_text = str(transcription).strip()
+        bot.edit_message_text(f"🗣 **Вы сказали:** {user_text}\n\n🧠 *Думаю над ответом...*", message.chat.id, msg.message_id)
+
+        reply = ask_ai_with_history(message.chat.id, user_text)
+        send_ai_response(message.chat.id, reply)
+
+    except Exception as e:
+        print(f"❌ Ошибка Whisper: {e}")
+        edit_or_send_long(message.chat.id, msg.message_id, f"Не удалось распознать голосовое сообщение: {e}")
+
+    finally:
+        if os.path.exists(voice_path):
+            try:
+                os.remove(voice_path)
+            except Exception:
+                pass
+
+# ============================================================
+# ОБРАБОТКА КНОПОК И КОМАНД
 # ============================================================
 @bot.message_handler(commands=["file"])
 def file_cmd(message):
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        bot.reply_to(message, "Напиши, какой файл создать.\n\nНапример:\n/file Таблица умножения\n/file Документ Word о космосе")
+        bot.reply_to(message, "Напиши, какой файл создать.\n\nНапример:\n/file Таблица умножения в Excel\n/file Резюме в PDF")
         return
 
     request = parts[1].strip()
-    if len(request) > 1000:
-        bot.reply_to(message, "Запрос слишком длинный.")
-        return
-
     extension = detect_file_format(request)
-    msg = bot.reply_to(message, f"📁 Создаю файл...\n\nОпределён формат: .{extension}")
+    msg = bot.reply_to(message, f"📁 Создаю файл...\nФормат: .{extension}")
 
-    path = None
-    temp_directory = None
-
+    path, temp_dir = None, None
     try:
         path, filename, extension = create_generated_file(request, message.chat.id)
-        temp_directory = os.path.dirname(path)
+        temp_dir = os.path.dirname(path)
 
-        with open(path, "rb") as document:
-            bot.send_document(
-                message.chat.id,
-                document,
-                caption=f"📁 Файл готов!\n\nФормат: .{extension}"
-            )
+        with open(path, "rb") as doc:
+            bot.send_document(message.chat.id, doc, caption=f"📁 Файл готов!\nФормат: .{extension}")
         try:
             bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
             pass
     except Exception as e:
-        print(f"❌ Ошибка создания файла: {e}")
-        edit_or_send_long(message.chat.id, msg.message_id, f"Не удалось создать файл.\n\nОшибка: {e}")
+        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка создания файла: {e}")
     finally:
         if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
-        if temp_directory and os.path.isdir(temp_directory):
-            try:
-                os.rmdir(temp_directory)
-            except Exception:
-                pass
+            os.remove(path)
 
-# ============================================================
-# NEUROHAM / CLEAR / FACT / WEATHER / SEARCH / AI TOOLS / IMAGE / TTS
-# ============================================================
 @bot.message_handler(commands=["neuroham", "rude"])
 def toggle_neuroham_mode(message):
     user_id = message.chat.id
@@ -896,8 +897,7 @@ def clear_cmd(message):
 def fact_cmd(message):
     parts = message.text.split(maxsplit=1)
     topic = parts[1] if len(parts) > 1 else ""
-    prompt = f"Расскажи один интересный факт на тему: {topic}. Будь краток." if topic else "Расскажи один случайный интересный факт. Будь краток."
-
+    prompt = f"Расскажи интересный факт на тему: {topic}. Будь краток." if topic else "Расскажи случайный интересный факт."
     msg = bot.reply_to(message, "Ищу факт...")
     fact = ask_ai_with_history(message.chat.id, prompt)
     edit_or_send_long(message.chat.id, msg.message_id, fact)
@@ -908,21 +908,13 @@ def weather_cmd(message):
     city = parts[1] if len(parts) > 1 else ""
 
     if not city:
-        bot.reply_to(message, "Укажи город.\n\nНапример:\n/weather Ташкент")
+        bot.reply_to(message, "Укажи город.\nНапример: /weather Ташкент")
         return
 
     try:
-        response = requests.get(
-            f"https://wttr.in/{city}",
-            params={
-                "format": "Город: %l\nПогода: %C %c\nТемпература: %t (ощущается как %f)\nВетер: %w\nВлажность: %h",
-                "lang": "ru",
-                "m": ""
-            },
-            timeout=8
-        )
+        response = requests.get(f"https://wttr.in/{city}", params={"format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w", "lang": "ru"}, timeout=8)
         if response.status_code == 200:
-            bot.reply_to(message, "Сводка:\n\n" + response.text.strip())
+            bot.reply_to(message, response.text.strip())
         else:
             bot.reply_to(message, "Город не найден.")
     except Exception as e:
@@ -934,12 +926,12 @@ def search_cmd(message):
     query = parts[1] if len(parts) > 1 else ""
 
     if not query:
-        bot.reply_to(message, "Напиши запрос.\n\nНапример:\n/search новости")
+        bot.reply_to(message, "Напиши запрос.\nНапример: /search последние новости ИИ")
         return
 
     msg = bot.reply_to(message, f"Ищу: {query}")
     raw_data = perform_web_search(query)
-    prompt = f"Вот результаты поиска из интернета по запросу '{query}':\n\n{raw_data}\n\nСделай краткую выжимку. Не используй Markdown."
+    prompt = f"Вот результаты поиска по запросу '{query}':\n\n{raw_data}\n\nСделай краткую выжимку. Без Markdown."
 
     reply = ask_ai_with_history(message.chat.id, prompt)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
@@ -961,20 +953,34 @@ def image_cmd(message):
     prompt = parts[1] if len(parts) > 1 else ""
 
     if not prompt:
-        bot.reply_to(message, "Опиши картинку.\n\nНапример:\n/image киберпанк город под дождем")
+        bot.reply_to(message, "Опиши картинку.\nПример: /image 16:9 киберпанк город под дождем")
         return
 
-    msg = bot.reply_to(message, "🎨 Прорабатываю детализацию и генерирую фото в высоком качестве... Пожалуйста, подождите (это может занять до 30-40 секунд).")
+    msg = bot.reply_to(message, "🎨 Генерирую фото в высоком качестве... (до 30-40 сек)")
     image_bytes = generate_image_dynamic(prompt)
 
     if image_bytes:
-        bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
+        bot.send_photo(message.chat.id, image_bytes, caption=f"✨ **Запрос:** {prompt}", reply_markup=markup)
         try:
             bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
             pass
     else:
-        edit_or_send_long(message.chat.id, msg.message_id, "Не удалось сгенерировать изображение высокого качества. Попробуй изменить запрос.")
+        edit_or_send_long(message.chat.id, msg.message_id, "Не удалось сгенерировать изображение. Попробуй изменить запрос.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("reimage:"))
+def callback_reimage(call):
+    prompt = call.data.split("reimage:", 1)[1]
+    bot.answer_callback_query(call.id, "Генерирую новый вариант...")
+    bot.send_message(call.message.chat.id, f"🔄 Повторная генерация для: *{prompt}*")
+    
+    image_bytes = generate_image_dynamic(prompt)
+    if image_bytes:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt}"))
+        bot.send_photo(call.message.chat.id, image_bytes, caption=f"✨ **Запрос:** {prompt}", reply_markup=markup)
 
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
@@ -998,30 +1004,48 @@ def tts_cmd(message):
         edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка TTS: {e}")
     finally:
         if os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except Exception:
-                pass
+            os.remove(audio_path)
 
 # ============================================================
-# TEXT HANDLER
+# TEXT HANDLER & JINA PARSER
 # ============================================================
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
     text = message.text or ""
-    text_lower = text.lower()
+    
+    # Обработка кликов по кнопкам Reply Keyboard
+    if text == "🖼 Создать фото":
+        bot.reply_to(message, "Напиши команду `/image` и опиши картинку.\n\nПример:\n`/image 16:9 неоновый город будущего`")
+        return
+    elif text == "📁 Создать файл":
+        bot.reply_to(message, "Напиши команду `/file` и опиши, что создать.\n\nПример:\n`/file Таблица расходов в Excel`")
+        return
+    elif text == "🌐 Поиск в интернет":
+        bot.reply_to(message, "Напиши запрос через команду `/search`.\n\nПример:\n`/search Ключевые новости сегодняшнего дня`")
+        return
+    elif text == "📊 Статистика":
+        stats_cmd(message)
+        return
+    elif text == "🧹 Очистить память":
+        clear_cmd(message)
+        return
+    elif text == "💀 Режим Нейрохам":
+        toggle_neuroham_mode(message)
+        return
 
-    if "http://" in text_lower or "https://" in text_lower:
-        msg = bot.reply_to(message, "Читаю ссылку...")
+    # Обработка ссылок через Jina AI
+    if "http://" in text.lower() or "https://" in text.lower():
+        msg = bot.reply_to(message, "🌐 Читаю ссылку через Jina AI...")
         try:
-            urls = [word for word in message.text.split() if word.startswith("http")]
-            if not urls:
-                raise ValueError("Ссылка не найдена")
-
+            urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-            soup = BeautifulSoup(response.text, "html.parser")
-            page_text = soup.get_text(separator=" ", strip=True)[:5000]
+            jina_url = f"https://r.jina.ai/{url}"
+            
+            res = requests.get(jina_url, timeout=15)
+            if res.status_code == 200 and res.text.strip():
+                page_text = res.text[:6000]
+            else:
+                raise ValueError("Не удалось получить текст через Jina AI.")
 
             reply = ask_ai_with_history(
                 message.chat.id,
@@ -1034,18 +1058,11 @@ def handle_text(message):
             return
 
     msg = bot.reply_to(message, "Думаю...")
-    reply = ask_ai_with_history(message.chat.id, message.text)
+    reply = ask_ai_with_history(message.chat.id, text)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
 # ============================================================
-# PHOTO (РАСПОЗНАВАНИЕ ОТКЛЮЧЕНО)
-# ============================================================
-@bot.message_handler(content_types=["photo"])
-def handle_photo(message):
-    bot.reply_to(message, "⚠️ Я не умею распознавать или обрабатывать изображения.")
-
-# ============================================================
-# УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ДОКУМЕНТОВ (PDF, DOCX, XLSX, PPTX, TXT и др.)
+# РАБОТА С ДОКУМЕНТАМИ
 # ============================================================
 @bot.message_handler(content_types=["document"])
 def handle_doc(message):
@@ -1065,7 +1082,7 @@ def handle_doc(message):
         text = extract_text_from_file(path)
 
         if not text.strip():
-            raise ValueError("Не удалось извлечь текст из файла или он пуст.")
+            raise ValueError("Документ пуст или текст не распознан.")
 
         reply = ask_ai_with_history(
             message.chat.id,
@@ -1078,17 +1095,14 @@ def handle_doc(message):
 
     finally:
         if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except Exception:
-                pass
+            os.remove(path)
 
 # ============================================================
 # ЗАПУСК
 # ============================================================
 if __name__ == "__main__":
     print("=" * 60)
-    print("🚀 Бот запускается...")
+    print("🚀 Бот запускается со всеми обновлениями...")
     print("=" * 60)
     threading.Thread(target=run_web, daemon=True).start()
 
@@ -1097,6 +1111,5 @@ if __name__ == "__main__":
         try:
             bot.infinity_polling(skip_pending=True, timeout=30, long_polling_timeout=30)
         except Exception as e:
-            print(f"⚠️ Telegram polling остановлен: {e}")
-            print("🔄 Повторное подключение через 5 секунд...")
+            print(f"⚠️ Ошибка polling: {e}")
             time.sleep(5)
