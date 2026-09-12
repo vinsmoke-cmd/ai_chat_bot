@@ -103,21 +103,21 @@ def extract_code_blocks(text):
         parts.append({"type": "text", "content": after.strip()})
     return parts
 
-def send_code_block(chat_id, code, language=""):
+def send_code_block(chat_id, code, language="", reply_to_message_id=None):
     if not code:
         return None
     formatted = f"<pre><code>{html.escape(code, quote=False)}</code></pre>"
     try:
-        return bot.send_message(chat_id, formatted, parse_mode="HTML")
+        return bot.send_message(chat_id, formatted, parse_mode="HTML", reply_to_message_id=reply_to_message_id)
     except Exception as e:
         print(f"⚠️ Ошибка отправки кодового блока: {e}")
         try:
-            return bot.send_message(chat_id, code)
+            return bot.send_message(chat_id, code, reply_to_message_id=reply_to_message_id)
         except Exception as e2:
             print(f"❌ Ошибка fallback кодового блока: {e2}")
             return None
 
-def send_ai_response(chat_id, text):
+def send_ai_response(chat_id, text, reply_to_message_id=None):
     if not text:
         return []
     text = str(text)
@@ -126,17 +126,27 @@ def send_ai_response(chat_id, text):
     text = clean_markdown(text)
     parts = extract_code_blocks(text)
     sent_messages = []
+    
+    # Отвечаем на исходное сообщение только первым фрагментом ответа
+    current_reply_id = reply_to_message_id
+    
     for part in parts:
         content = part.get("content", "")
         if not content:
             continue
         if part["type"] == "code":
             for code_part in split_long_message(content, max_length=3500):
-                send_code_block(chat_id, code_part, part.get("language", ""))
+                msg = send_code_block(chat_id, code_part, part.get("language", ""), reply_to_message_id=current_reply_id)
+                current_reply_id = None  # Последующие куски отправляем стандартно, если ответ длинный
+                if msg:
+                    sent_messages.append(msg)
         else:
             for text_part in split_long_message(content):
                 try:
-                    bot.send_message(chat_id, text_part)
+                    msg = bot.send_message(chat_id, text_part, reply_to_message_id=current_reply_id)
+                    current_reply_id = None  # Последующие куски отправляем стандартно
+                    if msg:
+                        sent_messages.append(msg)
                 except Exception as e:
                     print(f"⚠️ Ошибка отправки текста: {e}")
     return sent_messages
@@ -267,7 +277,7 @@ def help_cmd(message):
         "/clear — очистить историю диалога\n\n"
         "Просто напиши мне любой текстовый запрос!"
     )
-    bot.send_message(message.chat.id, help_text)
+    bot.reply_to(message, help_text)
 
 @bot.message_handler(commands=["neuroham", "rude"])
 def toggle_neuroham_mode(message):
@@ -304,9 +314,9 @@ def handle_text(message):
     if not clean_text:
         return
 
-    # Отправляем ответ ИИ сразу напрямую без сообщения "Думаю..."
     reply = ask_ai_with_history(message.chat.id, clean_text)
-    send_ai_response(message.chat.id, reply)
+    # Передаем message.message_id, чтобы бота ответил реплаем
+    send_ai_response(message.chat.id, reply, reply_to_message_id=message.message_id)
 
 if __name__ == "__main__":
     print("=" * 60 + "\n🚀 Текстовый бот запускается..." + "\n" + "=" * 60)
