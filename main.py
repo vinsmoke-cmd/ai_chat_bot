@@ -450,7 +450,7 @@ def edit_or_send_long(chat_id, message_id, text):
 def get_weather_data(location_name):
     try:
         response = requests.get(
-            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
+            f"https://wttr.in/{urllib.parse.quote(location_name)}",
             params={
                 "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
                 "lang": "ru",
@@ -603,11 +603,28 @@ def perform_web_search(query):
             results_text = f"Не удалось выполнить поиск: {e}"
     return results_text
 
-# --- ИНТЕГРАЦИЯ POLLINATIONS LEGACY API ---
+def enhance_image_prompt(user_prompt):
+    try:
+        sys_prompt = (
+            "You are an expert AI image prompt engineer. Expand the user's request into a highly detailed, "
+            "vivid, beautiful image description in English. Add specifics about lighting, textures, composition, "
+            "and style (e.g., photorealistic, 8k resolution, cinematic lighting, highly detailed). "
+            "Return ONLY the enhanced English prompt without any commentary or quotation marks."
+        )
+        enhanced = ai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+        result = enhanced.choices[0].message.content.strip()
+        return result if result else user_prompt
+    except Exception as e:
+        print(f"⚠️ Ошибка улучшения промпта: {e}")
+        return user_prompt
+
 def generate_image_dynamic(prompt):
-    """
-    Генерация изображений через прямой Legacy API Pollinations.ai
-    """
     width, height = 1024, 1024
 
     if "16:9" in prompt:
@@ -617,23 +634,39 @@ def generate_image_dynamic(prompt):
         width, height = 720, 1280
         prompt = prompt.replace("9:16", "").strip()
 
-    encoded_prompt = urllib.parse.quote(prompt)
-    seed = int(time.time())
-    
-    # Список моделей Pollinations Legacy
-    models = ["flux", "turbo", "deliberate"]
-    
-    for model in models:
-        url = f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}?width={width}&height={height}&seed={seed}&model={model}&nologo=true"
-        print(f"🎨 Запрос к Pollinations Legacy API ({model}): {url}")
-        
+    detailed_prompt = enhance_image_prompt(prompt)
+    print(f"🎨 Детализированный промпт: {detailed_prompt}")
+
+    for model in ["flux-realism", "flux", "dall-e-3"]:
         try:
-            response = requests.get(url, timeout=45)
-            if response.status_code == 200 and len(response.content) > 0:
-                stats["images_generated"] += 1
-                return response.content
+            response = ai_client.images.generate(
+                model=model,
+                prompt=detailed_prompt,
+                response_format="url"
+            )
+            image_url = response.data[0].url
+
+            if image_url:
+                res = requests.get(image_url, timeout=60)
+                if res.status_code == 200:
+                    stats["images_generated"] += 1
+                    return res.content
         except Exception as e:
-            print(f"⚠️ Ошибка генерации Pollinations ({model}): {e}")
+            print(f"⚠️ Ошибка генерации {model}: {e}")
+
+    try:
+        encoded_prompt = urllib.parse.quote(detailed_prompt)
+        fallback_url = (
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
+        )
+        res = requests.get(fallback_url, timeout=60)
+
+        if res.status_code == 200:
+            stats["images_generated"] += 1
+            return res.content
+    except Exception as e:
+        print(f"❌ Ошибка резервной генерации: {e}")
 
     return None
 
@@ -677,7 +710,7 @@ def help_cmd(message):
         "Мои команды:\n\n"
         "/weather <город> — прогноз погоды 🌤️\n"
         "/search <запрос> — поиск в интернете\n"
-        "/image <описание> — создать изображение (Pollinations Legacy API)\n"
+        "/image <описание> — создать изображение (HD quality)\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
@@ -704,6 +737,7 @@ def stats_cmd(message):
     )
     bot.reply_to(message, msg)
 
+# ЗАМЕНЁН НА СТАРЫЙ РАБОЧИЙ ВАРИАНТ
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     stats["users"].add(message.chat.id)
@@ -1056,13 +1090,14 @@ def handle_text(message):
 
     text = message.text or ""
 
+    # Старый рабочий вариант Jina AI
     if "http://" in text.lower() or "https://" in text.lower():
         msg = bot.reply_to(message, "🌐 Читаю ссылку через Jina AI...")
 
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
+            jina_url = f"https://r.jina.ai/{url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
