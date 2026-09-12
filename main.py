@@ -200,7 +200,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Привет! Я ваш ИИ-помощник.\n\n"
         "Основные команды:\n"
         "/weather <город> — прогноз погоды 🌤️\n"
-        "/kira — режим Киры\n"
         "/gen_image <запрос> — генерация изображений\n"
         "/doc, /pptx, /excel — создание документов\n"
         "Или просто отправьте мне файл, текст или задайте вопрос!"
