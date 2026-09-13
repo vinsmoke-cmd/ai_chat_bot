@@ -450,7 +450,7 @@ def edit_or_send_long(chat_id, message_id, text):
 def get_weather_data(location_name):
     try:
         response = requests.get(
-            f"https://wttr.in/{urllib.parse.quote(location_name)}",
+            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
             params={
                 "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
                 "lang": "ru",
@@ -519,45 +519,74 @@ def ask_ai_with_history(user_id, prompt):
             + messages_to_send[-1]["content"]
         )
 
-    models_to_try = ["gpt-3.5-turbo", "gpt-4o-mini", "gpt-4", "llama-3-70b"]
+    providers_models = [
+        ("g4f", "gpt-4o-mini"),
+        ("g4f", "gpt-3.5-turbo"),
+        ("g4f", "gpt-4"),
+        ("g4f", "llama-3-70b"),
+        ("groq", "openai/gpt-oss-120b"),
+        ("groq", "openai/gpt-oss-20b"),
+        ("groq", "llama-3.3-70b-versatile"),
+        ("groq", "llama-3.1-8b-instant"),
+        ("groq", "qwen/qwen3-32b"),
+        ("groq", "mixtral-8x7b-32768")
+    ]
+
     answer, success = "", False
 
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" f"🤖 Новый запрос от {user_id}")
 
-    for model_name in models_to_try:
-        try:
-            print(f"🔄 G4F → {model_name}")
-            response = ai_client.chat.completions.create(model=model_name, messages=messages_to_send)
-            answer = response.choices[0].message.content
-            if answer:
-                answer = str(answer).strip()
-                success = True
-                print(f"✅ G4F → {model_name}: ответ получен")
-                break
-        except Exception as e:
-            print(f"❌ G4F → {model_name}: {e}")
+    for provider, model_name in providers_models:
+        if provider == "g4f":
+            try:
+                print(f"🔄 G4F → {model_name}")
+                response = ai_client.chat.completions.create(
+                    model=model_name, 
+                    messages=messages_to_send,
+                    timeout=7
+                )
+                if response and response.choices:
+                    answer = response.choices[0].message.content
+                    if answer and str(answer).strip():
+                        answer = str(answer).strip()
+                        success = True
+                        print(f"✅ G4F ({model_name}): ответ успешно получен!")
+                        break
+            except Exception as e:
+                print(f"❌ G4F ({model_name}) ошибка / таймаут: {e}")
 
-    if not success and groq_client:
-        print("🔄 Переключаюсь на Groq GPT-OSS 120B...")
-        try:
-            response = groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=messages_to_send
-            )
-            answer = response.choices[0].message.content
-            if answer:
-                answer = str(answer).strip()
-                success = True
-                print("✅ Groq GPT-OSS 120B: ответ успешно получен!")
-        except Exception as e:
-            print(f"❌ Groq ошибка: {e}")
+        elif provider == "groq":
+            if not groq_client:
+                print("⚠️ Groq не инициализирован (отсутствует GROQ_API_KEY). Пропускаем.")
+                continue
+
+            try:
+                print(f"🔄 Groq → {model_name}")
+                response = groq_client.chat.completions.create(
+                    model=model_name,
+                    messages=messages_to_send,
+                    timeout=7
+                )
+                if response and response.choices:
+                    answer = response.choices[0].message.content
+                    if answer and str(answer).strip():
+                        answer = str(answer).strip()
+                        success = True
+                        print(f"✅ Groq ({model_name}): ответ успешно получен!")
+                        break
+            except Exception as e:
+                print(f"❌ Groq ({model_name}) ошибка / таймаут: {e}")
 
     if success:
         user_histories[user_id].append({"role": "assistant", "content": answer})
         return answer
 
     user_histories[user_id].pop()
-    return "Даже мои процессоры решили сегодня саботировать работу." if mode == "neuroham" else "Не удалось получить ответ от ИИ. Попробуй ещё раз немного позже."
+    return (
+        "Даже мои процессоры решили сегодня саботировать работу."
+        if mode == "neuroham"
+        else "Не удалось получить ответ ни от одной ИИ-модели. Попробуй ещё раз немного позже."
+    )
 
 def generate_kira_text():
     prompt = (
@@ -657,7 +686,7 @@ def generate_image_dynamic(prompt):
     try:
         encoded_prompt = urllib.parse.quote(detailed_prompt)
         fallback_url = (
-            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
             f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
         )
         res = requests.get(fallback_url, timeout=60)
@@ -737,7 +766,6 @@ def stats_cmd(message):
     )
     bot.reply_to(message, msg)
 
-# ЗАМЕНЁН НА СТАРЫЙ РАБОЧИЙ ВАРИАНТ
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     stats["users"].add(message.chat.id)
@@ -1090,14 +1118,13 @@ def handle_text(message):
 
     text = message.text or ""
 
-    # Старый рабочий вариант Jina AI
     if "http://" in text.lower() or "https://" in text.lower():
         msg = bot.reply_to(message, "🌐 Читаю ссылку через Jina AI...")
 
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"https://r.jina.ai/{url}"
+            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
