@@ -9,7 +9,7 @@ groq
 google-genai
 pillow
 tavily-python
-duckduckgo_search
+duckduckgo-search
 openpyxl
 python-docx
 reportlab
