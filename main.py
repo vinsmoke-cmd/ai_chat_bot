@@ -386,7 +386,11 @@ def extract_code_blocks(text):
         before = text[last_end:match.start()]
         if before.strip():
             parts.append({"type": "text", "content": before.strip()})
-        parts.append({"type": "code", "language": (match.group(1) or "").strip(), "content": (match.group(2) or "").strip("\n")})
+        parts.append({
+            "type": "code",
+            "language": (match.group(1) or "").strip(),
+            "content": (match.group(2) or "").strip("\n")
+        })
         last_end = match.end()
     after = text[last_end:]
     if after.strip():
@@ -447,15 +451,18 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
+# ИСПРАВЛЕННЫЙ WEATHER ИЗ КодИИбота.txt
 def get_weather_data(location_name):
     try:
-        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}"
-        params = {
-            "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
-            "lang": "ru",
-            "m": ""
-        }
-        response = requests.get(url, params=params, timeout=8)
+        response = requests.get(
+            f"https://wttr.in/{urllib.parse.quote(location_name)}",
+            params={
+                "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
+                "lang": "ru",
+                "m": ""
+            },
+            timeout=8
+        )
         if response.status_code == 200 and response.text.strip():
             return response.text.strip()
         return "Город не найден."
@@ -539,7 +546,7 @@ def ask_ai_with_history(user_id, prompt):
             try:
                 print(f"🔄 G4F → {model_name}")
                 response = ai_client.chat.completions.create(
-                    model=model_name, 
+                    model=model_name,
                     messages=messages_to_send,
                     timeout=7
                 )
@@ -684,7 +691,7 @@ def generate_image_dynamic(prompt):
     try:
         encoded_prompt = urllib.parse.quote(detailed_prompt)
         fallback_url = (
-            f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
             f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
         )
         res = requests.get(fallback_url, timeout=60)
@@ -1122,7 +1129,7 @@ def handle_text(message):
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
+            jina_url = f"https://r.jina.ai/{url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
