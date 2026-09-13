@@ -14,7 +14,6 @@ import telebot
 from telebot import types
 import requests
 from flask import Flask
-from bs4 import BeautifulSoup
 import edge_tts
 from g4f.client import Client
 from groq import Groq
@@ -40,6 +39,18 @@ bot = telebot.TeleBot(BOT_TOKEN)
 ai_client = Client()
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
+# Инициализация Gemini Client через новый SDK google-genai
+gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        from google import genai
+        from google.genai import types as genai_types
+        from PIL import Image
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        print("✅ Gemini API (Imagen 3 + Gemini 2.5 Flash) успешно подключён")
+    except Exception as e:
+        print(f"⚠️ Ошибка инициализации Gemini SDK: {e}")
+
 try:
     BOT_USERNAME = bot.get_me().username.lower()
 except Exception:
@@ -51,20 +62,6 @@ except ImportError:
     TavilyClient = None
 
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
-
-# Инициализация Gemini Client для работы с текстом и генерацией изображений (Imagen 3)
-gemini_client = None
-if GEMINI_API_KEY:
-    try:
-        from google import genai
-        from PIL import Image
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        print("✅ Gemini подключён")
-    except Exception as e:
-        print(f"⚠️ Gemini недоступен: {e}")
-        genai, Image = None, None
-else:
-    genai, Image = None, None
 
 user_histories = {}
 user_modes = {}
@@ -429,11 +426,11 @@ def send_ai_response(chat_id, text):
             continue
         if part["type"] == "code":
             for code_part in split_long_message(content, max_length=3500):
-                send_code_block(chat_id, code_part, part.get("language", ""))
+                sent_messages.append(send_code_block(chat_id, code_part, part.get("language", "")))
         else:
             for text_part in split_long_message(content):
                 try:
-                    bot.send_message(chat_id, text_part)
+                    sent_messages.append(bot.send_message(chat_id, text_part))
                 except Exception as e:
                     print(f"⚠️ Ошибка отправки текста: {e}")
     return sent_messages
@@ -465,12 +462,12 @@ def get_weather_data(location_name):
             },
             timeout=8
         )
-        if response.status_code == 200 and response.text.strip():
+        if response.status_code == 200 and response.text.strip() and "Unknown location" not in response.text:
             return response.text.strip()
         return "Город не найден."
     except Exception as e:
         print(f"⚠️ Ошибка погоды: {e}")
-        return f"Ошибка погоды: {e}"
+        return f"Ошибка получения погоды: {e}"
 
 def ask_ai_with_history(user_id, prompt):
     stats["users"].add(user_id)
@@ -526,22 +523,41 @@ def ask_ai_with_history(user_id, prompt):
             + messages_to_send[-1]["content"]
         )
 
+    # 1. Попытка вызвать Gemini 2.5 Flash, если доступен клиент
+    if gemini_client:
+        try:
+            print(f"🔄 Вызов Gemini → gemini-2.5-flash для {user_id}")
+            # Формируем промпт из истории диалога
+            full_prompt = ""
+            for item in messages_to_send:
+                role_label = "Система" if item['role'] == 'system' else ("Пользователь" if item['role'] == 'user' else "Ассистент")
+                full_prompt += f"{role_label}: {item['content']}\n\n"
+
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=full_prompt
+            )
+            if response and response.text:
+                answer = str(response.text).strip()
+                user_histories[user_id].append({"role": "assistant", "content": answer})
+                print(f"✅ Gemini (gemini-2.5-flash): ответ получен!")
+                return answer
+        except Exception as e:
+            print(f"❌ Gemini ошибка: {e}")
+
+    # 2. Фолбэк на резервные провайдеры (g4f / groq)
     providers_models = [
         ("g4f", "gpt-4o-mini"),
         ("g4f", "gpt-3.5-turbo"),
         ("g4f", "gpt-4"),
         ("g4f", "llama-3-70b"),
         ("groq", "openai/gpt-oss-120b"),
-        ("groq", "openai/gpt-oss-20b"),
         ("groq", "llama-3.3-70b-versatile"),
-        ("groq", "llama-3.1-8b-instant"),
-        ("groq", "qwen/qwen3-32b"),
-        ("groq", "mixtral-8x7b-32768")
+        ("groq", "llama-3.1-8b-instant")
     ]
 
     answer, success = "", False
-
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" f"🤖 Новый запрос от {user_id}")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" f"🤖 Переход на резервные модели для {user_id}")
 
     for provider, model_name in providers_models:
         if provider == "g4f":
@@ -564,7 +580,6 @@ def ask_ai_with_history(user_id, prompt):
 
         elif provider == "groq":
             if not groq_client:
-                print("⚠️ Groq не инициализирован (отсутствует GROQ_API_KEY). Пропускаем.")
                 continue
 
             try:
@@ -595,21 +610,64 @@ def ask_ai_with_history(user_id, prompt):
         else "Не удалось получить ответ ни от одной ИИ-модели. Попробуй ещё раз немного позже."
     )
 
+# --- НОВАЯ ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (IMAGEN 3 С ИСПОЛЬЗОВАНИЕМ GEMINI_API_KEY) ---
+def generate_image_imagen3(prompt):
+    if not gemini_client:
+        print("❌ Ошибка: GEMINI_API_KEY не установлен или SDK недоступен.")
+        return None
+
+    try:
+        print(f"🎨 Запрос генерации в Imagen 3: {prompt}")
+        result = gemini_client.models.generate_images(
+            model='imagen-3.0-generate-002',
+            prompt=prompt,
+            config=dict(
+                number_of_images=1,
+                output_mime_type="image/jpeg",
+                aspect_ratio="1:1"
+            )
+        )
+        if result.generated_images:
+            stats["images_generated"] += 1
+            return result.generated_images[0].image.image_bytes
+    except Exception as e:
+        print(f"❌ Ошибка генерации Imagen 3: {e}")
+    return None
+
+# --- НОВОЕ РАСПОЗНАВАНИЕ ИЗОБРАЖЕНИЙ (GEMINI 2.5 FLASH) ---
+def analyze_image_gemini(image_bytes, user_prompt=None):
+    if not gemini_client:
+        return "⚠️ Не настроен GEMINI_API_KEY для работы с медиафайлами."
+
+    try:
+        prompt = user_prompt if user_prompt else "Опиши подробно, что изображено на этой картинке. Не используй Markdown."
+        
+        from google.genai import types
+        part_img = types.Part.from_bytes(
+            data=image_bytes,
+            mime_type="image/jpeg"
+        )
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt, part_img]
+        )
+        return response.text if response.text else "Не удалось распознать изображение."
+    except Exception as e:
+        print(f"❌ Ошибка распознавания изображения Gemini: {e}")
+        return f"Ошибка при анализе изображения: {e}"
+
 def generate_kira_text():
     prompt = (
         "Напиши красивый, искренний и оригинальный текст "
         "о девушке по имени Кира. 3-5 предложений. "
         "2-3 эмодзи. Без Markdown."
     )
-    for model_name in ["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4"]:
+    if gemini_client:
         try:
-            response = ai_client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            answer = response.choices[0].message.content
-            if answer:
-                return clean_markdown(str(answer).strip())
+            res = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+            if res.text:
+                return clean_markdown(res.text.strip())
         except Exception:
             pass
     return "Кира — словно редкая виниловая пластинка с любимой музыкой. Она приносит с собой особый ритм и уют. ✨❤️"
@@ -639,64 +697,6 @@ def perform_web_search(query):
             results_text = f"Не удалось выполнить поиск: {e}"
     return results_text
 
-def enhance_image_prompt(user_prompt):
-    try:
-        sys_prompt = (
-            "You are an expert AI image prompt engineer. Expand the user's request into a highly detailed, "
-            "vivid, beautiful image description in English. Add specifics about lighting, textures, composition, "
-            "and style (e.g., photorealistic, 8k resolution, cinematic lighting, highly detailed). "
-            "Return ONLY the enhanced English prompt without any commentary or quotation marks."
-        )
-        enhanced = ai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-        )
-        result = enhanced.choices[0].message.content.strip()
-        return result if result else user_prompt
-    except Exception as e:
-        print(f"⚠️ Ошибка улучшения промпта: {e}")
-        return user_prompt
-
-# ОБНОВЛЕННАЯ ФУНКЦИЯ: Все изображения генерирует Gemini (Imagen 3)
-def generate_image_dynamic(prompt):
-    if not gemini_client:
-        print("❌ Gemini API ключ не установлен или клиент не инициализирован!")
-        return None
-
-    aspect_ratio = "1:1"
-    if "16:9" in prompt:
-        aspect_ratio = "16:9"
-        prompt = prompt.replace("16:9", "").strip()
-    elif "9:16" in prompt:
-        aspect_ratio = "9:16"
-        prompt = prompt.replace("9:16", "").strip()
-
-    detailed_prompt = enhance_image_prompt(prompt)
-    print(f"🎨 Детализированный промпт для Gemini: {detailed_prompt}")
-
-    try:
-        result = gemini_client.models.generate_images(
-            model='imagen-3.0-generate-002',
-            prompt=detailed_prompt,
-            config=dict(
-                number_of_images=1,
-                aspect_ratio=aspect_ratio,
-                output_mime_type="image/jpeg"
-            )
-        )
-        
-        for generated_image in result.generated_images:
-            stats["images_generated"] += 1
-            return generated_image.image.image_bytes
-            
-    except Exception as e:
-        print(f"❌ Ошибка генерации изображения через Gemini: {e}")
-
-    return None
-
 async def generate_audio(text, output_file):
     communicate = edge_tts.Communicate(text, "ru-RU-SvetlanaNeural")
     await communicate.save(output_file)
@@ -710,7 +710,7 @@ def is_addressed_to_bot(message):
             if message.reply_to_message.from_user.username.lower() == BOT_USERNAME:
                 return True
 
-    text = (message.text or "").lower()
+    text = (message.text or message.caption or "").lower()
 
     if BOT_USERNAME and f"@{BOT_USERNAME}" in text:
         return True
@@ -737,9 +737,9 @@ def help_cmd(message):
         "Мои команды:\n\n"
         "/weather <город> — прогноз погоды 🌤️\n"
         "/search <запрос> — поиск в интернете\n"
-        "/image <описание> — создать изображение (Gemini Imagen 3)\n"
+        "/image <описание> — генерация с помощью Imagen 3 (Google Gemini) 🎨\n"
         "/file <запрос> — создать файл 📁\n"
-        "/gemini <запрос> — спросить Gemini\n"
+        "/gemini <запрос> — спросить Gemini 2.5 Flash\n"
         "/fact [тема] — интересный факт\n"
         "/code <задача> — работа с кодом\n"
         "/sum <текст> — сделать выжимку\n"
@@ -748,8 +748,7 @@ def help_cmd(message):
         "/tts <текст> — озвучка\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос "
-        "или прислать документ (PDF, DOCX, XLSX и др.)."
+        "💡 Также можешь прислать мне Любую картинку (фото), и Gemini 2.5 Flash её распознает!"
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -815,6 +814,28 @@ def handle_voice(message):
                 os.remove(voice_path)
             except Exception:
                 pass
+
+# --- ОБРАБОТКА ИЗОБРАЖЕНИЙ (АНАЛИЗ И РАСПОЗНАВАНИЕ С GEMINI 2.5 FLASH) ---
+@bot.message_handler(content_types=["photo"])
+def handle_photo(message):
+    if not is_addressed_to_bot(message):
+        return
+
+    stats["users"].add(message.chat.id)
+    msg = bot.reply_to(message, "🔍 Анализирую фото через Gemini 2.5 Flash...")
+
+    try:
+        # Берем фото лучшего качества
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        caption = message.caption or ""
+        reply_text = analyze_image_gemini(downloaded_file, user_prompt=caption)
+        
+        edit_or_send_long(message.chat.id, msg.message_id, reply_text)
+    except Exception as e:
+        print(f"❌ Ошибка получения фото: {e}")
+        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка обработки фотографии: {e}")
 
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
@@ -952,12 +973,13 @@ def ai_tools_cmd(message):
     reply = ask_ai_with_history(message.chat.id, args)
     edit_or_send_long(message.chat.id, msg.message_id, reply)
 
+# --- НОВАЯ КОМАНДА /IMAGE (IMAGEN 3) ---
 @bot.message_handler(commands=["image"])
 def image_cmd(message):
     prompt = clean_command_args(message.text, "image")
 
     if not prompt:
-        bot.reply_to(message, "Опиши картинку.\nПример: /image 16:9 киберпанк город под дождем")
+        bot.reply_to(message, "Опиши картинку.\nПример: /image Футуристический город в стиле киберпанк")
         return
 
     execute_image_generation(message, prompt)
@@ -965,32 +987,32 @@ def image_cmd(message):
 def execute_image_generation(message, prompt, edit_message_id=None):
     if edit_message_id:
         msg_id = edit_message_id
-        bot.edit_message_text("Генерирую фото с помощью Gemini...", message.chat.id, msg_id)
+        bot.edit_message_text("🎨 Генерирую изображение через Imagen 3...", message.chat.id, msg_id)
     else:
-        msg = bot.reply_to(message, "Генерирую фото с помощью Gemini...")
+        msg = bot.reply_to(message, "🎨 Генерирую изображение через Imagen 3...")
         msg_id = msg.message_id
 
-    image_bytes = generate_image_dynamic(prompt)
+    image_bytes = generate_image_imagen3(prompt)
 
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
-        bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
+        bot.send_photo(message.chat.id, image_bytes, caption=f"✨ Сгенерировано в Imagen 3\nЗапрос: {prompt}", reply_markup=markup)
 
         try:
             bot.delete_message(message.chat.id, msg_id)
         except Exception:
             pass
     else:
-        edit_or_send_long(message.chat.id, msg_id, "Не удалось сгенерировать изображение через Gemini. Проверь API ключ и попробуй ещё раз.")
+        edit_or_send_long(message.chat.id, msg_id, "❌ Не удалось сгенерировать изображение. Проверь GEMINI_API_KEY или измени запрос.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reimage:"))
 def callback_reimage(call):
     prompt = call.data.split("reimage:", 1)[1]
-    bot.answer_callback_query(call.id, "Генерирую новый вариант...")
+    bot.answer_callback_query(call.id, "Генерирую новый вариант в Imagen 3...")
     bot.send_message(call.message.chat.id, f"Повторная генерация для: {prompt}")
 
-    image_bytes = generate_image_dynamic(prompt)
+    image_bytes = generate_image_imagen3(prompt)
 
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
@@ -998,7 +1020,7 @@ def callback_reimage(call):
         bot.send_photo(
             call.message.chat.id,
             image_bytes,
-            caption=f"Запрос: {prompt}",
+            caption=f"✨ Сгенерировано в Imagen 3\nЗапрос: {prompt}",
             reply_markup=markup
         )
 
@@ -1023,7 +1045,10 @@ def execute_tts(message, text_to_speak, edit_message_id=None):
     audio_path = tempfile.mktemp(suffix=".mp3")
 
     try:
-        asyncio.run(generate_audio(text_to_speak, audio_path))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(generate_audio(text_to_speak, audio_path))
+        loop.close()
 
         with open(audio_path, "rb") as audio:
             bot.send_voice(message.chat.id, audio)
