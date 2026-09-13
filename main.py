@@ -449,15 +449,13 @@ def edit_or_send_long(chat_id, message_id, text):
 
 def get_weather_data(location_name):
     try:
-        response = requests.get(
-            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
-            params={
-                "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
-                "lang": "ru",
-                "m": ""
-            },
-            timeout=8
-        )
+        url = f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}"
+        params = {
+            "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
+            "lang": "ru",
+            "m": ""
+        }
+        response = requests.get(url, params=params, timeout=8)
         if response.status_code == 200 and response.text.strip():
             return response.text.strip()
         return "Город не найден."
