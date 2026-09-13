@@ -52,10 +52,13 @@ except ImportError:
 
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
 
+# Инициализация Gemini Client для работы с текстом и генерацией изображений (Imagen 3)
+gemini_client = None
 if GEMINI_API_KEY:
     try:
         from google import genai
         from PIL import Image
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
         print("✅ Gemini подключён")
     except Exception as e:
         print(f"⚠️ Gemini недоступен: {e}")
@@ -451,11 +454,10 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
-# ИСПРАВЛЕННЫЙ WEATHER ИЗ КодИИбота.txt
 def get_weather_data(location_name):
     try:
         response = requests.get(
-            f"https://wttr.in/{urllib.parse.quote(location_name)}",
+            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
             params={
                 "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
                 "lang": "ru",
@@ -658,13 +660,13 @@ def enhance_image_prompt(user_prompt):
         print(f"⚠️ Ошибка улучшения промпта: {e}")
         return user_prompt
 
+# ОБНОВЛЕННАЯ ФУНКЦИЯ: Все изображения генерирует Gemini (Imagen 3)
 def generate_image_dynamic(prompt):
-    if not GEMINI_API_KEY or genai is None:
-        print("❌ GEMINI_API_KEY не установлен или google-genai недоступен")
+    if not gemini_client:
+        print("❌ Gemini API ключ не установлен или клиент не инициализирован!")
         return None
 
     aspect_ratio = "1:1"
-
     if "16:9" in prompt:
         aspect_ratio = "16:9"
         prompt = prompt.replace("16:9", "").strip()
@@ -673,36 +675,25 @@ def generate_image_dynamic(prompt):
         prompt = prompt.replace("9:16", "").strip()
 
     detailed_prompt = enhance_image_prompt(prompt)
-    print(f"🎨 Детализированный промпт: {detailed_prompt}")
+    print(f"🎨 Детализированный промпт для Gemini: {detailed_prompt}")
 
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
-        interaction = client.interactions.create(
-            model="gemini-3.1-flash-image",
-            input=detailed_prompt,
-            response_format={
-                "type": "image",
-                "mime_type": "image/jpeg",
-                "aspect_ratio": aspect_ratio,
-                "image_size": "2K"
-            },
-            generation_config={
-                "thinking_level": "high"
-            }
+        result = gemini_client.models.generate_images(
+            model='imagen-3.0-generate-002',
+            prompt=detailed_prompt,
+            config=dict(
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+                output_mime_type="image/jpeg"
+            )
         )
-
-        if interaction.output_image and interaction.output_image.data:
-            import base64
-            image_bytes = base64.b64decode(interaction.output_image.data)
-            if image_bytes:
-                stats["images_generated"] += 1
-                print("✅ Gemini 3.1 Flash Image: изображение создано")
-                return image_bytes
-
-        print("❌ Gemini не вернул изображение")
+        
+        for generated_image in result.generated_images:
+            stats["images_generated"] += 1
+            return generated_image.image.image_bytes
+            
     except Exception as e:
-        print(f"❌ Ошибка Gemini Image: {e}")
+        print(f"❌ Ошибка генерации изображения через Gemini: {e}")
 
     return None
 
@@ -746,7 +737,7 @@ def help_cmd(message):
         "Мои команды:\n\n"
         "/weather <город> — прогноз погоды 🌤️\n"
         "/search <запрос> — поиск в интернете\n"
-        "/image <описание> — создать изображение (HD quality)\n"
+        "/image <описание> — создать изображение (Gemini Imagen 3)\n"
         "/file <запрос> — создать файл 📁\n"
         "/gemini <запрос> — спросить Gemini\n"
         "/fact [тема] — интересный факт\n"
@@ -974,16 +965,16 @@ def image_cmd(message):
 def execute_image_generation(message, prompt, edit_message_id=None):
     if edit_message_id:
         msg_id = edit_message_id
-        bot.edit_message_text("Генерирую фото...", message.chat.id, msg_id)
+        bot.edit_message_text("Генерирую фото с помощью Gemini...", message.chat.id, msg_id)
     else:
-        msg = bot.reply_to(message, "Генерирую фото...")
+        msg = bot.reply_to(message, "Генерирую фото с помощью Gemini...")
         msg_id = msg.message_id
 
     image_bytes = generate_image_dynamic(prompt)
 
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data="reimage"))
+        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
         bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
 
         try:
@@ -991,33 +982,25 @@ def execute_image_generation(message, prompt, edit_message_id=None):
         except Exception:
             pass
     else:
-        edit_or_send_long(message.chat.id, msg_id, "Не удалось сгенерировать изображение. Попробуй изменить запрос.")
+        edit_or_send_long(message.chat.id, msg_id, "Не удалось сгенерировать изображение через Gemini. Проверь API ключ и попробуй ещё раз.")
 
-@bot.callback_query_handler(func=lambda call: call.data == "reimage")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("reimage:"))
 def callback_reimage(call):
-    caption = call.message.caption or ""
-    prompt = caption.replace("Запрос:", "", 1).strip()
-
-    if not prompt:
-        bot.answer_callback_query(call.id, "Не удалось определить исходный запрос.", show_alert=True)
-        return
-
+    prompt = call.data.split("reimage:", 1)[1]
     bot.answer_callback_query(call.id, "Генерирую новый вариант...")
-    bot.send_message(call.message.chat.id, "🔄 Генерирую новый вариант...")
+    bot.send_message(call.message.chat.id, f"Повторная генерация для: {prompt}")
 
     image_bytes = generate_image_dynamic(prompt)
 
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data="reimage"))
+        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt}"))
         bot.send_photo(
             call.message.chat.id,
             image_bytes,
             caption=f"Запрос: {prompt}",
             reply_markup=markup
         )
-    else:
-        bot.send_message(call.message.chat.id, "Не удалось сгенерировать изображение. Попробуй ещё раз.")
 
 @bot.message_handler(commands=["tts"])
 def tts_cmd(message):
@@ -1139,7 +1122,7 @@ def handle_text(message):
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"https://r.jina.ai/{url}"
+            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
