@@ -2,6 +2,7 @@ import os
 import re
 import html
 import telebot
+from telebot import types
 from g4f.client import Client
 from groq import Groq
 
