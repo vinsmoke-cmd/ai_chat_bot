@@ -10,7 +10,6 @@ import tempfile
 import time
 import urllib.request
 import urllib.parse
-import base64
 import telebot
 from telebot import types
 import requests
@@ -452,10 +451,11 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
+# ИСПРАВЛЕННЫЙ WEATHER ИЗ КодИИбота.txt
 def get_weather_data(location_name):
     try:
         response = requests.get(
-            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
+            f"https://wttr.in/{urllib.parse.quote(location_name)}",
             params={
                 "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
                 "lang": "ru",
@@ -658,7 +658,6 @@ def enhance_image_prompt(user_prompt):
         print(f"⚠️ Ошибка улучшения промпта: {e}")
         return user_prompt
 
-# ОБНОВЛЕННАЯ ФУНКЦИЯ ГЕНЕРАЦИИ ИЗОБРАЖЕНИЙ (БЕСПЛАТНО И БЕЗ КЛЮЧЕЙ)
 def generate_image_dynamic(prompt):
     width, height = 1024, 1024
 
@@ -671,38 +670,37 @@ def generate_image_dynamic(prompt):
 
     detailed_prompt = enhance_image_prompt(prompt)
     print(f"🎨 Детализированный промпт: {detailed_prompt}")
-    encoded_prompt = urllib.parse.quote(detailed_prompt)
 
-    # 1. Основной провайдер: Pollinations AI (Бесплатные модели Flux/Realism/Turbo)
-    pollinations_models = ["flux", "flux-realism", "turbo"]
-    for model in pollinations_models:
+    for model in ["flux-realism", "flux", "dall-e-3"]:
         try:
-            url = (
-                f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
-                f"?width={width}&height={height}&seed={int(time.time())}&model={model}&nologo=true"
+            response = ai_client.images.generate(
+                model=model,
+                prompt=detailed_prompt,
+                response_format="url"
             )
-            res = requests.get(url, timeout=30)
-            if res.status_code == 200 and len(res.content) > 5000:
-                stats["images_generated"] += 1
-                return res.content
-        except Exception as e:
-            print(f"⚠️ Ошибка Pollinations ({model}): {e}")
+            image_url = response.data[0].url
 
-    # 2. Резервный провайдер: Lexica API (Поиск ИИ-артов высокого качества)
-    try:
-        lexica_url = f"[https://lexica.art/api/v1/search?q=](https://lexica.art/api/v1/search?q=){encoded_prompt}"
-        res = requests.get(lexica_url, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            images = data.get("images", [])
-            if images:
-                src_url = images[0].get("src")
-                img_res = requests.get(src_url, timeout=20)
-                if img_res.status_code == 200:
+            if image_url:
+                res = requests.get(image_url, timeout=60)
+                if res.status_code == 200:
                     stats["images_generated"] += 1
-                    return img_res.content
+                    return res.content
+        except Exception as e:
+            print(f"⚠️ Ошибка генерации {model}: {e}")
+
+    try:
+        encoded_prompt = urllib.parse.quote(detailed_prompt)
+        fallback_url = (
+            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
+        )
+        res = requests.get(fallback_url, timeout=60)
+
+        if res.status_code == 200:
+            stats["images_generated"] += 1
+            return res.content
     except Exception as e:
-        print(f"⚠️ Ошибка Lexica API: {e}")
+        print(f"❌ Ошибка резервной генерации: {e}")
 
     return None
 
@@ -757,8 +755,8 @@ def help_cmd(message):
         "/tts <текст> — озвучка\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто прислать мне фото (я его распознаю и опишу), "
-        "любой вопрос или документ (PDF, DOCX, XLSX и др.)."
+        "Также можешь просто написать мне любой вопрос "
+        "или прислать документ (PDF, DOCX, XLSX и др.)."
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -824,57 +822,6 @@ def handle_voice(message):
                 os.remove(voice_path)
             except Exception:
                 pass
-
-# РАСПОЗНАВАНИЕ ИЗОБРАЖЕНИЙ ЧЕРЕЗ GROQ VISION
-@bot.message_handler(content_types=["photo"])
-def handle_photo_vision(message):
-    if not is_addressed_to_bot(message):
-        return
-
-    stats["users"].add(message.chat.id)
-
-    if not groq_client:
-        bot.reply_to(message, "⚠️ GROQ_API_KEY не установлен. Распознавание фото недоступно.")
-        return
-
-    msg = bot.reply_to(message, "👁 Анализирую изображение через Groq Vision...")
-
-    try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-
-        base64_image = base64.b64encode(downloaded_file).decode('utf-8')
-        prompt_text = message.caption or "Подробно опиши, что изображено на этом фото. Напиши ответ на русском языке. Без Markdown."
-
-        response = groq_client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            },
-                        },
-                    ],
-                }
-            ],
-            max_tokens=1000
-        )
-
-        answer = response.choices[0].message.content
-        edit_or_send_long(message.chat.id, msg.message_id, answer)
-
-    except Exception as e:
-        print(f"❌ Ошибка Groq Vision: {e}")
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            f"Не удалось распознать изображение: {e}"
-        )
 
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
@@ -1182,7 +1129,7 @@ def handle_text(message):
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
+            jina_url = f"https://r.jina.ai/{url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
