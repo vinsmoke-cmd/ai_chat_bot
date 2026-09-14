@@ -451,36 +451,23 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
-# ИСПРАВЛЕННАЯ ФУНКЦИЯ ПОГОДЫ
 def get_weather_data(location_name):
     try:
-        headers = {
-            "User-Agent": "curl/7.68.0"
-        }
-        encoded_location = urllib.parse.quote(location_name.strip())
-        url = f"[https://wttr.in/](https://wttr.in/){encoded_location}"
-        
-        params = {
-            "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
-            "lang": "ru",
-            "m": ""
-        }
-        
-        response = requests.get(url, headers=headers, params=params, timeout=10)
-        
+        response = requests.get(
+            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
+            params={
+                "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
+                "lang": "ru",
+                "m": ""
+            },
+            timeout=8
+        )
         if response.status_code == 200 and response.text.strip():
-            if "Unknown location" in response.text or "NOT FOUND" in response.text:
-                return f"Город «{location_name}» не найден."
             return response.text.strip()
-            
-        return f"Не удалось получить погоду (код ответа: {response.status_code})."
-        
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️ Ошибка запроса погоды: {e}")
-        return "Ошибка подключения к сервису погоды. Попробуйте позже."
+        return "Город не найден."
     except Exception as e:
         print(f"⚠️ Ошибка погоды: {e}")
-        return f"Ошибка обработки данных погоды: {e}"
+        return f"Ошибка погоды: {e}"
 
 def ask_ai_with_history(user_id, prompt):
     stats["users"].add(user_id)
