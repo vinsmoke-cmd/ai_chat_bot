@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.parse
+import base64
 import telebot
 from telebot import types
 import requests
@@ -52,27 +53,16 @@ except ImportError:
 
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
 
-# ИСПРАВЛЕНИЕ #3: Безопасная и универсальная инициализация Gemini API
-gemini_client = None
-GEMINI_VISION_MODEL = "gemini-1.5-flash"
-
 if GEMINI_API_KEY:
     try:
-        import google.generativeai as genai
+        from google import genai
         from PIL import Image
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_client = genai.GenerativeModel(GEMINI_VISION_MODEL)
-        print(f"✅ Gemini подключён: {GEMINI_VISION_MODEL}")
+        print("✅ Gemini подключён")
     except Exception as e:
-        try:
-            from google import genai
-            from google.genai import types
-            from PIL import Image
-            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-            print(f"✅ Gemini подключён через google.genai: {GEMINI_VISION_MODEL}")
-        except Exception as ex:
-            print(f"⚠️ Gemini недоступен: {ex}")
-            gemini_client = None
+        print(f"⚠️ Gemini недоступен: {e}")
+        genai, Image = None, None
+else:
+    genai, Image = None, None
 
 user_histories = {}
 user_modes = {}
@@ -116,7 +106,7 @@ def extract_text_from_file(file_path):
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             text = f.read()
     else:
-        raise ValueError(f"Формат .{ext} не поддерживается для извлечения текста")
+        raise ValueError(f"Формат .{ext} не поддерживается")
     return text.strip()
 
 def safe_filename(name, extension):
@@ -462,9 +452,7 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
-# ИСПРАВЛЕНИЕ #1: Ошибка Read timed out на wttr.in с авто-фоллбеком на Open-Meteo
 def get_weather_data(location_name):
-    # Попытка 1: Запрос к wttr.in
     try:
         response = requests.get(
             f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
@@ -473,35 +461,14 @@ def get_weather_data(location_name):
                 "lang": "ru",
                 "m": ""
             },
-            timeout=5
+            timeout=8
         )
-        if response.status_code == 200 and response.text.strip() and "Unknown location" not in response.text:
+        if response.status_code == 200 and response.text.strip():
             return response.text.strip()
+        return "Город не найден."
     except Exception as e:
-        print(f"⚠️ wttr.in не ответил ({e}), переключаемся на Open-Meteo...")
-
-    # Попытка 2: Резервный источник Open-Meteo API
-    try:
-        geo_url = f"[https://geocoding-api.open-meteo.com/v1/search?name=](https://geocoding-api.open-meteo.com/v1/search?name=){urllib.parse.quote(location_name)}&count=1&language=ru"
-        geo_res = requests.get(geo_url, timeout=5).json()
-        if geo_res.get("results"):
-            loc = geo_res["results"][0]
-            lat, lon = loc["latitude"], loc["longitude"]
-            city = loc.get("name", location_name)
-            country = loc.get("country", "")
-
-            w_url = f"[https://api.open-meteo.com/v1/forecast?latitude=](https://api.open-meteo.com/v1/forecast?latitude=){lat}&longitude={lon}&current_weather=true"
-            w_res = requests.get(w_url, timeout=5).json()
-            curr = w_res.get("current_weather", {})
-
-            temp = curr.get("temperature", "N/A")
-            wind = curr.get("windspeed", "N/A")
-
-            return f"Город: {city}, {country}\nТемпература: {temp}°C\nСкорость ветра: {wind} км/ч"
-    except Exception as e:
-        print(f"⚠️ Ошибка резервного сервиса погоды: {e}")
-
-    return f"Не удалось получить погоду для '{location_name}'. Попробуйте позже."
+        print(f"⚠️ Ошибка погоды: {e}")
+        return f"Ошибка погоды: {e}"
 
 def ask_ai_with_history(user_id, prompt):
     stats["users"].add(user_id)
@@ -691,6 +658,7 @@ def enhance_image_prompt(user_prompt):
         print(f"⚠️ Ошибка улучшения промпта: {e}")
         return user_prompt
 
+# ОБНОВЛЕННАЯ ФУНКЦИЯ ГЕНЕРАЦИИ ИЗОБРАЖЕНИЙ (БЕСПЛАТНО И БЕЗ КЛЮЧЕЙ)
 def generate_image_dynamic(prompt):
     width, height = 1024, 1024
 
@@ -701,45 +669,40 @@ def generate_image_dynamic(prompt):
         width, height = 720, 1280
         prompt = prompt.replace("9:16", "").strip()
 
-    if not prompt:
-        return None
+    detailed_prompt = enhance_image_prompt(prompt)
+    print(f"🎨 Детализированный промпт: {detailed_prompt}")
+    encoded_prompt = urllib.parse.quote(detailed_prompt)
 
-    models = ["flux", "zimage"]
-    pollinations_key = os.getenv("POLLINATIONS_API_KEY")
-
-    for model in models:
+    # 1. Основной провайдер: Pollinations AI (Бесплатные модели Flux/Realism/Turbo)
+    pollinations_models = ["flux", "flux-realism", "turbo"]
+    for model in pollinations_models:
         try:
-            encoded_prompt = urllib.parse.quote(prompt, safe="")
-
-            if pollinations_key:
-                url = (
-                    f"[https://gen.pollinations.ai/image/](https://gen.pollinations.ai/image/){encoded_prompt}"
-                    f"?model={model}&width={width}&height={height}"
-                    f"&seed={int(time.time())}&nologo=true"
-                )
-                headers = {"Authorization": f"Bearer {pollinations_key}"}
-            else:
-                url = (
-                    f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
-                    f"?model={model}&width={width}&height={height}"
-                    f"&seed={int(time.time())}&nologo=true"
-                )
-                headers = {}
-
-            print(f"🎨 Генерация изображения: {model}")
-            response = requests.get(url, headers=headers, timeout=(10, 35))
-
-            content_type = response.headers.get("Content-Type", "").lower()
-            if response.status_code == 200 and response.content:
-                if content_type.startswith("image/") or response.content[:3] == b"\xff\xd8\xff" or response.content[:8] == b"\x89PNG\r\n\x1a\n":
-                    stats["images_generated"] += 1
-                    return response.content
-
-            print(f"⚠️ Pollinations {model}: HTTP {response.status_code}, type={content_type}")
-        except requests.exceptions.Timeout:
-            print(f"⏱ Pollinations {model}: превышен таймаут")
+            url = (
+                f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
+                f"?width={width}&height={height}&seed={int(time.time())}&model={model}&nologo=true"
+            )
+            res = requests.get(url, timeout=30)
+            if res.status_code == 200 and len(res.content) > 5000:
+                stats["images_generated"] += 1
+                return res.content
         except Exception as e:
-            print(f"❌ Pollinations {model}: {e}")
+            print(f"⚠️ Ошибка Pollinations ({model}): {e}")
+
+    # 2. Резервный провайдер: Lexica API (Поиск ИИ-артов высокого качества)
+    try:
+        lexica_url = f"[https://lexica.art/api/v1/search?q=](https://lexica.art/api/v1/search?q=){encoded_prompt}"
+        res = requests.get(lexica_url, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            images = data.get("images", [])
+            if images:
+                src_url = images[0].get("src")
+                img_res = requests.get(src_url, timeout=20)
+                if img_res.status_code == 200:
+                    stats["images_generated"] += 1
+                    return img_res.content
+    except Exception as e:
+        print(f"⚠️ Ошибка Lexica API: {e}")
 
     return None
 
@@ -756,7 +719,7 @@ def is_addressed_to_bot(message):
             if message.reply_to_message.from_user.username.lower() == BOT_USERNAME:
                 return True
 
-    text = (message.text or message.caption or "").lower()
+    text = (message.text or "").lower()
 
     if BOT_USERNAME and f"@{BOT_USERNAME}" in text:
         return True
@@ -794,8 +757,8 @@ def help_cmd(message):
         "/tts <текст> — озвучка\n"
         "/clear — очистить память\n"
         "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос "
-        "или прислать документ (PDF, DOCX, XLSX и др.)."
+        "Также можешь просто прислать мне фото (я его распознаю и опишу), "
+        "любой вопрос или документ (PDF, DOCX, XLSX и др.)."
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -861,6 +824,57 @@ def handle_voice(message):
                 os.remove(voice_path)
             except Exception:
                 pass
+
+# РАСПОЗНАВАНИЕ ИЗОБРАЖЕНИЙ ЧЕРЕЗ GROQ VISION
+@bot.message_handler(content_types=["photo"])
+def handle_photo_vision(message):
+    if not is_addressed_to_bot(message):
+        return
+
+    stats["users"].add(message.chat.id)
+
+    if not groq_client:
+        bot.reply_to(message, "⚠️ GROQ_API_KEY не установлен. Распознавание фото недоступно.")
+        return
+
+    msg = bot.reply_to(message, "👁 Анализирую изображение через Groq Vision...")
+
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        base64_image = base64.b64encode(downloaded_file).decode('utf-8')
+        prompt_text = message.caption or "Подробно опиши, что изображено на этом фото. Напиши ответ на русском языке. Без Markdown."
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.2-11b-vision-preview",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt_text},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            max_tokens=1000
+        )
+
+        answer = response.choices[0].message.content
+        edit_or_send_long(message.chat.id, msg.message_id, answer)
+
+    except Exception as e:
+        print(f"❌ Ошибка Groq Vision: {e}")
+        edit_or_send_long(
+            message.chat.id,
+            msg.message_id,
+            f"Не удалось распознать изображение: {e}"
+        )
 
 @bot.message_handler(commands=["weather"])
 def weather_cmd(message):
@@ -1021,7 +1035,7 @@ def execute_image_generation(message, prompt, edit_message_id=None):
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
-        bot.send_photo(message.chat.id, io.BytesIO(image_bytes), caption=f"Запрос: {prompt}", reply_markup=markup)
+        bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
 
         try:
             bot.delete_message(message.chat.id, msg_id)
@@ -1043,7 +1057,7 @@ def callback_reimage(call):
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt}"))
         bot.send_photo(
             call.message.chat.id,
-            io.BytesIO(image_bytes),
+            image_bytes,
             caption=f"Запрос: {prompt}",
             reply_markup=markup
         )
@@ -1194,102 +1208,10 @@ def handle_text(message):
 
     process_natural_language_request(message, text)
 
-@bot.message_handler(content_types=["photo"])
-def handle_photo(message):
-    stats["users"].add(message.chat.id)
-
-    if not is_addressed_to_bot(message):
-        return
-
-    if not gemini_client:
-        bot.reply_to(
-            message,
-            "⚠️ Распознавание изображений недоступно: GEMINI_API_KEY не установлен или Gemini не загрузился."
-        )
-        return
-
-    msg = bot.reply_to(message, "👀 Анализирую изображение...")
-
-    try:
-        photo = message.photo[-1]
-        file_info = bot.get_file(photo.file_id)
-        file_data = bot.download_file(file_info.file_path)
-
-        from PIL import Image
-        image = Image.open(io.BytesIO(file_data))
-
-        question = (message.caption or "").strip()
-        prompt = question if question else "Опиши подробно, что изображено на картинке."
-
-        # Поддержка обеих версий библиотеки google.generativeai
-        if hasattr(gemini_client, "generate_content"):
-            response = gemini_client.generate_content([prompt, image])
-            answer = response.text
-        else:
-            response = gemini_client.models.generate_content(
-                model=GEMINI_VISION_MODEL,
-                contents=[image, prompt]
-            )
-            answer = getattr(response, "text", None)
-
-        if not answer or not str(answer).strip():
-            raise ValueError("Gemini не вернул текстовый ответ.")
-
-        try:
-            bot.delete_message(message.chat.id, msg.message_id)
-        except Exception:
-            pass
-
-        send_ai_response(message.chat.id, str(answer).strip())
-
-    except Exception as e:
-        print(f"❌ Ошибка распознавания изображения: {e}")
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            f"❌ Не удалось распознать изображение: {e}"
-        )
-
-# ИСПРАВЛЕНИЕ #2: Защита от обработки фото как текстового файла Документа
 @bot.message_handler(content_types=["document"])
 def handle_doc(message):
     if not is_addressed_to_bot(message):
         return
-
-    file_name = message.document.file_name or "document.bin"
-    ext = os.path.splitext(file_name)[1].lower()
-
-    # Если отправлен графический файл как Документ без сжатия — перенаправляем в Vision Handler
-    image_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.bmp']
-    if ext in image_extensions or (message.document.mime_type and message.document.mime_type.startswith('image/')):
-        if gemini_client:
-            msg = bot.reply_to(message, "👀 Вижу изображение в документе, передаю в Gemini...")
-            try:
-                file_info = bot.get_file(message.document.file_id)
-                file_data = bot.download_file(file_info.file_path)
-                from PIL import Image
-                image = Image.open(io.BytesIO(file_data))
-                question = (message.caption or "").strip()
-                prompt = question if question else "Прочитай и распарсь содержимое картинки/документа."
-
-                if hasattr(gemini_client, "generate_content"):
-                    response = gemini_client.generate_content([prompt, image])
-                    answer = response.text
-                else:
-                    response = gemini_client.models.generate_content(
-                        model=GEMINI_VISION_MODEL,
-                        contents=[image, prompt]
-                    )
-                    answer = getattr(response, "text", None)
-
-                edit_or_send_long(message.chat.id, msg.message_id, str(answer).strip())
-                return
-            except Exception as e:
-                bot.reply_to(message, f"❌ Ошибка при обработке графического документа: {e}")
-                return
-        else:
-            bot.reply_to(message, "⚠️ Вы отправили изображение, но GEMINI_API_KEY не установлен.")
-            return
 
     msg = bot.reply_to(message, "Читаю документ...")
     path = None
@@ -1297,6 +1219,8 @@ def handle_doc(message):
     try:
         file_info = bot.get_file(message.document.file_id)
         file_data = bot.download_file(file_info.file_path)
+        file_name = message.document.file_name or "document.bin"
+        ext = os.path.splitext(file_name)[1]
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
             temp_file.write(file_data)
