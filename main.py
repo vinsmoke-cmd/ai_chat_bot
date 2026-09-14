@@ -59,7 +59,7 @@ if GEMINI_API_KEY:
         from PIL import Image
 
         gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        GEMINI_VISION_MODEL = "gemini-3.8-flash"
+        GEMINI_VISION_MODEL = "gemini-3.6-flash"
         print(f"✅ Gemini подключён: {GEMINI_VISION_MODEL}")
     except Exception as e:
         print(f"⚠️ Gemini недоступен: {e}")
@@ -696,15 +696,28 @@ def generate_image_dynamic(prompt):
 
     try:
         encoded_prompt = urllib.parse.quote(detailed_prompt)
-        fallback_url = (
-            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-            f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
-        )
-        res = requests.get(fallback_url, timeout=60)
+        pollinations_key = os.getenv("POLLINATIONS_API_KEY")
+        if pollinations_key:
+            fallback_url = (
+                f"https://gen.pollinations.ai/image/{encoded_prompt}"
+                f"?width={width}&height={height}&seed={int(time.time())}&model=flux"
+            )
+            res = requests.get(
+                fallback_url,
+                headers={"Authorization": f"Bearer {pollinations_key}"},
+                timeout=90
+            )
+        else:
+            fallback_url = (
+                f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+                f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
+            )
+            res = requests.get(fallback_url, timeout=90)
 
-        if res.status_code == 200:
+        if res.status_code == 200 and res.content:
             stats["images_generated"] += 1
             return res.content
+        print(f"⚠️ Pollinations вернул HTTP {res.status_code}")
     except Exception as e:
         print(f"❌ Ошибка резервной генерации: {e}")
 
