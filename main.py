@@ -52,22 +52,27 @@ except ImportError:
 
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
 
+# ИСПРАВЛЕНИЕ #3: Безопасная и универсальная инициализация Gemini API
+gemini_client = None
+GEMINI_VISION_MODEL = "gemini-1.5-flash"
+
 if GEMINI_API_KEY:
     try:
-        from google import genai
-        from google.genai import types
+        import google.generativeai as genai
         from PIL import Image
-
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        GEMINI_VISION_MODEL = "gemini-3.6-flash"
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_client = genai.GenerativeModel(GEMINI_VISION_MODEL)
         print(f"✅ Gemini подключён: {GEMINI_VISION_MODEL}")
     except Exception as e:
-        print(f"⚠️ Gemini недоступен: {e}")
-        genai, types, Image, gemini_client = None, None, None, None
-        GEMINI_VISION_MODEL = None
-else:
-    genai, types, Image, gemini_client = None, None, None, None
-    GEMINI_VISION_MODEL = None
+        try:
+            from google import genai
+            from google.genai import types
+            from PIL import Image
+            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+            print(f"✅ Gemini подключён через google.genai: {GEMINI_VISION_MODEL}")
+        except Exception as ex:
+            print(f"⚠️ Gemini недоступен: {ex}")
+            gemini_client = None
 
 user_histories = {}
 user_modes = {}
@@ -111,7 +116,7 @@ def extract_text_from_file(file_path):
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             text = f.read()
     else:
-        raise ValueError(f"Формат .{ext} не поддерживается")
+        raise ValueError(f"Формат .{ext} не поддерживается для извлечения текста")
     return text.strip()
 
 def safe_filename(name, extension):
@@ -457,24 +462,46 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
-# ИСПРАВЛЕННЫЙ WEATHER ИЗ КодИИбота.txt
+# ИСПРАВЛЕНИЕ #1: Ошибка Read timed out на wttr.in с авто-фоллбеком на Open-Meteo
 def get_weather_data(location_name):
+    # Попытка 1: Запрос к wttr.in
     try:
         response = requests.get(
-            f"https://wttr.in/{urllib.parse.quote(location_name)}",
+            f"[https://wttr.in/](https://wttr.in/){urllib.parse.quote(location_name)}",
             params={
                 "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
                 "lang": "ru",
                 "m": ""
             },
-            timeout=8
+            timeout=5
         )
-        if response.status_code == 200 and response.text.strip():
+        if response.status_code == 200 and response.text.strip() and "Unknown location" not in response.text:
             return response.text.strip()
-        return "Город не найден."
     except Exception as e:
-        print(f"⚠️ Ошибка погоды: {e}")
-        return f"Ошибка погоды: {e}"
+        print(f"⚠️ wttr.in не ответил ({e}), переключаемся на Open-Meteo...")
+
+    # Попытка 2: Резервный источник Open-Meteo API
+    try:
+        geo_url = f"[https://geocoding-api.open-meteo.com/v1/search?name=](https://geocoding-api.open-meteo.com/v1/search?name=){urllib.parse.quote(location_name)}&count=1&language=ru"
+        geo_res = requests.get(geo_url, timeout=5).json()
+        if geo_res.get("results"):
+            loc = geo_res["results"][0]
+            lat, lon = loc["latitude"], loc["longitude"]
+            city = loc.get("name", location_name)
+            country = loc.get("country", "")
+
+            w_url = f"[https://api.open-meteo.com/v1/forecast?latitude=](https://api.open-meteo.com/v1/forecast?latitude=){lat}&longitude={lon}&current_weather=true"
+            w_res = requests.get(w_url, timeout=5).json()
+            curr = w_res.get("current_weather", {})
+
+            temp = curr.get("temperature", "N/A")
+            wind = curr.get("windspeed", "N/A")
+
+            return f"Город: {city}, {country}\nТемпература: {temp}°C\nСкорость ветра: {wind} км/ч"
+    except Exception as e:
+        print(f"⚠️ Ошибка резервного сервиса погоды: {e}")
+
+    return f"Не удалось получить погоду для '{location_name}'. Попробуйте позже."
 
 def ask_ai_with_history(user_id, prompt):
     stats["users"].add(user_id)
@@ -677,8 +704,6 @@ def generate_image_dynamic(prompt):
     if not prompt:
         return None
 
-    # Для /image не используем G4F: его images.generate() может зависать
-    # без таймаута. Используем прямой HTTP-запрос к Pollinations.
     models = ["flux", "zimage"]
     pollinations_key = os.getenv("POLLINATIONS_API_KEY")
 
@@ -688,15 +713,14 @@ def generate_image_dynamic(prompt):
 
             if pollinations_key:
                 url = (
-                    f"https://gen.pollinations.ai/image/{encoded_prompt}"
+                    f"[https://gen.pollinations.ai/image/](https://gen.pollinations.ai/image/){encoded_prompt}"
                     f"?model={model}&width={width}&height={height}"
                     f"&seed={int(time.time())}&nologo=true"
                 )
                 headers = {"Authorization": f"Bearer {pollinations_key}"}
             else:
-                # Старый публичный endpoint оставлен как вариант без ключа.
                 url = (
-                    f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+                    f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
                     f"?model={model}&width={width}&height={height}"
                     f"&seed={int(time.time())}&nologo=true"
                 )
@@ -1144,7 +1168,7 @@ def handle_text(message):
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"https://r.jina.ai/{url}"
+            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
@@ -1191,38 +1215,23 @@ def handle_photo(message):
         file_info = bot.get_file(photo.file_id)
         file_data = bot.download_file(file_info.file_path)
 
+        from PIL import Image
         image = Image.open(io.BytesIO(file_data))
 
         question = (message.caption or "").strip()
-        if question:
-            prompt = (
-                "Проанализируй изображение и ответь на вопрос пользователя. "
-                "Отвечай на том же языке, на котором написан вопрос. "
-                "Будь точным и не выдумывай детали.\n\n"
-                f"Вопрос пользователя:\n{question}"
-            )
+        prompt = question if question else "Опиши подробно, что изображено на картинке."
+
+        # Поддержка обеих версий библиотеки google.generativeai
+        if hasattr(gemini_client, "generate_content"):
+            response = gemini_client.generate_content([prompt, image])
+            answer = response.text
         else:
-            prompt = (
-                "Внимательно проанализируй изображение. "
-                "Опиши, что на нём изображено, включая важные объекты, "
-                "текст на изображении и другие заметные детали. "
-                "Отвечай на русском языке. "
-                "Если какая-то деталь неразборчива, прямо скажи об этом."
+            response = gemini_client.models.generate_content(
+                model=GEMINI_VISION_MODEL,
+                contents=[image, prompt]
             )
+            answer = getattr(response, "text", None)
 
-        response = gemini_client.models.generate_content(
-            model=GEMINI_VISION_MODEL,
-            contents=[
-                types.Part.from_bytes(
-                    data=file_data,
-                    mime_type=file_info.file_path.rsplit(".", 1)[-1].lower()
-                    if "." in file_info.file_path else "image/jpeg"
-                ),
-                prompt
-            ]
-        )
-
-        answer = getattr(response, "text", None)
         if not answer or not str(answer).strip():
             raise ValueError("Gemini не вернул текстовый ответ.")
 
@@ -1241,11 +1250,46 @@ def handle_photo(message):
             f"❌ Не удалось распознать изображение: {e}"
         )
 
-
+# ИСПРАВЛЕНИЕ #2: Защита от обработки фото как текстового файла Документа
 @bot.message_handler(content_types=["document"])
 def handle_doc(message):
     if not is_addressed_to_bot(message):
         return
+
+    file_name = message.document.file_name or "document.bin"
+    ext = os.path.splitext(file_name)[1].lower()
+
+    # Если отправлен графический файл как Документ без сжатия — перенаправляем в Vision Handler
+    image_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.bmp']
+    if ext in image_extensions or (message.document.mime_type and message.document.mime_type.startswith('image/')):
+        if gemini_client:
+            msg = bot.reply_to(message, "👀 Вижу изображение в документе, передаю в Gemini...")
+            try:
+                file_info = bot.get_file(message.document.file_id)
+                file_data = bot.download_file(file_info.file_path)
+                from PIL import Image
+                image = Image.open(io.BytesIO(file_data))
+                question = (message.caption or "").strip()
+                prompt = question if question else "Прочитай и распарсь содержимое картинки/документа."
+
+                if hasattr(gemini_client, "generate_content"):
+                    response = gemini_client.generate_content([prompt, image])
+                    answer = response.text
+                else:
+                    response = gemini_client.models.generate_content(
+                        model=GEMINI_VISION_MODEL,
+                        contents=[image, prompt]
+                    )
+                    answer = getattr(response, "text", None)
+
+                edit_or_send_long(message.chat.id, msg.message_id, str(answer).strip())
+                return
+            except Exception as e:
+                bot.reply_to(message, f"❌ Ошибка при обработке графического документа: {e}")
+                return
+        else:
+            bot.reply_to(message, "⚠️ Вы отправили изображение, но GEMINI_API_KEY не установлен.")
+            return
 
     msg = bot.reply_to(message, "Читаю документ...")
     path = None
@@ -1253,8 +1297,6 @@ def handle_doc(message):
     try:
         file_info = bot.get_file(message.document.file_id)
         file_data = bot.download_file(file_info.file_path)
-        file_name = message.document.file_name or "document.bin"
-        ext = os.path.splitext(file_name)[1]
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
             temp_file.write(file_data)
