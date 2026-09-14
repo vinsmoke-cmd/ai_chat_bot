@@ -674,52 +674,48 @@ def generate_image_dynamic(prompt):
         width, height = 720, 1280
         prompt = prompt.replace("9:16", "").strip()
 
-    detailed_prompt = enhance_image_prompt(prompt)
-    print(f"🎨 Детализированный промпт: {detailed_prompt}")
+    if not prompt:
+        return None
 
-    for model in ["flux-realism", "flux", "dall-e-3"]:
+    # Для /image не используем G4F: его images.generate() может зависать
+    # без таймаута. Используем прямой HTTP-запрос к Pollinations.
+    models = ["flux", "zimage"]
+    pollinations_key = os.getenv("POLLINATIONS_API_KEY")
+
+    for model in models:
         try:
-            response = ai_client.images.generate(
-                model=model,
-                prompt=detailed_prompt,
-                response_format="url"
-            )
-            image_url = response.data[0].url
+            encoded_prompt = urllib.parse.quote(prompt, safe="")
 
-            if image_url:
-                res = requests.get(image_url, timeout=60)
-                if res.status_code == 200:
+            if pollinations_key:
+                url = (
+                    f"https://gen.pollinations.ai/image/{encoded_prompt}"
+                    f"?model={model}&width={width}&height={height}"
+                    f"&seed={int(time.time())}&nologo=true"
+                )
+                headers = {"Authorization": f"Bearer {pollinations_key}"}
+            else:
+                # Старый публичный endpoint оставлен как вариант без ключа.
+                url = (
+                    f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+                    f"?model={model}&width={width}&height={height}"
+                    f"&seed={int(time.time())}&nologo=true"
+                )
+                headers = {}
+
+            print(f"🎨 Генерация изображения: {model}")
+            response = requests.get(url, headers=headers, timeout=(10, 35))
+
+            content_type = response.headers.get("Content-Type", "").lower()
+            if response.status_code == 200 and response.content:
+                if content_type.startswith("image/") or response.content[:3] == b"\xff\xd8\xff" or response.content[:8] == b"\x89PNG\r\n\x1a\n":
                     stats["images_generated"] += 1
-                    return res.content
+                    return response.content
+
+            print(f"⚠️ Pollinations {model}: HTTP {response.status_code}, type={content_type}")
+        except requests.exceptions.Timeout:
+            print(f"⏱ Pollinations {model}: превышен таймаут")
         except Exception as e:
-            print(f"⚠️ Ошибка генерации {model}: {e}")
-
-    try:
-        encoded_prompt = urllib.parse.quote(detailed_prompt)
-        pollinations_key = os.getenv("POLLINATIONS_API_KEY")
-        if pollinations_key:
-            fallback_url = (
-                f"https://gen.pollinations.ai/image/{encoded_prompt}"
-                f"?width={width}&height={height}&seed={int(time.time())}&model=flux"
-            )
-            res = requests.get(
-                fallback_url,
-                headers={"Authorization": f"Bearer {pollinations_key}"},
-                timeout=90
-            )
-        else:
-            fallback_url = (
-                f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-                f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
-            )
-            res = requests.get(fallback_url, timeout=90)
-
-        if res.status_code == 200 and res.content:
-            stats["images_generated"] += 1
-            return res.content
-        print(f"⚠️ Pollinations вернул HTTP {res.status_code}")
-    except Exception as e:
-        print(f"❌ Ошибка резервной генерации: {e}")
+            print(f"❌ Pollinations {model}: {e}")
 
     return None
 
@@ -1001,7 +997,7 @@ def execute_image_generation(message, prompt, edit_message_id=None):
     if image_bytes:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt[:50]}"))
-        bot.send_photo(message.chat.id, image_bytes, caption=f"Запрос: {prompt}", reply_markup=markup)
+        bot.send_photo(message.chat.id, io.BytesIO(image_bytes), caption=f"Запрос: {prompt}", reply_markup=markup)
 
         try:
             bot.delete_message(message.chat.id, msg_id)
@@ -1023,7 +1019,7 @@ def callback_reimage(call):
         markup.add(types.InlineKeyboardButton("🔄 Перегенерировать", callback_data=f"reimage:{prompt}"))
         bot.send_photo(
             call.message.chat.id,
-            image_bytes,
+            io.BytesIO(image_bytes),
             caption=f"Запрос: {prompt}",
             reply_markup=markup
         )
