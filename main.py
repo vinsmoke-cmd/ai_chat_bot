@@ -451,24 +451,36 @@ def edit_or_send_long(chat_id, message_id, text):
         print(f"⚠️ Не удалось удалить временное сообщение: {e}")
     send_ai_response(chat_id, text)
 
-# ИСПРАВЛЕННЫЙ WEATHER ИЗ КодИИбота.txt
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ ПОГОДЫ
 def get_weather_data(location_name):
     try:
-        response = requests.get(
-            f"https://wttr.in/{urllib.parse.quote(location_name)}",
-            params={
-                "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
-                "lang": "ru",
-                "m": ""
-            },
-            timeout=8
-        )
+        headers = {
+            "User-Agent": "curl/7.68.0"
+        }
+        encoded_location = urllib.parse.quote(location_name.strip())
+        url = f"[https://wttr.in/](https://wttr.in/){encoded_location}"
+        
+        params = {
+            "format": "Город: %l\nПогода: %C %c\nТемпература: %t\nВетер: %w",
+            "lang": "ru",
+            "m": ""
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        
         if response.status_code == 200 and response.text.strip():
+            if "Unknown location" in response.text or "NOT FOUND" in response.text:
+                return f"Город «{location_name}» не найден."
             return response.text.strip()
-        return "Город не найден."
+            
+        return f"Не удалось получить погоду (код ответа: {response.status_code})."
+        
+    except requests.exceptions.RequestException as e:
+        print(f"⚠️ Ошибка запроса погоды: {e}")
+        return "Ошибка подключения к сервису погоды. Попробуйте позже."
     except Exception as e:
         print(f"⚠️ Ошибка погоды: {e}")
-        return f"Ошибка погоды: {e}"
+        return f"Ошибка обработки данных погоды: {e}"
 
 def ask_ai_with_history(user_id, prompt):
     stats["users"].add(user_id)
@@ -691,7 +703,7 @@ def generate_image_dynamic(prompt):
     try:
         encoded_prompt = urllib.parse.quote(detailed_prompt)
         fallback_url = (
-            f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+            f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){encoded_prompt}"
             f"?width={width}&height={height}&seed={int(time.time())}&model=flux&nologo=true"
         )
         res = requests.get(fallback_url, timeout=60)
@@ -1129,7 +1141,7 @@ def handle_text(message):
         try:
             urls = [word for word in text.split() if word.startswith("http")]
             url = urls[0]
-            jina_url = f"https://r.jina.ai/{url}"
+            jina_url = f"[https://r.jina.ai/](https://r.jina.ai/){url}"
             res = requests.get(jina_url, timeout=15)
 
             if res.status_code == 200 and res.text.strip():
