@@ -17,6 +17,8 @@ from flask import Flask
 from bs4 import BeautifulSoup
 import edge_tts
 from g4f.client import Client
+from g4f.Provider import IterListProvider
+import g4f.models as g4f_models
 from groq import Groq
 from pypdf import PdfReader
 import docx
@@ -38,6 +40,41 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 ai_client = Client()
+
+# Copilot-провайдеры G4F полностью исключены из автоматического выбора.
+# Список берётся из текущей конфигурации G4F и фильтруется при каждом запросе,
+# чтобы изменения списка провайдеров после обновления G4F не включили Copilot обратно.
+G4F_BLOCKED_PROVIDER_NAMES = {
+    "copilot",
+    "copilotapp",
+    "copilotsession",
+    "copilotaccount",
+}
+
+def get_g4f_non_copilot_provider():
+    """Возвращает маршрутизатор G4F без любых провайдеров с именем Copilot."""
+    default_model = getattr(g4f_models, "default", None)
+    best_provider = getattr(default_model, "best_provider", None)
+    provider_names = getattr(best_provider, "providers", None)
+
+    if not provider_names:
+        raise RuntimeError(
+            "Не удалось получить список провайдеров G4F. Запрос остановлен, "
+            "чтобы случайно не обратиться к Copilot."
+        )
+
+    allowed_providers = []
+    for provider in provider_names:
+        provider_name = provider if isinstance(provider, str) else getattr(provider, "__name__", str(provider))
+        normalized_name = str(provider_name).replace("_", "").replace("-", "").lower()
+        if normalized_name in G4F_BLOCKED_PROVIDER_NAMES or "copilot" in normalized_name:
+            continue
+        allowed_providers.append(provider)
+
+    if not allowed_providers:
+        raise RuntimeError("В G4F не осталось доступных провайдеров после исключения Copilot.")
+
+    return IterListProvider(allowed_providers)
 groq_client = Groq(api_key=GROQ_API_KEY, timeout=45.0, max_retries=1) if GROQ_API_KEY else None
 
 try:
@@ -550,6 +587,7 @@ def ask_ai_with_history(user_id, prompt):
                 response = ai_client.chat.completions.create(
                     model=model_name,
                     messages=messages_to_send,
+                    provider=get_g4f_non_copilot_provider(),
                     timeout=30
                 )
                 if response and response.choices:
@@ -619,7 +657,8 @@ def generate_kira_text():
         try:
             response = ai_client.chat.completions.create(
                 model=model_name,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
+                provider=get_g4f_non_copilot_provider()
             )
             answer = response.choices[0].message.content
             if answer:
@@ -669,7 +708,8 @@ def enhance_image_prompt(user_prompt):
             messages=[
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_prompt}
-            ]
+            ],
+            provider=get_g4f_non_copilot_provider()
         )
         result = enhanced.choices[0].message.content.strip()
         return result if result else user_prompt
