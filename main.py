@@ -96,7 +96,9 @@ if GEMINI_API_KEY:
         from PIL import Image
 
         gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        GEMINI_VISION_MODEL = "gemini-flash-latest"
+        # Stable production model supported by the Gemini Developer API.
+        # Can be overridden with GEMINI_MODEL if needed.
+        GEMINI_VISION_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
         print(f"✅ Gemini подключён: {GEMINI_VISION_MODEL}")
     except Exception as e:
         print(f"⚠️ Gemini недоступен: {e}")
@@ -647,30 +649,6 @@ def ask_gemini(prompt):
     return str(answer).strip()
 
 
-def generate_kira_text():
-    prompt = (
-        "Напиши красивый, искренний и оригинальный текст "
-        "о девушке по имени Кира. 3-5 предложений. "
-        "2-3 эмодзи. Без Markdown."
-    )
-    for model_name in ["auto"]:
-        try:
-            response = ai_client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                provider=get_g4f_non_copilot_provider()
-            )
-            answer = response.choices[0].message.content
-            if answer:
-                return clean_markdown(str(answer).strip())
-        except Exception:
-            pass
-    return "Кира — словно редкая виниловая пластинка с любимой музыкой. Она приносит с собой особый ритм и уют. ✨❤️"
-
-@bot.message_handler(commands=["kira"])
-def kira_cmd(message):
-    msg = bot.reply_to(message, "✨ Нахожу нужные слова...")
-    edit_or_send_long(message.chat.id, msg.message_id, generate_kira_text())
 
 def perform_web_search(query):
     results_text = ""
@@ -808,23 +786,23 @@ def clean_command_args(text, command_name):
 def help_cmd(message):
     stats["users"].add(message.chat.id)
     help_text = (
-        "Привет! Я ИИ-ассистент 🤖\n\n"
-        "Мои команды:\n\n"
-        "/weather <город> — прогноз погоды 🌤️\n"
+        "ИИ-ассистент\n\n"
+        "Возможности:\n"
+        "/weather <город> — погода\n"
         "/search <запрос> — поиск в интернете\n"
-        "/image <описание> — создать изображение (HD quality)\n"
-        "/file <запрос> — создать файл 📁\n"
-        "/gemini <запрос> — спросить Gemini\n"
-        "/fact [тема] — интересный факт\n"
-        "/code <задача> — работа с кодом\n"
-        "/sum <текст> — сделать выжимку\n"
+        "/image <описание> — генерация изображений\n"
+        "/file <запрос> — создание файлов\n"
+        "/gemini <запрос> — запрос к Gemini\n"
+        "/fact [тема] — поиск фактов\n"
+        "/code <задача> — помощь с программированием\n"
+        "/sum <текст> — краткое изложение\n"
         "/tr <текст> — перевод\n"
         "/fix <текст> — исправление текста\n"
-        "/tts <текст> — озвучка\n"
-        "/clear — очистить память\n"
-        "/neuroham — режим Нейрохама\n\n"
-        "Также можешь просто написать мне любой вопрос "
-        "или прислать документ (PDF, DOCX, XLSX и др.)."
+        "/tts <текст> — озвучивание текста\n"
+        "/clear — очистка истории диалога\n"
+        "/neuroham — переключение режима общения\n"
+        "/stats — статистика\n\n"
+        "Также доступны ответы на вопросы, анализ изображений и обработка документов."
     )
     bot.send_message(message.chat.id, help_text)
 
@@ -1260,7 +1238,14 @@ def handle_photo(message):
         file_info = bot.get_file(photo.file_id)
         file_data = bot.download_file(file_info.file_path)
 
+        # Gemini API ожидает MIME-тип, например image/jpeg, а не расширение jpg.
+        import mimetypes
+        mime_type = mimetypes.guess_type(file_info.file_path)[0] or "image/jpeg"
+        if not mime_type.startswith("image/"):
+            mime_type = "image/jpeg"
+
         image = Image.open(io.BytesIO(file_data))
+        image.verify()
 
         question = (message.caption or "").strip()
         if question:
@@ -1284,8 +1269,7 @@ def handle_photo(message):
             contents=[
                 genai_types.Part.from_bytes(
                     data=file_data,
-                    mime_type=file_info.file_path.rsplit(".", 1)[-1].lower()
-                    if "." in file_info.file_path else "image/jpeg"
+                    mime_type=mime_type
                 ),
                 prompt
             ]
