@@ -1264,16 +1264,50 @@ def handle_photo(message):
                 "Если какая-то деталь неразборчива, прямо скажи об этом."
             )
 
-        response = gemini_client.models.generate_content(
-            model=GEMINI_VISION_MODEL,
-            contents=[
-                genai_types.Part.from_bytes(
-                    data=file_data,
-                    mime_type=mime_type
-                ),
-                prompt
-            ]
-        )
+        # 503/429 и временные 5xx не означают ошибку изображения или API-ключа.
+        # Повторяем запрос с увеличивающейся паузой, прежде чем сообщать об ошибке.
+        request_contents = [
+            genai_types.Part.from_bytes(data=file_data, mime_type=mime_type),
+            prompt,
+        ]
+        response = None
+        retry_delays = (2, 4, 8)
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                response = gemini_client.models.generate_content(
+                    model=GEMINI_VISION_MODEL,
+                    contents=request_contents,
+                )
+                break
+            except Exception as api_error:
+                error_text = str(api_error).upper()
+                temporary_error = any(
+                    marker in error_text
+                    for marker in (
+                        "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED",
+                        "500", "INTERNAL", "502", "504", "DEADLINE_EXCEEDED",
+                    )
+                )
+                if not temporary_error or attempt >= len(retry_delays):
+                    raise
+                delay = retry_delays[attempt]
+                print(
+                    f"⚠️ Gemini временно недоступен; повтор {attempt + 1}/"
+                    f"{len(retry_delays)} через {delay} сек.: {api_error}"
+                )
+                try:
+                    bot.edit_message_text(
+                        f"Сервер распознавания временно перегружен. Повторяю запрос... "
+                        f"(попытка {attempt + 2}/{len(retry_delays) + 1})",
+                        message.chat.id,
+                        msg.message_id,
+                    )
+                except Exception:
+                    pass
+                time.sleep(delay)
+
+        if response is None:
+            raise RuntimeError("Gemini не ответил после повторных попыток.")
 
         answer = getattr(response, "text", None)
         if not answer or not str(answer).strip():
@@ -1288,11 +1322,16 @@ def handle_photo(message):
 
     except Exception as e:
         print(f"❌ Ошибка распознавания изображения: {e}")
-        edit_or_send_long(
-            message.chat.id,
-            msg.message_id,
-            f"❌ Не удалось распознать изображение: {e}"
-        )
+        error_text = str(e).upper()
+        if any(marker in error_text for marker in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL", "502", "504", "DEADLINE_EXCEEDED")):
+            user_error = (
+                "Сервис распознавания Gemini сейчас перегружен. "
+                "Я автоматически повторил запрос, но сервис всё ещё не отвечает. "
+                "Попробуй отправить изображение чуть позже."
+            )
+        else:
+            user_error = f"Не удалось распознать изображение: {e}"
+        edit_or_send_long(message.chat.id, msg.message_id, f"❌ {user_error}")
 
 
 @bot.message_handler(content_types=["document"])
