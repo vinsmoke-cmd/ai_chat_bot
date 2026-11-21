@@ -28,12 +28,21 @@ import g4f.models as g4f_models
 from groq import Groq
 from pypdf import PdfReader
 import docx
+from docx.shared import Pt as DocxPt
 import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from reportlab.pdfbase.ttfonts import TTFont
 
 try:
@@ -48,6 +57,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")            # необязательно: бесплатный токен Hugging Face
+ADMIN_ID = os.getenv("ADMIN_ID", "").strip()  # необязательно: ограничить /diag
 DATA_DIR = os.getenv("DATA_DIR", ".")
 TZ_OFFSET_HOURS = float(os.getenv("BOT_TZ_OFFSET", "5"))  # Ташкент = UTC+5
 
@@ -59,7 +70,7 @@ ai_client = Client()
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 AI_MAX_RESPONSE_LENGTH = 40000
-INLINE_CODE_LIMIT = 3500  # код длиннее отправляется файлом
+INLINE_CODE_LIMIT = 3500
 
 groq_client = Groq(api_key=GROQ_API_KEY, timeout=60.0, max_retries=1) if GROQ_API_KEY else None
 
@@ -74,32 +85,74 @@ except ImportError:
     TavilyClient = None
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TavilyClient and TAVILY_API_KEY else None
 
-# Gemini: цепочка моделей. Если одна недоступна/не найдена — пробуем следующую.
+# ── Gemini: модели определяются автоматически (список доступных для ключа) ──
 genai, genai_types, gemini_client = None, None, None
-GEMINI_MODELS = []
+GEMINI_PRO, GEMINI_FLASH = [], []
 DEAD_GEMINI = set()
+DEAD_GROQ = set()
+GEMINI_STATIC_PRO = ["gemini-2.5-pro"]
+GEMINI_STATIC_FLASH = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+
+
+def _model_rank(name):
+    m = re.search(r"gemini-(\d+(?:\.\d+)?)", name)
+    ver = float(m.group(1)) if m else 0.0
+    preview = 1 if re.search(r"preview|exp", name) else 0
+    lite = 1 if "lite" in name else 0
+    return (preview, lite, -ver, len(name))
+
+
+def build_gemini_lists():
+    """Запрашивает у API реальный список моделей и сортирует: стабильные и новые — первыми."""
+    global GEMINI_PRO, GEMINI_FLASH
+    found = []
+    try:
+        for m in gemini_client.models.list():
+            name = (getattr(m, "name", "") or "").replace("models/", "")
+            actions = getattr(m, "supported_actions", None) or []
+            low = name.lower()
+            if not low.startswith("gemini-"):
+                continue
+            if actions and "generateContent" not in actions:
+                continue
+            if any(x in low for x in ("image", "tts", "live", "embedding", "audio", "robotics",
+                                      "computer", "learnlm", "native", "thinking-exp")):
+                continue
+            found.append(name)
+    except Exception as e:
+        print(f"⚠️ Не удалось получить список моделей Gemini: {e}")
+    custom = os.getenv("GEMINI_MODEL", "").strip()
+    pros = sorted([n for n in found if "pro" in n.lower()], key=_model_rank)[:3]
+    flashes = sorted([n for n in found if "pro" not in n.lower()], key=_model_rank)[:4]
+    for n in GEMINI_STATIC_PRO:
+        if n not in pros:
+            pros.append(n)
+    for n in GEMINI_STATIC_FLASH:
+        if n not in flashes:
+            flashes.append(n)
+    if custom:
+        (pros if "pro" in custom.lower() else flashes).insert(0, custom)
+    GEMINI_PRO = list(dict.fromkeys(pros))
+    GEMINI_FLASH = list(dict.fromkeys(flashes))
+
+
 if GEMINI_API_KEY:
     try:
         from google import genai
         from google.genai import types as genai_types
 
         gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        _custom = os.getenv("GEMINI_MODEL", "").strip()
-        for _m in ([_custom] if _custom else []) + ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]:
-            if _m and _m not in GEMINI_MODELS:
-                GEMINI_MODELS.append(_m)
-        print(f"✅ Gemini подключён: {GEMINI_MODELS}")
+        build_gemini_lists()
+        print(f"✅ Gemini pro: {GEMINI_PRO} | flash: {GEMINI_FLASH}")
     except Exception as e:
         print(f"⚠️ Gemini недоступен: {e}")
         genai, genai_types, gemini_client = None, None, None
 
-GROQ_VISION_MODELS = [m.strip() for m in os.getenv(
-    "GROQ_VISION_MODELS", "meta-llama/llama-4-scout-17b-16e-instruct").split(",") if m.strip()]
-
-user_histories = {}   # user_id -> [{"role","content"}, ...] (без system)
+user_histories = {}
 user_modes = {}
 image_prompts = {}
 stats = {"users": set(), "images_generated": 0, "files_generated": 0, "voice_messages": 0}
+
 
 # ════════════════════════════════════════════════════════════════
 #  G4F без Copilot
@@ -126,14 +179,15 @@ def get_g4f_non_copilot_provider():
 
 
 # ════════════════════════════════════════════════════════════════
-#  ЕДИНЫЙ ВЫЗОВ LLM (Groq → Gemini → G4F), всё бесплатное
+#  ЕДИНЫЙ ВЫЗОВ LLM (всё бесплатное)
 # ════════════════════════════════════════════════════════════════
 CHAINS = {
-    "chat": [("groq", "openai/gpt-oss-120b"), ("groq", "openai/gpt-oss-20b"),
-             ("groq", "llama-3.3-70b-versatile"), ("gemini", None), ("g4f", "auto")],
-    "code": [("groq", "openai/gpt-oss-120b"), ("gemini", None), ("groq", "qwen/qwen3-32b"),
+    "chat": [("groq", "openai/gpt-oss-120b"), ("groq", "openai/gpt-oss-20b"), ("gemini", "flash"),
              ("groq", "llama-3.3-70b-versatile"), ("g4f", "auto")],
-    "fast": [("groq", "openai/gpt-oss-20b"), ("gemini", None), ("g4f", "auto")],
+    # Лучшие модели: сначала Gemini Pro (если доступен на бесплатном ключе), затем GPT-OSS 120B.
+    "best": [("gemini", "pro"), ("groq", "openai/gpt-oss-120b"), ("gemini", "flash"),
+             ("groq", "qwen/qwen3-32b"), ("groq", "llama-3.3-70b-versatile"), ("g4f", "auto")],
+    "fast": [("groq", "openai/gpt-oss-20b"), ("gemini", "flash"), ("g4f", "auto")],
 }
 
 TRANSIENT_MARKERS = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "500", "INTERNAL",
@@ -145,53 +199,65 @@ def is_transient(err):
     return any(m in s for m in TRANSIENT_MARKERS)
 
 
+def short_err(e, n=140):
+    return re.sub(r"\s+", " ", str(e))[:n]
+
+
 def strip_think(text):
     return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
 
 
-def gemini_call(contents, system=None, max_tokens=4096, temperature=0.7, tries=2, on_retry=None):
-    """Вызов Gemini с перебором моделей и повторами при временных ошибках."""
+def gemini_models(tier):
+    if tier == "pro":
+        return GEMINI_PRO
+    if tier == "flash":
+        return GEMINI_FLASH
+    return GEMINI_FLASH + GEMINI_PRO
+
+
+def gemini_call(contents, system=None, max_tokens=4096, temperature=0.7, tries=2, on_retry=None, tier="flash"):
     if not gemini_client:
-        raise RuntimeError("Gemini не подключён")
-    last_error = None
-    for model in GEMINI_MODELS:
+        raise RuntimeError("Gemini не подключён (нет GEMINI_API_KEY)")
+    errs = []
+    for model in gemini_models(tier):
         if model in DEAD_GEMINI:
             continue
-        for attempt in range(tries):
+        attempts = 1 if "pro" in model.lower() else tries
+        for attempt in range(attempts):
             try:
                 cfg = genai_types.GenerateContentConfig(
                     system_instruction=system, max_output_tokens=max_tokens, temperature=temperature)
                 resp = gemini_client.models.generate_content(model=model, contents=contents, config=cfg)
                 text = (getattr(resp, "text", None) or "").strip()
-                if not text:
-                    last_error = RuntimeError(f"{model}: пустой ответ")
-                    break
                 finish = "stop"
                 try:
                     if "MAX_TOKENS" in str(resp.candidates[0].finish_reason).upper():
                         finish = "length"
                 except Exception:
                     pass
+                if not text:
+                    errs.append(f"{model}: пустой ответ ({finish})")
+                    break
                 return text, finish
             except Exception as e:
-                last_error = e
                 s = str(e).upper()
-                if "404" in s or "NOT_FOUND" in s:
+                errs.append(f"{model}: {short_err(e, 100)}")
+                if "404" in s or "NOT_FOUND" in s or "LIMIT: 0" in s or "PERMISSION_DENIED" in s:
                     DEAD_GEMINI.add(model)
-                    print(f"⚠️ Gemini модель недоступна, исключаю: {model}")
+                    print(f"⚠️ Gemini {model} недоступна для этого ключа — исключаю")
                     break
-                if is_transient(e) and attempt < tries - 1:
-                    delay = 2 * (attempt + 1)
-                    print(f"⚠️ Gemini {model} временная ошибка, повтор через {delay}с: {e}")
+                if is_transient(e) and attempt < attempts - 1:
+                    delay = 3 * (attempt + 1)
+                    print(f"⚠️ Gemini {model} временная ошибка, повтор через {delay}с")
                     if on_retry:
                         try:
-                            on_retry(attempt + 2, tries)
+                            on_retry(attempt + 2, attempts)
                         except Exception:
                             pass
                     time.sleep(delay)
                     continue
                 break
-    raise last_error or RuntimeError("Gemini: нет доступных моделей")
+    raise RuntimeError("Gemini: " + "; ".join(errs[-3:]) if errs else "Gemini: нет доступных моделей")
 
 
 def _groq_call(model, messages, max_tokens, timeout, temperature, effort):
@@ -214,30 +280,31 @@ def _groq_call(model, messages, max_tokens, timeout, temperature, effort):
 
 
 def call_llm(messages, chain="chat", max_tokens=3000, timeout=45, temperature=0.6, effort="medium"):
-    """messages: список с первым system-сообщением. Возвращает (text, finish_reason)."""
+    """messages: первым идёт system. Возвращает (text, finish_reason)."""
     errors = []
     system = messages[0]["content"] if messages and messages[0]["role"] == "system" else None
     convo = messages[1:] if system is not None else messages
+    gem_tokens = min(max(max_tokens * 2, 4096), 32768)
 
     for provider, model in CHAINS[chain]:
         try:
             if provider == "groq":
-                if not groq_client:
+                if not groq_client or model in DEAD_GROQ:
                     continue
                 print(f"🔄 Groq → {model}")
                 text, finish = _groq_call(model, messages, max_tokens, timeout, temperature, effort)
             elif provider == "gemini":
                 if not gemini_client:
                     continue
-                print("🔄 Gemini (текст)")
+                print(f"🔄 Gemini ({model})")
                 contents = [
                     genai_types.Content(
                         role="model" if m["role"] == "assistant" else "user",
                         parts=[genai_types.Part.from_text(text=m["content"])])
                     for m in convo
                 ]
-                text, finish = gemini_call(contents, system=system, max_tokens=max(max_tokens, 4096),
-                                           temperature=temperature)
+                text, finish = gemini_call(contents, system=system, max_tokens=gem_tokens,
+                                           temperature=temperature, tier=model)
             else:
                 print("🔄 G4F → auto")
                 resp = ai_client.chat.completions.create(
@@ -249,9 +316,13 @@ def call_llm(messages, chain="chat", max_tokens=3000, timeout=45, temperature=0.
                 return text.strip(), finish
             errors.append(f"{provider}/{model}: пустой ответ")
         except Exception as e:
-            print(f"❌ {provider}/{model}: {e}")
-            errors.append(f"{provider}/{model}: {e}")
-    raise RuntimeError("Все модели недоступны: " + " | ".join(errors[-3:]))
+            print(f"❌ {provider}/{model}: {short_err(e, 300)}")
+            errors.append(f"{provider}/{model}: {short_err(e, 100)}")
+            low = str(e).lower()
+            if provider == "groq" and "model" in low and any(
+                    k in low for k in ("decommission", "does not exist", "not_found", "not found")):
+                DEAD_GROQ.add(model)
+    raise RuntimeError("Все модели недоступны: " + " | ".join(errors[-4:]))
 
 
 # ════════════════════════════════════════════════════════════════
@@ -284,19 +355,41 @@ NEUROHAM_SYSTEM = (
     "сильнее красных, поэтому синий приходит к тебе со всех сторон неба."
 )
 
+PLAN_SYSTEM = (
+    "Ты архитектор программного обеспечения уровня staff engineer. Составь подробный технический план реализации "
+    "задачи. Без кода. Структура: 1) цель и ключевые требования (явные и неявные); 2) полный список функций, "
+    "включая уместные дополнительные возможности, которых ждёт опытный пользователь; 3) структура: файлы, модули, "
+    "классы, функции; 4) зависимости (только проверенные, существующие библиотеки); 5) граничные случаи и обработка "
+    "ошибок; 6) UX/интерфейс; 7) что проверить. До 450 слов. Язык — как у пользователя."
+)
+
 CODE_SYSTEM = (
-    "Ты старший программист с большим опытом. Твоя задача — выдать полностью рабочий, готовый к запуску код.\n"
+    "Ты ведущий программист уровня staff engineer. Пиши код качества production, как лучшие модели мира.\n"
     "ПРАВИЛА:\n"
-    "1. Сначала молча продумай архитектуру, граничные случаи и зависимости, затем пиши код.\n"
-    "2. Никаких заглушек: запрещены TODO, pass вместо логики, комментарии вроде '... остальной код ...'. "
-    "Все импорты и вспомогательные функции должны быть на месте.\n"
-    "3. Если просят исправить или изменить существующий код — верни ПОЛНЫЙ обновлённый файл целиком, а не фрагмент или diff.\n"
-    "4. Обрабатывай ошибки и пустые/некорректные входные данные. Пиши читаемо, с краткими комментариями.\n"
-    "5. Каждый файл — в отдельном блоке из трёх обратных кавычек с указанием языка. "
-    "Если файлов несколько, перед каждым блоком напиши одну строку с именем файла.\n"
-    "6. После кода — короткое пояснение (до 6 строк): что делает, как запустить, какие библиотеки установить. "
+    "1. Реализуй задачу полностью и с запасом: не минимальный пример, а законченный продукт с продуманной "
+    "архитектурой. Не экономь на объёме: небольшая утилита — обычно 150+ строк, серьёзный проект — 400-1000+ строк.\n"
+    "2. Запрещены заглушки: TODO, pass вместо логики, 'остальной код аналогично', многоточия вместо кода. "
+    "Все импорты, константы и вспомогательные функции на месте.\n"
+    "3. Качество: чёткая структура, понятные имена, типизация и docstring там, где это уместно, обработка ошибок и "
+    "граничных случаев, валидация входных данных, логирование, конфигурация через константы или переменные окружения.\n"
+    "4. Добавляй то, что опытный пользователь ждёт по умолчанию, даже если не просил: удобный интерфейс или CLI, "
+    "понятные сообщения об ошибках, безопасные значения по умолчанию.\n"
+    "5. Для веб-страниц: современный, красивый, адаптивный дизайн, аккуратная типографика, плавные анимации, "
+    "доступность, всё в одном файле, если не сказано иное.\n"
+    "6. Если просят исправить или изменить существующий код — верни ПОЛНЫЙ обновлённый файл целиком, не diff.\n"
+    "7. Каждый файл — в отдельном блоке из трёх обратных кавычек с языком. Если файлов несколько, перед каждым "
+    "блоком напиши строку с именем файла.\n"
+    "8. После кода — краткое пояснение (до 8 строк): как запустить, какие библиотеки установить, что умеет. "
     "Пояснение на языке пользователя, без Markdown-разметки вне блоков кода.\n"
-    "7. Не придумывай несуществующие функции и библиотеки; используй проверенные API."
+    "9. Используй только реально существующие API и библиотеки; не выдумывай функции."
+)
+
+REVIEW_PROMPT = (
+    "Проведи строгое ревью своего решения как требовательный senior-инженер. Проверь: соответствие ВСЕМ требованиям "
+    "задачи, баги, пропущенные граничные случаи, обработку ошибок, безопасность, недоделки и места, где решение "
+    "выглядит сырым или слишком коротким, несуществующие API. Затем верни ПОЛНЫЙ улучшенный итоговый ответ целиком: "
+    "весь код всех файлов (не фрагменты), доработанный и расширенный там, где нужно, с тем же форматом блоков и "
+    "кратким пояснением. Если всё идеально — всё равно верни полный итоговый код."
 )
 
 VISION_SYSTEM = (
@@ -359,7 +452,7 @@ def ask_ai_with_history(user_id, prompt, store=True, chain="chat", max_tokens=30
 
 
 # ════════════════════════════════════════════════════════════════
-#  ГЕНЕРАЦИЯ КОДА (долго, но качественно: проверка + автоисправление)
+#  ГЕНЕРАЦИЯ КОДА: план → написание → ревью и доработка → проверка
 # ════════════════════════════════════════════════════════════════
 LANG_EXT = {
     "python": "py", "py": "py", "python3": "py", "javascript": "js", "js": "js", "typescript": "ts",
@@ -391,8 +484,11 @@ def merge_continuation(text, more):
     return text + more
 
 
+def code_size(text):
+    return sum(len(p["content"]) for p in extract_code_blocks(text) if p["type"] == "code")
+
+
 def find_code_errors(text):
-    """Проверяет блоки кода: Python/JSON синтаксис и незакрытые ```."""
     problems = []
     if text.count("```") % 2 == 1:
         problems.append("Блок кода не закрыт (ответ оборван).")
@@ -416,50 +512,86 @@ def find_code_errors(text):
     return "\n".join(problems)
 
 
-def generate_code(user_id, task, progress=None):
-    progress = progress or (lambda t: None)
-    system = CODE_SYSTEM
-    if is_ham(user_id):
-        system += ("\n8. Короткое пояснение после кода напиши в саркастичном стиле Нейрохама (без мата), "
-                   "но сам код должен быть безупречным и без шуток внутри.")
-    base = [{"role": "system", "content": system}] + history_tail(user_id, 6) + [{"role": "user", "content": task}]
-
-    progress("💻 Пишу код. Это может занять до пары минут...")
-    text, finish = call_llm(base, chain="code", max_tokens=8000, timeout=150, temperature=0.2, effort="high")
-
+def _write_full(messages, progress, label):
+    """Один полный проход генерации с автодописыванием при обрыве."""
+    text, finish = call_llm(messages, chain="best", max_tokens=8000, timeout=170, temperature=0.25, effort="high")
     rounds = 0
-    while finish == "length" and rounds < 3:
+    while finish == "length" and rounds < 4:
         rounds += 1
-        progress(f"💻 Код длинный, дописываю часть {rounds + 1}...")
-        cont = base + [
+        progress(f"{label} (часть {rounds + 1}, код длинный)...")
+        cont = messages + [
             {"role": "assistant", "content": text},
             {"role": "user", "content": "Продолжи строго с места обрыва. Не повторяй уже написанное и не пиши "
                                         "вступлений. Если обрыв внутри блока кода — продолжай код без нового "
                                         "открывающего ```."},
         ]
-        more, finish = call_llm(cont, chain="code", max_tokens=8000, timeout=150, temperature=0.2, effort="medium")
+        more, finish = call_llm(cont, chain="best", max_tokens=8000, timeout=170, temperature=0.25, effort="medium")
         text = merge_continuation(text, more)
+    return text, finish
 
+
+def generate_code(user_id, task, progress=None, use_history=True):
+    progress = progress or (lambda t: None)
+    system = CODE_SYSTEM
+    if is_ham(user_id):
+        system += ("\n10. Короткое пояснение после кода напиши в саркастичном стиле Нейрохама (без мата), "
+                   "но сам код должен быть безупречным и без шуток внутри.")
+    hist = history_tail(user_id, 6) if use_history else []
+
+    # 1) План (пропускаем, если пользователь прислал готовый код на доработку)
+    plan = ""
+    if "```" not in task and len(task) < 6000:
+        progress("🧠 Продумываю архитектуру и план...")
+        try:
+            plan, _ = call_llm(
+                [{"role": "system", "content": PLAN_SYSTEM}, {"role": "user", "content": task}],
+                chain="best", max_tokens=1800, timeout=90, temperature=0.3, effort="medium")
+        except Exception as e:
+            print(f"⚠️ План не получен: {e}")
+
+    user_msg = task
+    if plan:
+        user_msg = (f"{task}\n\nТЕХНИЧЕСКИЙ ПЛАН (реализуй полностью и без сокращений):\n{plan}\n\n"
+                    "Требования к качеству: уровень production, объём — столько, сколько нужно для полной "
+                    "реализации плана; не урезай решение ради краткости.")
+    base = [{"role": "system", "content": system}] + hist + [{"role": "user", "content": user_msg}]
+
+    # 2) Написание
+    progress("💻 Пишу код. Это может занять несколько минут...")
+    text, finish = _write_full(base, progress, "💻 Дописываю")
+
+    # 3) Ревью и доработка
+    progress("🔍 Делаю ревью и довожу до ума...")
+    try:
+        review_msgs = base + [{"role": "assistant", "content": text}, {"role": "user", "content": REVIEW_PROMPT}]
+        improved, fin2 = _write_full(review_msgs, progress, "🔍 Дописываю доработку")
+        if (fin2 == "stop" and not find_code_errors(improved)
+                and code_size(improved) >= 0.85 * max(code_size(text), 1)):
+            text = improved
+        else:
+            print("ℹ️ Доработка отклонена (обрыв/ошибка/сокращение) — оставляю первую версию")
+    except Exception as e:
+        print(f"⚠️ Ревью не удалось: {e}")
+
+    # 4) Проверка синтаксиса и автоисправление
     for attempt in range(2):
         errors = find_code_errors(text)
         if not errors:
             break
-        progress(f"🔧 Проверка нашла проблему, исправляю (попытка {attempt + 1}/2)...")
+        progress(f"🔧 Исправляю ошибки (попытка {attempt + 1}/2)...")
         fix = base + [
             {"role": "assistant", "content": text},
             {"role": "user", "content": f"В твоём коде найдены ошибки:\n{errors}\n\nВерни ПОЛНЫЙ исправленный "
                                         "ответ целиком (все файлы полностью) в том же формате."},
         ]
         try:
-            new_text, new_finish = call_llm(fix, chain="code", max_tokens=8000, timeout=150,
-                                            temperature=0.1, effort="high")
+            new_text, fin = _write_full(fix, progress, "🔧 Дописываю исправление")
         except Exception as e:
             print(f"⚠️ Автоисправление не удалось: {e}")
             break
-        if new_finish == "length":
+        if fin == "length":
             break
         text = new_text
-
     return text
 
 
@@ -492,15 +624,22 @@ def execute_code_request(message, task, edit_message_id=None):
         send_ai_response(chat_id, answer)
     except Exception as e:
         print(f"❌ Ошибка генерации кода: {e}")
-        edit_or_send_long(chat_id, msg_id, "Не удалось сгенерировать код: все модели сейчас недоступны "
-                                           "или перегружены. Попробуй ещё раз через минуту.")
+        edit_or_send_long(chat_id, msg_id, f"Не удалось сгенерировать код: {short_err(e, 300)}\n"
+                                           "Попробуй ещё раз через минуту.")
+
+
+def main_code_from(text):
+    blocks = [p for p in extract_code_blocks(text) if p["type"] == "code"]
+    if not blocks:
+        return strip_code_fence(text)
+    return max(blocks, key=lambda p: len(p["content"]))["content"]
 
 
 # ════════════════════════════════════════════════════════════════
-#  АНАЛИЗ ИЗОБРАЖЕНИЙ
+#  АНАЛИЗ ИЗОБРАЖЕНИЙ (Gemini → Groq vision → Pollinations vision)
 # ════════════════════════════════════════════════════════════════
 def normalize_image(data):
-    """Приводит любое изображение к аккуратному JPEG (EXIF-поворот, до 1920px, <3 МБ)."""
+    """Любое изображение → аккуратный JPEG (EXIF-поворот, до 1920px, <3 МБ)."""
     if not Image:
         return data, "image/jpeg"
     try:
@@ -526,10 +665,85 @@ def normalize_image(data):
     return out, "image/jpeg"
 
 
+_groq_vision_cache = {"models": None}
+
+
+def groq_vision_models():
+    if _groq_vision_cache["models"] is not None:
+        return _groq_vision_cache["models"]
+    names = [m.strip() for m in os.getenv("GROQ_VISION_MODELS", "").split(",") if m.strip()]
+    try:
+        ids = [m.id for m in groq_client.models.list().data]
+        names += [i for i in ids if re.search(r"llama-4|vision|-vl|scout|maverick", i.lower())]
+    except Exception as e:
+        print(f"⚠️ Не удалось получить список моделей Groq: {e}")
+    names += ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
+    _groq_vision_cache["models"] = list(dict.fromkeys(names))
+    return _groq_vision_cache["models"]
+
+
+def vision_gemini(img_bytes, mime, system, prompt, progress=None):
+    def on_retry(attempt, total):
+        if progress:
+            progress(f"Сервер распознавания перегружен. Повторяю запрос... ({attempt}/{total})")
+    text, _ = gemini_call([genai_types.Part.from_bytes(data=img_bytes, mime_type=mime), prompt],
+                          system=system, max_tokens=8192, temperature=0.4, tries=3,
+                          on_retry=on_retry, tier="all")
+    return text
+
+
+def vision_groq(img_bytes, mime, system, prompt, progress=None):
+    if not groq_client:
+        raise RuntimeError("нет GROQ_API_KEY")
+    b64 = base64.b64encode(img_bytes).decode()
+    errs = []
+    for model in groq_vision_models():
+        if model in DEAD_GROQ:
+            continue
+        try:
+            resp = groq_client.chat.completions.create(
+                model=model, temperature=0.4, max_tokens=2048, timeout=60,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                    ]},
+                ])
+            text = strip_think(resp.choices[0].message.content or "")
+            if text:
+                return text
+            errs.append(f"{model}: пусто")
+        except Exception as e:
+            errs.append(f"{model}: {short_err(e, 90)}")
+            low = str(e).lower()
+            if "decommission" in low or "does not exist" in low or "not_found" in low:
+                DEAD_GROQ.add(model)
+    raise RuntimeError("; ".join(errs[-2:]) or "нет моделей")
+
+
+def vision_pollinations(img_bytes, mime, system, prompt, progress=None):
+    b64 = base64.b64encode(img_bytes).decode()
+    r = requests.post(
+        "https://text.pollinations.ai/openai",
+        json={"model": "openai", "max_tokens": 2000, "referrer": "telegram-bot",
+              "messages": [
+                  {"role": "system", "content": system},
+                  {"role": "user", "content": [
+                      {"type": "text", "text": prompt},
+                      {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]}]},
+        timeout=80)
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:100]}")
+    text = (r.json()["choices"][0]["message"]["content"] or "").strip()
+    if not text:
+        raise RuntimeError("пустой ответ")
+    return text
+
+
 def analyze_image(user_id, data, question, progress=None):
     img_bytes, mime = normalize_image(data)
     system = VISION_SYSTEM + (NEUROHAM_VISION_SUFFIX if is_ham(user_id) else "")
-
     if question:
         context = ""
         tail = history_tail(user_id, 4)
@@ -540,46 +754,23 @@ def analyze_image(user_id, data, question, progress=None):
     else:
         prompt = "Внимательно проанализируй изображение и дай полезный разбор."
 
-    errors = []
-
+    providers = []
     if gemini_client:
-        try:
-            def on_retry(attempt, total):
-                if progress:
-                    progress(f"Сервер распознавания перегружен. Повторяю запрос... ({attempt}/{total})")
-            text, _ = gemini_call(
-                [genai_types.Part.from_bytes(data=img_bytes, mime_type=mime), prompt],
-                system=system, max_tokens=4096, temperature=0.4, tries=3, on_retry=on_retry)
-            return text
-        except Exception as e:
-            print(f"⚠️ Gemini vision: {e}")
-            errors.append(f"Gemini: {e}")
-
+        providers.append(("Gemini", vision_gemini))
     if groq_client:
-        b64 = base64.b64encode(img_bytes).decode()
-        for model in GROQ_VISION_MODELS:
-            try:
-                if progress:
-                    progress("Пробую запасную модель распознавания...")
-                resp = groq_client.chat.completions.create(
-                    model=model, temperature=0.4, max_tokens=2048, timeout=60,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-                        ]},
-                    ])
-                text = strip_think(resp.choices[0].message.content or "")
-                if text:
-                    return text
-            except Exception as e:
-                print(f"⚠️ Groq vision {model}: {e}")
-                errors.append(f"Groq {model}: {e}")
+        providers.append(("Groq", vision_groq))
+    providers.append(("Pollinations", vision_pollinations))
 
-    if not gemini_client and not groq_client:
-        raise RuntimeError("Для анализа фото нужен GEMINI_API_KEY или GROQ_API_KEY.")
-    raise RuntimeError("Модели распознавания сейчас недоступны. " + (errors[-1] if errors else ""))
+    errors = []
+    for name, fn in providers:
+        try:
+            if progress and errors:
+                progress(f"Пробую запасной вариант распознавания ({name})...")
+            return fn(img_bytes, mime, system, prompt, progress)
+        except Exception as e:
+            print(f"⚠️ Vision {name}: {short_err(e, 300)}")
+            errors.append(f"{name}: {short_err(e, 110)}")
+    raise RuntimeError(" | ".join(errors))
 
 
 def process_image_message(message, file_id, caption):
@@ -611,11 +802,12 @@ def process_image_message(message, file_id, caption):
     except Exception as e:
         print(f"❌ Ошибка анализа изображения: {e}")
         edit_or_send_long(chat_id, msg.message_id,
-                          f"❌ Не удалось проанализировать изображение: {str(e)[:300]}\nПопробуй ещё раз чуть позже.")
+                          f"❌ Не удалось проанализировать изображение.\nПричина: {short_err(e, 400)}\n"
+                          "Команда /diag покажет, какой сервис не работает.")
 
 
 # ════════════════════════════════════════════════════════════════
-#  ФАЙЛЫ
+#  ФАЙЛЫ: чтение
 # ════════════════════════════════════════════════════════════════
 def extract_text_from_file(file_path):
     ext = file_path.split('.')[-1].lower()
@@ -666,23 +858,368 @@ def detect_file_format(request):
     text = str(request).lower()
     if any(w in text for w in ["excel", "эксель", "xlsx", "таблиц", "таблица", "умножени"]):
         return "xlsx"
-    if any(w in text for w in ["word", "docx", "документ word"]):
+    if any(w in text for w in ["word", "ворд", "docx", "документ word"]):
         return "docx"
     if any(w in text for w in ["pdf", "пдф"]):
         return "pdf"
-    if any(w in text for w in ["pptx", "powerpoint", "презентац"]):
+    if any(w in text for w in ["pptx", "powerpoint", "презентац", "слайд"]):
         return "pptx"
     if "csv" in text:
         return "csv"
     if "json" in text:
         return "json"
-    if any(w in text for w in [".py", "python файл", "python скрипт"]):
+    if any(w in text for w in [".py", "python файл", "python скрипт", "питон"]):
         return "py"
-    if any(w in text for w in ["html", "веб-страниц", "веб страниц"]):
+    if any(w in text for w in ["html", "веб-страниц", "веб страниц", "сайт", "лендинг"]):
         return "html"
     if "markdown" in text or ".md" in text:
         return "md"
     return "txt"
+
+
+def strip_code_fence(content):
+    content = (content or "").strip()
+    content = re.sub(r"^```[a-zA-Z0-9_+#.-]*[ \t]*\n", "", content)
+    content = re.sub(r"\n```\s*$", "", content)
+    return content.strip()
+
+
+def parse_json_loose(text):
+    text = strip_code_fence(text)
+    try:
+        return json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+    return None
+
+
+# ── Парсер «Markdown-подобного» текста для DOCX/PDF ──
+def parse_blocks(content):
+    blocks, lines, i = [], strip_code_fence(content).splitlines(), 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        if s.startswith("|") and s.count("|") >= 2:
+            rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                row = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                if not (row and all(re.fullmatch(r":?-+:?", c) for c in row if c) and any(row)):
+                    rows.append(row)
+                i += 1
+            if rows:
+                blocks.append(("table", rows))
+            continue
+        m = re.match(r"^(#{1,3})\s+(.*)", s)
+        if m:
+            blocks.append((f"h{len(m.group(1))}", m.group(2).strip()))
+        elif re.match(r"^[-*•]\s+", s):
+            blocks.append(("bullet", re.sub(r"^[-*•]\s+", "", s)))
+        elif re.match(r"^\d+[.)]\s+", s):
+            blocks.append(("num", re.sub(r"^\d+[.)]\s+", "", s)))
+        elif re.fullmatch(r"[-_=*]{3,}", s):
+            pass
+        else:
+            blocks.append(("p", s))
+        i += 1
+    return blocks
+
+
+def _add_inline(paragraph, text):
+    for idx, chunk in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+        if chunk:
+            run = paragraph.add_run(chunk)
+            run.bold = (idx % 2 == 1)
+
+
+def build_docx(content, path):
+    document = docx.Document()
+    base = document.styles["Normal"]
+    base.font.name = "Calibri"
+    base.font.size = DocxPt(11)
+    first_h1 = True
+    for kind, val in parse_blocks(content):
+        if kind in ("h1", "h2", "h3"):
+            level = int(kind[1])
+            if kind == "h1" and first_h1:
+                document.add_heading(re.sub(r"\*\*", "", val), level=0)
+                first_h1 = False
+            else:
+                document.add_heading(re.sub(r"\*\*", "", val), level=level)
+        elif kind == "bullet":
+            _add_inline(document.add_paragraph(style="List Bullet"), val)
+        elif kind == "num":
+            _add_inline(document.add_paragraph(style="List Number"), val)
+        elif kind == "table":
+            cols = max(len(r) for r in val)
+            table = document.add_table(rows=len(val), cols=cols)
+            try:
+                table.style = "Light Grid Accent 1"
+            except Exception:
+                table.style = "Table Grid"
+            for ri, row in enumerate(val):
+                for ci in range(cols):
+                    cell = table.cell(ri, ci)
+                    cell.text = ""
+                    para = cell.paragraphs[0]
+                    _add_inline(para, row[ci] if ci < len(row) else "")
+                    if ri == 0:
+                        for run in para.runs:
+                            run.bold = True
+            document.add_paragraph("")
+        else:
+            _add_inline(document.add_paragraph(), val)
+    document.save(path)
+
+
+def get_cyrillic_font(bold=False):
+    fname = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    if os.path.exists(fname):
+        return fname
+    candidates = (["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+                   "C:\\Windows\\Fonts\\arialbd.ttf"] if bold else
+                  ["C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\calibri.ttf",
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"])
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    urls = [f"https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/{fname}"]
+    if not bold:
+        urls.append("https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf")
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp, open(fname, 'wb') as f:
+                f.write(resp.read())
+            return fname
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки шрифта {url}: {e}")
+    return None
+
+
+def build_pdf(content, path):
+    regular = get_cyrillic_font()
+    bold_file = get_cyrillic_font(bold=True)
+    font, font_bold = "Helvetica", "Helvetica-Bold"
+    if regular:
+        try:
+            pdfmetrics.registerFont(TTFont("CyrFont", regular))
+            font = font_bold = "CyrFont"
+            if bold_file:
+                pdfmetrics.registerFont(TTFont("CyrFontBold", bold_file))
+                font_bold = "CyrFontBold"
+            registerFontFamily("CyrFont", normal="CyrFont", bold=font_bold, italic="CyrFont", boldItalic=font_bold)
+        except Exception as e:
+            print(f"⚠️ Ошибка регистрации шрифта: {e}")
+            font, font_bold = "Helvetica", "Helvetica-Bold"
+
+    styles = getSampleStyleSheet()
+    normal = ParagraphStyle("N", parent=styles["Normal"], fontName=font, fontSize=10.5, leading=15, spaceAfter=6)
+    h1 = ParagraphStyle("H1", parent=normal, fontName=font_bold, fontSize=22, leading=27, spaceAfter=12,
+                        textColor=colors.HexColor("#1F2A44"))
+    h2 = ParagraphStyle("H2", parent=normal, fontName=font_bold, fontSize=15, leading=20, spaceBefore=10,
+                        spaceAfter=6, textColor=colors.HexColor("#2E5C9A"))
+    h3 = ParagraphStyle("H3", parent=normal, fontName=font_bold, fontSize=12, leading=16, spaceBefore=6,
+                        spaceAfter=4)
+    bullet = ParagraphStyle("B", parent=normal, leftIndent=16, bulletIndent=4, spaceAfter=3)
+
+    def rl(text):
+        return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(text, quote=False))
+
+    story, num = [], 0
+    for kind, val in parse_blocks(content):
+        if kind != "num":
+            num = 0
+        if kind == "h1":
+            story.append(Paragraph(rl(val), h1))
+        elif kind == "h2":
+            story.append(Paragraph(rl(val), h2))
+        elif kind == "h3":
+            story.append(Paragraph(rl(val), h3))
+        elif kind == "bullet":
+            story.append(Paragraph(rl(val), bullet, bulletText="•"))
+        elif kind == "num":
+            num += 1
+            story.append(Paragraph(rl(val), bullet, bulletText=f"{num}."))
+        elif kind == "table":
+            cols = max(len(r) for r in val)
+            cell_style = ParagraphStyle("C", parent=normal, fontSize=9, leading=12, spaceAfter=0)
+            head_style = ParagraphStyle("CH", parent=cell_style, fontName=font_bold, textColor=colors.white)
+            data = [[Paragraph(rl(r[c] if c < len(r) else ""), head_style if ri == 0 else cell_style)
+                     for c in range(cols)] for ri, r in enumerate(val)]
+            table = Table(data, repeatRows=1, colWidths=[(A4[0] - 80) / cols] * cols)
+            table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E5C9A")),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#B8C4D6")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F5FA")]),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            story.append(table)
+            story.append(Spacer(1, 10))
+        else:
+            story.append(Paragraph(rl(val), normal))
+    if not story:
+        story.append(Paragraph("Пустой документ", normal))
+    SimpleDocTemplate(path, pagesize=A4, leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40).build(story)
+
+
+# ── PPTX с дизайном ──
+def build_pptx(spec, path):
+    DARK = RGBColor(0x1B, 0x26, 0x3B)
+    ACCENT = RGBColor(0x2E, 0x86, 0xDE)
+    LIGHT = RGBColor(0xF4, 0xF6, 0xFA)
+    TEXT = RGBColor(0x22, 0x2B, 0x3A)
+    WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    blank = prs.slide_layouts[6]
+
+    def rect(slide, l, t, w, h, color):
+        shp = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(l), Inches(t), Inches(w), Inches(h))
+        shp.fill.solid()
+        shp.fill.fore_color.rgb = color
+        shp.line.fill.background()
+        return shp
+
+    def textbox(slide, l, t, w, h, anchor=MSO_ANCHOR.TOP):
+        tb = slide.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        tf.vertical_anchor = anchor
+        return tf
+
+    title = str(spec.get("title") or "Презентация")
+    subtitle = str(spec.get("subtitle") or "")
+    s = prs.slides.add_slide(blank)
+    rect(s, 0, 0, 13.333, 7.5, DARK)
+    rect(s, 0.8, 3.05, 1.6, 0.09, ACCENT)
+    tf = textbox(s, 0.8, 1.3, 11.5, 1.7, MSO_ANCHOR.BOTTOM)
+    tf.text = title
+    tf.paragraphs[0].runs[0].font.size = Pt(46)
+    tf.paragraphs[0].runs[0].font.bold = True
+    tf.paragraphs[0].runs[0].font.color.rgb = WHITE
+    if subtitle:
+        tf2 = textbox(s, 0.8, 3.3, 11.5, 1.5)
+        tf2.text = subtitle
+        tf2.paragraphs[0].runs[0].font.size = Pt(22)
+        tf2.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xB8, 0xC7, 0xE0)
+
+    for idx, sl in enumerate(spec.get("slides", []), 1):
+        s = prs.slides.add_slide(blank)
+        rect(s, 0, 0, 13.333, 7.5, LIGHT)
+        rect(s, 0, 0, 13.333, 1.35, DARK)
+        rect(s, 0, 1.35, 13.333, 0.07, ACCENT)
+        tft = textbox(s, 0.7, 0.15, 11.4, 1.1, MSO_ANCHOR.MIDDLE)
+        tft.text = str(sl.get("title", ""))[:90]
+        tft.paragraphs[0].runs[0].font.size = Pt(32)
+        tft.paragraphs[0].runs[0].font.bold = True
+        tft.paragraphs[0].runs[0].font.color.rgb = WHITE
+        bullets = [str(b) for b in (sl.get("bullets") or [])][:8]
+        size = 24 if len(bullets) <= 4 else 20 if len(bullets) <= 6 else 17
+        tfb = textbox(s, 0.9, 1.9, 11.6, 5.0)
+        for bi, b in enumerate(bullets):
+            p = tfb.paragraphs[0] if bi == 0 else tfb.add_paragraph()
+            run = p.add_run()
+            run.text = "•  " + b
+            run.font.size = Pt(size)
+            run.font.color.rgb = TEXT
+            p.space_after = Pt(12)
+        tfn = textbox(s, 12.2, 6.9, 0.9, 0.4)
+        tfn.text = str(idx)
+        tfn.paragraphs[0].runs[0].font.size = Pt(12)
+        tfn.paragraphs[0].runs[0].font.color.rgb = ACCENT
+        if sl.get("notes"):
+            s.notes_slide.notes_text_frame.text = str(sl["notes"])
+    prs.save(path)
+
+
+def spec_from_text(content, request):
+    """Запасной вариант: превращает обычный текст в структуру слайдов."""
+    spec = {"title": str(request)[:80], "subtitle": "", "slides": []}
+    cur = None
+    for line in content.splitlines():
+        st = line.strip()
+        if not st:
+            continue
+        m = re.match(r"^(?:СЛАЙД\s*\d*\s*:|#{1,3}\s+)\s*(.*)", st, flags=re.IGNORECASE)
+        if m:
+            cur = {"title": m.group(1) or "Слайд", "bullets": []}
+            spec["slides"].append(cur)
+        else:
+            if cur is None:
+                cur = {"title": "Обзор", "bullets": []}
+                spec["slides"].append(cur)
+            cur["bullets"].append(re.sub(r"^[-*•\d.)\s]+", "", st))
+    return spec
+
+
+# ── XLSX с оформлением ──
+def _conv_cell(v):
+    v = v.strip()
+    if v.startswith("="):
+        return v
+    if re.fullmatch(r"-?(0|[1-9]\d*)([.,]\d+)?", v.replace(" ", "")):
+        n = v.replace(" ", "").replace(",", ".")
+        return float(n) if "." in n else int(n)
+    return v
+
+
+def build_xlsx(content, path):
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    sections, cur_title, cur_rows = [], "Данные", []
+    for line in strip_code_fence(content).splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        m = re.match(r"^#{1,3}\s*(?:Лист:?\s*)?(.+)$", s)
+        if m:
+            if cur_rows:
+                sections.append((cur_title, cur_rows))
+            cur_title, cur_rows = m.group(1).strip(), []
+            continue
+        if re.fullmatch(r"[|\-:\s]+", s):
+            continue
+        if "|" in s:
+            cells = [c.strip() for c in s.strip("|").split("|")]
+        elif "\t" in s:
+            cells = [c.strip() for c in s.split("\t")]
+        elif ";" in s:
+            cells = [c.strip() for c in s.split(";")]
+        else:
+            cells = [s]
+        cur_rows.append(cells)
+    if cur_rows:
+        sections.append((cur_title, cur_rows))
+    if not sections:
+        sections = [("Данные", [["Пусто"]])]
+
+    thin = Side(style="thin", color="B8C4D6")
+    for title, rows in sections:
+        ws = wb.create_sheet(re.sub(r"[\[\]:*?/\\]", "", title)[:30] or "Лист")
+        for r_i, row in enumerate(rows, 1):
+            for c_i, val in enumerate(row, 1):
+                cell = ws.cell(row=r_i, column=c_i, value=_conv_cell(val))
+                cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                if r_i == 1:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="2E5C9A")
+        for c_i in range(1, max(len(r) for r in rows) + 1):
+            longest = max((len(str(r[c_i - 1])) for r in rows if len(r) >= c_i), default=8)
+            ws.column_dimensions[get_column_letter(c_i)].width = min(60, max(10, longest + 3))
+        ws.freeze_panes = "A2"
+        if len(rows) > 1:
+            ws.auto_filter.ref = ws.dimensions
+    wb.save(path)
 
 
 def make_multiplication_table_xlsx(output_path):
@@ -690,101 +1227,94 @@ def make_multiplication_table_xlsx(output_path):
     sheet = workbook.active
     sheet.title = "Таблица умножения"
     sheet.cell(row=1, column=1, value="×")
+    head_fill = PatternFill("solid", fgColor="2E5C9A")
     for number in range(1, 11):
-        sheet.cell(row=1, column=number + 1, value=number)
-        sheet.cell(row=number + 1, column=1, value=number)
+        for cell in (sheet.cell(row=1, column=number + 1, value=number),
+                     sheet.cell(row=number + 1, column=1, value=number)):
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = head_fill
+    sheet["A1"].fill = head_fill
+    sheet["A1"].font = Font(bold=True, color="FFFFFF")
     for row in range(1, 11):
         for column in range(1, 11):
             sheet.cell(row=row + 1, column=column + 1, value=row * column)
-    sheet.column_dimensions["A"].width = 8
-    for column in range(2, 12):
-        sheet.column_dimensions[openpyxl.utils.get_column_letter(column)].width = 10
+    for column in range(1, 12):
+        sheet.column_dimensions[get_column_letter(column)].width = 8
     workbook.save(output_path)
 
 
-def strip_code_fence(content):
-    content = content.strip()
-    content = re.sub(r"^```[a-zA-Z0-9_+#.-]*[ \t]*\n", "", content)
-    content = re.sub(r"\n```\s*$", "", content)
-    return content
+# ── Генерация содержимого ──
+DOC_SYSTEM = (
+    "Ты профессиональный автор, аналитик и редактор уровня лучших консультантов. Создаёшь глубокие, структурные, "
+    "конкретные документы без воды: чёткие заголовки, логика, примеры, цифры и факты там, где они уместны. "
+    "Выводи только содержимое документа, без вступлений и комментариев."
+)
 
 
 def generate_ai_file_content(request, extension, user_id):
-    format_instructions = {
-        "txt": "Создай обычный текст.",
-        "md": "Создай Markdown-документ.",
-        "csv": "Создай данные CSV. Колонки разделяй точкой с запятой. Только данные.",
+    # Код и веб-страницы — через полный конвейер (план → написание → ревью → проверка).
+    if extension in ("py", "html"):
+        task = (f"{request}\n\nВерни ОДИН полный файл в одном блоке кода (расширение .{extension}). "
+                "Решение должно быть большим, продуманным и законченным.")
+        return main_code_from(generate_code(user_id, task, use_history=False))
+
+    if extension == "pptx":
+        prompt = (
+            f"Запрос пользователя: {request}\n\nСоздай содержательную презентацию на 9-12 слайдов: титульный, "
+            "структурные слайды с конкретными фактами, цифрами и примерами, итоговый слайд. "
+            "Верни ТОЛЬКО JSON без пояснений такого вида:\n"
+            '{"title": "...", "subtitle": "...", "slides": [{"title": "...", "bullets": ["3-6 ёмких тезисов"], '
+            '"notes": "текст выступления 2-4 предложения"}]}')
+        text, _ = call_llm([{"role": "system", "content": DOC_SYSTEM}, {"role": "user", "content": prompt}],
+                           chain="best", max_tokens=6000, timeout=120, temperature=0.5, effort="medium")
+        return text
+
+    if extension == "xlsx":
+        prompt = (
+            f"Запрос пользователя: {request}\n\nСоздай полезную, продуманную таблицу. Первая строка — заголовки. "
+            "Колонки разделяй символом |. Если нужно несколько листов — начинай каждый со строки '## Лист: Название'. "
+            "Числа пиши без единиц измерения в ячейке (единицы — в заголовке). Где уместно, используй формулы "
+            "Excel вида =SUM(B2:B10) (строка, начинающаяся с =). Данные реалистичные и достаточно подробные "
+            "(не менее 10-15 строк, если уместно). Без пояснений.")
+        text, _ = call_llm([{"role": "system", "content": DOC_SYSTEM}, {"role": "user", "content": prompt}],
+                           chain="best", max_tokens=5000, timeout=120, temperature=0.4, effort="medium")
+        return text
+
+    if extension in ("docx", "pdf", "md", "txt"):
+        prompt = (
+            f"Запрос пользователя: {request}\n\nНапиши полноценный документ. Используй Markdown-структуру: "
+            "# Заголовок документа, ## разделы, ### подразделы, списки (- пункт), нумерованные списки, таблицы в "
+            "формате Markdown (| a | b |) где уместно, **жирный** для ключевого. Объём соответствует задаче и "
+            "не поверхностный: для отчёта, статьи, реферата, плана, инструкции — не менее 1000 слов; "
+            "для резюме, письма, договора — по стандартам жанра, но полно и профессионально.")
+        text, finish = call_llm([{"role": "system", "content": DOC_SYSTEM}, {"role": "user", "content": prompt}],
+                                chain="best", max_tokens=8000, timeout=170, temperature=0.5, effort="medium")
+        rounds = 0
+        while finish == "length" and rounds < 2:
+            rounds += 1
+            more, finish = call_llm(
+                [{"role": "system", "content": DOC_SYSTEM}, {"role": "user", "content": prompt},
+                 {"role": "assistant", "content": text},
+                 {"role": "user", "content": "Продолжи строго с места обрыва, не повторяя написанное. "
+                                             "Заверши документ."}],
+                chain="best", max_tokens=8000, timeout=170, temperature=0.5, effort="medium")
+            text += "\n" + more
+        return text
+
+    instructions = {
+        "csv": "Создай данные CSV. Колонки разделяй точкой с запятой. Первая строка — заголовки. Только данные.",
         "json": "Создай корректный JSON. Ответ должен содержать только JSON.",
-        "html": "Создай полноценный HTML-документ. Ответ должен содержать только HTML-код.",
-        "py": "Создай полноценный рабочий Python-код. Ответ должен содержать только код.",
-        "docx": "Подготовь содержимое для документа Word. Используй понятные заголовки (строки с # ) и абзацы.",
-        "pdf": "Подготовь содержимое для PDF-документа. Используй понятные заголовки и абзацы.",
-        "pptx": "Подготовь содержимое презентации. Разделяй слайды строкой вида: СЛАЙД: Название.",
-        "xlsx": "Подготовь табличные данные. Каждая строка — строка таблицы. Колонки разделяй символом |."
     }
-    instruction = format_instructions.get(extension, format_instructions["txt"])
-    prompt = (f"Запрос пользователя: {request}\n\nФормат файла: {extension}\n\n"
-              f"Инструкция: {instruction}\n\nНе добавляй лишних пояснений.")
-    is_code = extension in ("py", "html", "json")
-    system = ("Ты генератор содержимого файлов. Выводи только содержимое файла без вступлений и пояснений. "
-              "Содержимое должно быть полным, качественным и готовым к использованию.")
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    text, finish = call_llm(messages, chain="code" if is_code else "chat",
-                            max_tokens=8000 if is_code else 4000, timeout=150 if is_code else 60,
-                            temperature=0.2 if is_code else 0.6, effort="high" if is_code else "medium")
-    text = text.strip()
-    if extension == "py":
-        code = strip_code_fence(text)
-        for _ in range(2):
-            try:
-                ast.parse(code)
-                break
-            except SyntaxError as e:
-                fix = messages + [{"role": "assistant", "content": text}, {
-                    "role": "user",
-                    "content": f"В коде синтаксическая ошибка: строка {e.lineno}: {e.msg}. "
-                               "Верни полный исправленный код, только код."}]
-                try:
-                    text, _ = call_llm(fix, chain="code", max_tokens=8000, timeout=150, temperature=0.1,
-                                       effort="high")
-                    code = strip_code_fence(text)
-                except Exception:
-                    break
-        text = code
+    prompt = f"Запрос: {request}\n\n{instructions.get(extension, 'Создай текст.')} Без пояснений."
+    text, _ = call_llm([{"role": "system", "content": DOC_SYSTEM}, {"role": "user", "content": prompt}],
+                       chain="chat", max_tokens=4000, timeout=90, temperature=0.4)
     return text
-
-
-def get_cyrillic_font():
-    font_path = "DejaVuSans.ttf"
-    if os.path.exists(font_path):
-        return font_path
-    system_fonts = [
-        "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\calibri.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"
-    ]
-    for sys_f in system_fonts:
-        if os.path.exists(sys_f):
-            return sys_f
-    urls = [
-        "https://raw.githubusercontent.com/dejavu-fonts/dejavu-fonts/master/ttf/DejaVuSans.ttf",
-        "https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.1.66/fonts/Roboto/Roboto-Regular.ttf"
-    ]
-    for url in urls:
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=10) as resp, open(font_path, 'wb') as f:
-                f.write(resp.read())
-            return font_path
-        except Exception as e:
-            print(f"⚠️ Ошибка загрузки шрифта {url}: {e}")
-    return None
 
 
 def create_generated_file(request, user_id):
     extension = detect_file_format(request)
     temp_directory = tempfile.mkdtemp(prefix="telegram_generated_")
-    request_lower = str(request).lower()
-    if extension == "xlsx" and ("умножени" in request_lower):
+    if extension == "xlsx" and "умножени" in str(request).lower():
         filename = safe_filename("Таблица_умножения", "xlsx")
         path = os.path.join(temp_directory, filename)
         make_multiplication_table_xlsx(path)
@@ -796,80 +1326,16 @@ def create_generated_file(request, user_id):
     path = os.path.join(temp_directory, filename)
 
     if extension == "xlsx":
-        workbook = openpyxl.Workbook()
-        sheet = workbook.active
-        sheet.title = "Данные"
-        for row_number, line in enumerate([l.strip() for l in content.splitlines() if l.strip()], start=1):
-            if "|" in line:
-                cells = [c.strip() for c in line.split("|")]
-            elif "\t" in line:
-                cells = [c.strip() for c in line.split("\t")]
-            elif ";" in line:
-                cells = [c.strip() for c in line.split(";")]
-            else:
-                cells = [line]
-            for col_num, val in enumerate(cells, start=1):
-                sheet.cell(row=row_number, column=col_num, value=val)
-        workbook.save(path)
+        build_xlsx(content, path)
     elif extension == "docx":
-        document = docx.Document()
-        for line in content.splitlines():
-            line = line.strip()
-            if not line:
-                document.add_paragraph("")
-            elif line.startswith("# ") or line.startswith("## "):
-                document.add_heading(re.sub(r"^#+\s*", "", line), level=1)
-            else:
-                document.add_paragraph(line)
-        document.save(path)
+        build_docx(content, path)
     elif extension == "pdf":
-        font_file = get_cyrillic_font()
-        font_name = 'Helvetica'
-        if font_file:
-            try:
-                pdfmetrics.registerFont(TTFont('CyrillicFont', font_file))
-                font_name = 'CyrillicFont'
-            except Exception as e:
-                print(f"⚠️ Ошибка регистрации шрифта: {e}")
-        document = SimpleDocTemplate(path, pagesize=A4)
-        styles = getSampleStyleSheet()
-        style = ParagraphStyle('CyrillicStyle', parent=styles['Normal'], fontName=font_name, fontSize=10, leading=14)
-        story = []
-        for line in content.splitlines():
-            line = line.strip()
-            if not line:
-                story.append(Spacer(1, 8))
-            else:
-                story.append(Paragraph(html.escape(line), style))
-                story.append(Spacer(1, 6))
-        document.build(story)
+        build_pdf(content, path)
     elif extension == "pptx":
-        presentation = Presentation()
-        current_title, current_body = None, []
-
-        def add_slide(title, body):
-            slide = presentation.slides.add_slide(presentation.slide_layouts[1])
-            slide.shapes.title.text = title or "Слайд"
-            tf = slide.placeholders[1].text_frame
-            tf.clear()
-            for idx, line in enumerate(body):
-                p = tf.paragraphs[0] if idx == 0 and len(tf.paragraphs) > 0 else tf.add_paragraph()
-                p.text = line
-
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped.upper().startswith("СЛАЙД:"):
-                if current_title or current_body:
-                    add_slide(current_title, current_body)
-                current_title = stripped[len("СЛАЙД:"):].strip()
-                current_body = []
-            elif stripped:
-                current_body.append(stripped)
-        if current_title or current_body:
-            add_slide(current_title, current_body)
-        if not presentation.slides:
-            add_slide("Презентация", content.splitlines())
-        presentation.save(path)
+        spec = parse_json_loose(content)
+        if not isinstance(spec, dict) or not spec.get("slides"):
+            spec = spec_from_text(content, request)
+        build_pptx(spec, path)
     elif extension == "csv":
         with open(path, "w", encoding="utf-8-sig", newline="") as file:
             writer = csv.writer(file, delimiter=";")
@@ -877,10 +1343,8 @@ def create_generated_file(request, user_id):
                 if line.strip():
                     writer.writerow([c.strip() for c in line.split(";")])
     elif extension == "json":
-        clean = strip_code_fence(content)
-        try:
-            data = json.loads(clean)
-        except Exception:
+        data = parse_json_loose(content)
+        if data is None:
             data = {"content": content}
         with open(path, "w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
@@ -912,7 +1376,6 @@ def run_web():
 #  ОТПРАВКА ОТВЕТОВ
 # ════════════════════════════════════════════════════════════════
 def clean_markdown(text):
-    """Убирает Markdown из обычного текста (блоки кода обрабатываются отдельно)."""
     if not text:
         return ""
     text = str(text)
@@ -965,7 +1428,7 @@ def extract_code_blocks(text):
                       "content": (m.group(2) or "").strip("\n")})
         last_end = m.end()
     after = text[last_end:]
-    if "```" in after:  # незакрытый блок — считаем остаток кодом
+    if "```" in after:
         head, _, tail = after.partition("```")
         if head.strip():
             parts.append({"type": "text", "content": head.strip()})
@@ -981,7 +1444,6 @@ def send_code_block(chat_id, code, language="", index=1):
         return None
     ext = LANG_EXT.get(language.lower(), "txt")
     if len(code) > INLINE_CODE_LIMIT:
-        # Длинный код — целиком одним файлом: ничего не режется и не ломается.
         try:
             name = ("main" if ext == "py" else "code") + (f"_{index}" if index > 1 else "") + f".{ext}"
             buf = io.BytesIO(code.encode("utf-8"))
@@ -1051,7 +1513,7 @@ def edit_or_send_long(chat_id, message_id, text):
 
 
 # ════════════════════════════════════════════════════════════════
-#  ПОГОДА, ПОИСК, КАРТИНКИ, TTS
+#  ПОГОДА, ПОИСК
 # ════════════════════════════════════════════════════════════════
 def get_weather_data(location_name):
     try:
@@ -1068,7 +1530,7 @@ def get_weather_data(location_name):
 
 
 def ask_gemini(prompt):
-    text, _ = gemini_call(str(prompt), max_tokens=4096)
+    text, _ = gemini_call(str(prompt), max_tokens=8192, tier="all")
     return text
 
 
@@ -1095,60 +1557,159 @@ def perform_web_search(query):
     return results_text
 
 
+# ════════════════════════════════════════════════════════════════
+#  ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: Pollinations → Hugging Face (если есть токен) → AI Horde
+# ════════════════════════════════════════════════════════════════
 def enhance_image_prompt(user_prompt):
     try:
         sys_prompt = (
-            "You are an expert AI image prompt engineer. Expand the user's request into a detailed, vivid image "
-            "description in English: lighting, composition, style, textures. Keep the original subject exactly. "
-            "Return ONLY the enhanced prompt, max 60 words, no quotes.")
+            "You are an expert AI image prompt engineer. Translate the request to English if needed and expand it "
+            "into a detailed, vivid image description: subject, lighting, composition, style, textures. Keep the "
+            "original subject exactly. Return ONLY the prompt as one line, max 60 words, no quotes.")
         text, _ = call_llm([{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_prompt}],
                            chain="fast", max_tokens=300, timeout=20, temperature=0.8, effort="low")
-        return text.strip().strip('"') or user_prompt
+        text = " ".join(text.split()).strip('"')
+        return text[:500] if text else user_prompt
     except Exception as e:
         print(f"⚠️ Ошибка улучшения промпта: {e}")
         return user_prompt
 
 
-def generate_image_dynamic(prompt, enhance=True):
-    width, height = 1024, 1024
+def is_image_bytes(b):
+    return bool(b) and (b[:3] == b"\xff\xd8\xff" or b[:8] == b"\x89PNG\r\n\x1a\n"
+                        or (b[:4] == b"RIFF" and b[8:12] == b"WEBP") or b[:6] in (b"GIF87a", b"GIF89a"))
+
+
+def to_sendable_image(b):
+    """WEBP → PNG для Telegram."""
+    if b[:4] == b"RIFF" and Image:
+        try:
+            img = Image.open(io.BytesIO(b)).convert("RGB")
+            out = io.BytesIO()
+            img.save(out, "PNG")
+            return out.getvalue()
+        except Exception:
+            pass
+    return b
+
+
+def gen_pollinations(prompt, w, h, budget=100):
+    errs, start = [], time.time()
+    endpoints = ["https://image.pollinations.ai/prompt/", "https://pollinations.ai/p/"]
+    key = os.getenv("POLLINATIONS_API_KEY")
+    encoded = urllib.parse.quote(prompt, safe="")
+    for base in endpoints:
+        for model in ("flux", "turbo", None):
+            if time.time() - start > budget:
+                raise RuntimeError("Pollinations: " + "; ".join(errs[-3:]))
+            params = {"width": w, "height": h, "seed": secrets.randbelow(10**7), "nologo": "true",
+                      "private": "true", "referrer": "telegram-bot"}
+            if model:
+                params["model"] = model
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            for attempt in range(2):
+                try:
+                    r = requests.get(base + encoded, params=params, headers=headers, timeout=(10, 55))
+                    if r.status_code == 200 and is_image_bytes(r.content):
+                        return r.content
+                    errs.append(f"{model or 'default'}: HTTP {r.status_code}")
+                    if r.status_code in (429, 502, 503) and attempt == 0:
+                        time.sleep(4)
+                        continue
+                except requests.exceptions.Timeout:
+                    errs.append(f"{model or 'default'}: таймаут")
+                except Exception as e:
+                    errs.append(f"{model or 'default'}: {short_err(e, 60)}")
+                break
+    raise RuntimeError("Pollinations: " + "; ".join(errs[-3:]))
+
+
+def gen_huggingface(prompt, w, h):
+    if not HF_TOKEN:
+        raise RuntimeError("HF_TOKEN не задан")
+    errs = []
+    for model in ("black-forest-labs/FLUX.1-schnell", "stabilityai/stable-diffusion-xl-base-1.0"):
+        try:
+            r = requests.post(f"https://router.huggingface.co/hf-inference/models/{model}",
+                              headers={"Authorization": f"Bearer {HF_TOKEN}"},
+                              json={"inputs": prompt, "parameters": {"width": min(w, 1024), "height": min(h, 1024)}},
+                              timeout=90)
+            if r.status_code == 200 and is_image_bytes(r.content):
+                return r.content
+            errs.append(f"{model.split('/')[-1]}: HTTP {r.status_code}")
+        except Exception as e:
+            errs.append(f"{model.split('/')[-1]}: {short_err(e, 60)}")
+    raise RuntimeError("HuggingFace: " + "; ".join(errs))
+
+
+def gen_horde(prompt, w, h, progress=None, budget=200):
+    """AI Horde — бесплатно и без регистрации (анонимный ключ), но может занять 30-120 секунд."""
+    hw, hh = (640, 384) if w > h else (384, 640) if h > w else (512, 512)
+    headers = {"apikey": os.getenv("HORDE_API_KEY", "0000000000"), "Client-Agent": "tgbot:3.0:none"}
+    r = requests.post("https://aihorde.net/api/v2/generate/async", headers=headers, timeout=25, json={
+        "prompt": prompt[:900], "nsfw": False, "censor_nsfw": True, "r2": True,
+        "params": {"width": hw, "height": hh, "steps": 25, "n": 1, "cfg_scale": 7, "sampler_name": "k_euler_a"}})
+    if r.status_code not in (200, 202):
+        raise RuntimeError(f"Horde: HTTP {r.status_code} {r.text[:100]}")
+    job = r.json().get("id")
+    if not job:
+        raise RuntimeError("Horde: нет id задачи")
+    start = time.time()
+    while time.time() - start < budget:
+        time.sleep(4)
+        c = requests.get(f"https://aihorde.net/api/v2/generate/check/{job}", timeout=15).json()
+        if c.get("faulted"):
+            raise RuntimeError("Horde: задача завершилась ошибкой")
+        if progress and c.get("queue_position") is not None:
+            progress(f"Очередь AI Horde: позиция {c.get('queue_position')}...")
+        if c.get("done"):
+            st = requests.get(f"https://aihorde.net/api/v2/generate/status/{job}", timeout=20).json()
+            gens = st.get("generations") or []
+            if not gens:
+                raise RuntimeError("Horde: пустой результат")
+            img = gens[0].get("img", "")
+            if img.startswith("http"):
+                data = requests.get(img, timeout=30).content
+            else:
+                data = base64.b64decode(img)
+            if is_image_bytes(data):
+                return data
+            raise RuntimeError("Horde: неверный формат результата")
+    try:
+        requests.delete(f"https://aihorde.net/api/v2/generate/status/{job}", timeout=10)
+    except Exception:
+        pass
+    raise RuntimeError("Horde: превышено время ожидания")
+
+
+def generate_image_dynamic(prompt, enhance=True, progress=None):
+    """Возвращает (bytes | None, отчёт_об_ошибках)."""
+    w, h = 1024, 1024
     if "16:9" in prompt:
-        width, height = 1280, 720
+        w, h = 1280, 720
         prompt = prompt.replace("16:9", "").strip()
     elif "9:16" in prompt:
-        width, height = 720, 1280
+        w, h = 720, 1280
         prompt = prompt.replace("9:16", "").strip()
     if not prompt:
-        return None
-    if enhance:
-        prompt = enhance_image_prompt(prompt)
-
-    models = ["flux", "zimage"]
-    pollinations_key = os.getenv("POLLINATIONS_API_KEY")
-    for model in models:
+        return None, "пустое описание"
+    final_prompt = enhance_image_prompt(prompt) if enhance else prompt
+    report = []
+    steps = [("Pollinations", lambda: gen_pollinations(final_prompt, w, h))]
+    if HF_TOKEN:
+        steps.append(("HuggingFace", lambda: gen_huggingface(final_prompt, w, h)))
+    steps.append(("AI Horde", lambda: gen_horde(final_prompt, w, h, progress)))
+    for i, (name, fn) in enumerate(steps):
         try:
-            encoded = urllib.parse.quote(prompt, safe="")
-            if pollinations_key:
-                url = (f"https://gen.pollinations.ai/image/{encoded}?model={model}&width={width}"
-                       f"&height={height}&seed={int(time.time())}&nologo=true")
-                headers = {"Authorization": f"Bearer {pollinations_key}"}
-            else:
-                url = (f"https://image.pollinations.ai/prompt/{encoded}?model={model}&width={width}"
-                       f"&height={height}&seed={int(time.time())}&nologo=true")
-                headers = {}
-            print(f"🎨 Генерация изображения: {model}")
-            response = requests.get(url, headers=headers, timeout=(10, 45))
-            ctype = response.headers.get("Content-Type", "").lower()
-            if response.status_code == 200 and response.content:
-                if ctype.startswith("image/") or response.content[:3] == b"\xff\xd8\xff" \
-                        or response.content[:8] == b"\x89PNG\r\n\x1a\n":
-                    stats["images_generated"] += 1
-                    return response.content
-            print(f"⚠️ Pollinations {model}: HTTP {response.status_code}, type={ctype}")
-        except requests.exceptions.Timeout:
-            print(f"⏱ Pollinations {model}: превышен таймаут")
+            if progress and i > 0:
+                progress(f"Основной генератор не ответил. Пробую запасной ({name})...")
+            data = fn()
+            stats["images_generated"] += 1
+            return to_sendable_image(data), ""
         except Exception as e:
-            print(f"❌ Pollinations {model}: {e}")
-    return None
+            print(f"❌ Генерация изображения [{name}]: {short_err(e, 300)}")
+            report.append(f"{name}: {short_err(e, 110)}")
+    return None, "\n".join(report)
 
 
 async def generate_audio(text, output_file):
@@ -1157,7 +1718,7 @@ async def generate_audio(text, output_file):
 
 
 # ════════════════════════════════════════════════════════════════
-#  НОВЫЕ ФУНКЦИИ: калькулятор, курсы валют, QR, пароли, заметки, напоминания
+#  КАЛЬКУЛЯТОР, КУРСЫ, ЗАМЕТКИ, НАПОМИНАНИЯ
 # ════════════════════════════════════════════════════════════════
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
         ast.Pow: operator.pow, ast.Mod: operator.mod, ast.FloorDiv: operator.floordiv}
@@ -1197,8 +1758,7 @@ _rate_cache = {"t": 0, "rates": None}
 def get_rates():
     if _rate_cache["rates"] and time.time() - _rate_cache["t"] < 3600:
         return _rate_cache["rates"]
-    r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10)
-    j = r.json()
+    j = requests.get("https://open.er-api.com/v6/latest/USD", timeout=10).json()
     if j.get("result") != "success":
         raise RuntimeError("Сервис курсов недоступен")
     _rate_cache.update(t=time.time(), rates=j["rates"])
@@ -1240,7 +1800,6 @@ _ABS_RE = re.compile(r"^(?:в\s+)?(\d{1,2})[:.](\d{2})\s+(.+)$", re.IGNORECASE |
 
 
 def parse_reminder(args):
-    """Возвращает (epoch_время, текст) или None."""
     args = args.strip()
     m = _REL_RE.match(args)
     if m:
@@ -1252,8 +1811,7 @@ def parse_reminder(args):
         hh, mm, text = int(m.group(1)), int(m.group(2)), m.group(3).strip()
         if hh > 23 or mm > 59:
             return None
-        tz = timezone(timedelta(hours=TZ_OFFSET_HOURS))
-        now = datetime.now(tz)
+        now = datetime.now(timezone(timedelta(hours=TZ_OFFSET_HOURS)))
         target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         if target <= now:
             target += timedelta(days=1)
@@ -1281,7 +1839,7 @@ def reminder_loop():
 
 
 # ════════════════════════════════════════════════════════════════
-#  ВСПОМОГАТЕЛЬНОЕ: обращение к боту
+#  ОБРАЩЕНИЕ К БОТУ
 # ════════════════════════════════════════════════════════════════
 def is_addressed_to_bot(message):
     if message.chat.type == "private":
@@ -1307,7 +1865,6 @@ def clean_command_args(text, command_name):
 
 
 def args_or_reply(message, command_name):
-    """Аргументы команды или текст сообщения, на которое отвечают."""
     args = clean_command_args(message.text or "", command_name)
     if not args and message.reply_to_message:
         args = (message.reply_to_message.text or message.reply_to_message.caption or "").strip()
@@ -1323,31 +1880,30 @@ def help_cmd(message):
     bot.send_message(message.chat.id, (
         "ИИ-ассистент\n\n"
         "Основное:\n"
-        "/code <задача> — код любой сложности (с проверкой и автоисправлением)\n"
+        "/code <задача> — большой продуманный код (план, написание, ревью, проверка)\n"
         "/review <код> — разбор и улучшение кода\n"
         "/image <описание> — генерация изображений\n"
-        "/file <запрос> — создание файлов (xlsx, docx, pdf, pptx, py...)\n"
+        "/file <запрос> — файлы (xlsx, docx, pdf, pptx, py, html...)\n"
         "/search <запрос> — поиск в интернете\n"
         "/weather <город> — погода\n"
         "/gemini <запрос> — прямой запрос к Gemini\n\n"
         "Тексты:\n"
-        "/sum, /tr, /fix <текст> — краткий пересказ, перевод, исправление "
-        "(можно ответом на сообщение)\n"
+        "/sum, /tr, /fix <текст> — пересказ, перевод, исправление (можно ответом на сообщение)\n"
         "/tts <текст> — озвучивание\n"
         "/fact [тема] — интересный факт\n\n"
-        "Новое:\n"
-        "/calc <выражение> — калькулятор (sqrt, sin, pi, ^)\n"
+        "Утилиты:\n"
+        "/calc <выражение> — калькулятор\n"
         "/rate [сумма] USD UZS — курсы валют\n"
-        "/qr <текст или ссылка> — QR-код\n"
+        "/qr <текст> — QR-код\n"
         "/pass [длина] — генератор пароля\n"
-        "/remind через 10 минут <текст> или /remind 18:30 <текст> — напоминание\n"
+        "/remind через 10 минут <текст> | /remind 18:30 <текст>\n"
         "/note <текст>, /notes, /delnote <номер> — заметки\n\n"
         "Прочее:\n"
+        "/diag — проверка работы всех сервисов\n"
         "/clear — очистить память диалога\n"
-        "/neuroham — включить/выключить режим Нейрохама\n"
+        "/neuroham — режим Нейрохама (on/off)\n"
         "/stats — статистика\n\n"
-        "Фото: отправь картинку (с вопросом в подписи или без) — разберу текст, код, задачи, графики, предметы. "
-        "Документы: отправь файл, с подписью-задачей или без неё."
+        "Фото: отправь картинку с вопросом в подписи или без. Документы: отправь файл, с подписью-задачей или без."
     ))
 
 
@@ -1359,6 +1915,53 @@ def stats_cmd(message):
         f"Сгенерировано фото: {stats['images_generated']}\n"
         f"Создано файлов: {stats['files_generated']}\n"
         f"Распознано голосовых: {stats['voice_messages']}"))
+
+
+@bot.message_handler(commands=["diag"])
+def diag_cmd(message):
+    if ADMIN_ID and str(message.from_user.id) != ADMIN_ID:
+        return
+    msg = bot.reply_to(message, "Проверяю сервисы, это займёт около минуты...")
+    lines = []
+
+    def check(name, fn):
+        t0 = time.time()
+        try:
+            res = fn()
+            lines.append(f"✅ {name} ({time.time() - t0:.1f}с){(' — ' + res) if res else ''}")
+        except Exception as e:
+            lines.append(f"❌ {name}: {short_err(e, 200)}")
+        try:
+            bot.edit_message_text("Проверяю...\n\n" + "\n".join(lines), message.chat.id, msg.message_id)
+        except Exception:
+            pass
+
+    lines.append(f"Gemini pro: {', '.join(GEMINI_PRO) or '—'}\nGemini flash: {', '.join(GEMINI_FLASH) or '—'}")
+    lines.append(f"Groq: {'ключ есть' if groq_client else 'НЕТ ключа'} | Gemini: "
+                 f"{'ключ есть' if gemini_client else 'НЕТ ключа'} | HF: {'есть' if HF_TOKEN else 'нет'}")
+    if gemini_client:
+        check("Gemini текст", lambda: gemini_call("Ответь одним словом: ок", max_tokens=200, tier="all")[0][:30])
+    if groq_client:
+        check("Groq текст", lambda: call_llm([{"role": "user", "content": "Ответь одним словом: ок"}],
+                                             chain="fast", max_tokens=200)[0][:30])
+    if Image:
+        buf = io.BytesIO()
+        Image.new("RGB", (128, 128), (220, 30, 30)).save(buf, "JPEG")
+        test = buf.getvalue()
+        q = "Какого цвета изображение? Ответь одним словом."
+        if gemini_client:
+            check("Gemini фото", lambda: vision_gemini(test, "image/jpeg", "Отвечай кратко.", q)[:40])
+        if groq_client:
+            check("Groq фото", lambda: vision_groq(test, "image/jpeg", "Отвечай кратко.", q)[:40])
+        check("Pollinations фото", lambda: vision_pollinations(test, "image/jpeg", "Отвечай кратко.", q)[:40])
+    else:
+        lines.append("⚠️ Pillow не установлен (pip install pillow) — фото обрабатываются без сжатия")
+    check("Pollinations картинки", lambda: f"{len(gen_pollinations('red apple', 256, 256, budget=60))} байт")
+    if HF_TOKEN:
+        check("HuggingFace картинки", lambda: f"{len(gen_huggingface('red apple', 256, 256))} байт")
+    check("AI Horde (доступность)", lambda: str(requests.get(
+        "https://aihorde.net/api/v2/status/heartbeat", timeout=10).status_code))
+    edit_or_send_long(message.chat.id, msg.message_id, "Диагностика:\n\n" + "\n".join(lines))
 
 
 @bot.message_handler(content_types=["voice"])
@@ -1424,14 +2027,16 @@ def file_cmd(message):
     args = clean_command_args(message.text, "file")
     if not args:
         bot.reply_to(message, "Напиши, какой файл создать.\n\nНапример:\n"
-                              "/file Таблица умножения в Excel\n/file Резюме в PDF\n/file Python скрипт парсер сайта")
+                              "/file Таблица умножения в Excel\n/file Бизнес-план кофейни в Word\n"
+                              "/file Презентация про космос\n/file Python скрипт парсер сайта")
         return
     execute_file_creation(message, args)
 
 
 def execute_file_creation(message, request_text, edit_message_id=None):
     extension = detect_file_format(request_text)
-    text = f"Создаю файл...\nФормат: .{extension}"
+    long_job = extension in ("py", "html", "docx", "pdf", "pptx")
+    text = f"Создаю файл (.{extension})..." + ("\nКачественные файлы делаются дольше, до пары минут." if long_job else "")
     if edit_message_id:
         msg_id = edit_message_id
         bot.edit_message_text(text, message.chat.id, msg_id)
@@ -1447,7 +2052,8 @@ def execute_file_creation(message, request_text, edit_message_id=None):
         except Exception:
             pass
     except Exception as e:
-        edit_or_send_long(message.chat.id, msg_id, f"Ошибка создания файла: {e}")
+        print(f"❌ Ошибка создания файла: {e}")
+        edit_or_send_long(message.chat.id, msg_id, f"Ошибка создания файла: {short_err(e, 300)}")
     finally:
         if path and os.path.exists(path):
             try:
@@ -1459,14 +2065,14 @@ def execute_file_creation(message, request_text, edit_message_id=None):
 @bot.message_handler(commands=["neuroham", "rude"])
 def toggle_neuroham_mode(message):
     user_id = message.chat.id
-    arg = clean_command_args(message.text, "neuroham" if message.text.startswith("/neuroham") else "rude").lower()
+    cmd = "neuroham" if message.text.startswith("/neuroham") else "rude"
+    arg = clean_command_args(message.text, cmd).lower()
     if arg in ("on", "вкл"):
         user_modes[user_id] = "neuroham"
     elif arg in ("off", "выкл"):
         user_modes[user_id] = "normal"
     else:
         user_modes[user_id] = "normal" if is_ham(user_id) else "neuroham"
-    # История сохраняется: персона подставляется при каждом запросе, сброс не нужен.
     if is_ham(user_id):
         bot.reply_to(message, "Режим Нейрохам активирован. Постарайся не разочаровать меня слишком быстро.")
     else:
@@ -1485,8 +2091,7 @@ def fact_cmd(message):
     prompt = (f"Расскажи интересный и достоверный факт на тему: {topic}. Будь краток."
               if topic else "Расскажи случайный интересный и достоверный факт. Будь краток.")
     msg = bot.reply_to(message, "Ищу факт...")
-    edit_or_send_long(message.chat.id, msg.message_id,
-                      ask_ai_with_history(message.chat.id, prompt, store=False))
+    edit_or_send_long(message.chat.id, msg.message_id, ask_ai_with_history(message.chat.id, prompt, store=False))
 
 
 @bot.message_handler(commands=["search"])
@@ -1530,7 +2135,7 @@ def ai_tools_cmd(message):
             reply = ask_ai_with_history(message.chat.id, prompts[cmd] + args, store=False)
         edit_or_send_long(message.chat.id, msg.message_id, reply)
     except Exception as e:
-        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка обработки: {e}")
+        edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка обработки: {short_err(e, 300)}")
 
 
 @bot.message_handler(commands=["code", "review"])
@@ -1567,24 +2172,41 @@ def remember_image_prompt(prompt):
     return key
 
 
+def _send_generated_image(chat_id, prompt, image_bytes):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔄 Перегенерировать",
+                                          callback_data=f"reimage:{remember_image_prompt(prompt)}"))
+    bot.send_photo(chat_id, io.BytesIO(image_bytes), caption=f"Запрос: {prompt}"[:1000], reply_markup=markup)
+
+
 def execute_image_generation(message, prompt, edit_message_id=None):
+    chat_id = message.chat.id
     if edit_message_id:
         msg_id = edit_message_id
-        bot.edit_message_text("Генерирую фото...", message.chat.id, msg_id)
+        bot.edit_message_text("Генерирую фото...", chat_id, msg_id)
     else:
         msg_id = bot.reply_to(message, "Генерирую фото...").message_id
-    image_bytes = generate_image_dynamic(prompt)
-    if image_bytes:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать",
-                                              callback_data=f"reimage:{remember_image_prompt(prompt)}"))
-        bot.send_photo(message.chat.id, io.BytesIO(image_bytes), caption=f"Запрос: {prompt}", reply_markup=markup)
+    last = {"text": ""}
+
+    def progress(t):
+        if t == last["text"]:
+            return
+        last["text"] = t
         try:
-            bot.delete_message(message.chat.id, msg_id)
+            bot.edit_message_text(t, chat_id, msg_id)
+        except Exception:
+            pass
+
+    image_bytes, report = generate_image_dynamic(prompt, progress=progress)
+    if image_bytes:
+        _send_generated_image(chat_id, prompt, image_bytes)
+        try:
+            bot.delete_message(chat_id, msg_id)
         except Exception:
             pass
     else:
-        edit_or_send_long(message.chat.id, msg_id, "Не удалось сгенерировать изображение. Попробуй изменить запрос.")
+        edit_or_send_long(chat_id, msg_id, "Не удалось сгенерировать изображение ни одним из бесплатных сервисов.\n"
+                                           f"{report}\n\nПопробуй позже или упрости запрос. /diag покажет состояние.")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reimage:"))
@@ -1594,16 +2216,17 @@ def callback_reimage(call):
         bot.answer_callback_query(call.id, "Запрос устарел. Создай изображение заново.", show_alert=True)
         return
     bot.answer_callback_query(call.id, "Генерирую новый вариант...")
-    bot.send_message(call.message.chat.id, f"Повторная генерация для: {prompt}")
-    image_bytes = generate_image_dynamic(prompt)
+    status = bot.send_message(call.message.chat.id, f"Повторная генерация для: {prompt}")
+    image_bytes, report = generate_image_dynamic(prompt)
     if image_bytes:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔄 Перегенерировать",
-                                              callback_data=f"reimage:{remember_image_prompt(prompt)}"))
-        bot.send_photo(call.message.chat.id, io.BytesIO(image_bytes), caption=f"Запрос: {prompt}",
-                       reply_markup=markup)
+        _send_generated_image(call.message.chat.id, prompt, image_bytes)
+        try:
+            bot.delete_message(call.message.chat.id, status.message_id)
+        except Exception:
+            pass
     else:
-        bot.send_message(call.message.chat.id, "Не удалось сгенерировать изображение. Попробуй ещё раз.")
+        bot.edit_message_text(f"Не удалось сгенерировать изображение.\n{report}",
+                              call.message.chat.id, status.message_id)
 
 
 @bot.message_handler(commands=["tts"])
@@ -1638,7 +2261,6 @@ def execute_tts(message, text_to_speak, edit_message_id=None):
             os.remove(audio_path)
 
 
-# ── Новые команды ────────────────────────────────────────────────
 @bot.message_handler(commands=["calc"])
 def calc_cmd(message):
     expr = clean_command_args(message.text, "calc")
@@ -1704,8 +2326,7 @@ def qr_cmd(message):
 @bot.message_handler(commands=["pass"])
 def pass_cmd(message):
     arg = clean_command_args(message.text, "pass")
-    length = int(arg) if arg.isdigit() else 16
-    length = max(8, min(length, 64))
+    length = max(8, min(int(arg) if arg.isdigit() else 16, 64))
     alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_"
     pwd = "".join(secrets.choice(alphabet) for _ in range(length))
     bot.reply_to(message, f"Пароль ({length} символов):\n\n{pwd}\n\nГенерируется локально, нигде не сохраняется.")
@@ -1767,10 +2388,8 @@ def delnote_cmd(message):
 #  ЕСТЕСТВЕННЫЙ ЯЗЫК
 # ════════════════════════════════════════════════════════════════
 def find_keyword(lower_text, keywords):
-    """Ищет ключевое слово как отдельное слово/фразу (не внутри других слов)."""
     for kw in keywords:
-        m = re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", lower_text)
-        if m:
+        if re.search(rf"(?<!\w){re.escape(kw)}(?!\w)", lower_text):
             return kw
     return None
 
@@ -1800,14 +2419,16 @@ def process_natural_language_request(message, text, edit_message_id=None):
             return
 
     kw = find_keyword(lower_text, ["создай файл", "сделай файл", "сгенерируй файл", "создай документ",
-                                   "сделай документ", "создай таблицу", "сделай таблицу"])
+                                   "сделай документ", "создай таблицу", "сделай таблицу", "создай презентацию",
+                                   "сделай презентацию"])
     if kw:
         prompt = strip_keyword(clean_text, kw)
+        if kw.endswith("презентацию"):
+            prompt = "презентация " + prompt
         if prompt:
             execute_file_creation(message, prompt, edit_message_id)
             return
 
-    # Озвучка — только если фраза в начале сообщения («расскажи» больше не срабатывает).
     for tts_kw in ("озвучь текст", "преврати в голос", "проговори", "озвучь", "скажи"):
         if lower_text.startswith(tts_kw + " ") or lower_text.startswith(tts_kw + ":"):
             prompt = clean_text[len(tts_kw):].strip(" :,.")
@@ -1831,8 +2452,7 @@ def process_natural_language_request(message, text, edit_message_id=None):
     else:
         msg_id = bot.reply_to(message, status_text(
             message.chat.id, "Думаю...", "Так, дай-ка подумать над твоим... вопросом.")).message_id
-    reply = ask_ai_with_history(message.chat.id, clean_text)
-    edit_or_send_long(message.chat.id, msg_id, reply)
+    edit_or_send_long(message.chat.id, msg_id, ask_ai_with_history(message.chat.id, clean_text))
 
 
 @bot.message_handler(content_types=["text"])
@@ -1853,8 +2473,7 @@ def handle_text(message):
             extra = clean_bot_mentions(text.replace(urls[0], "")).strip()
             task = extra if len(extra) > 3 else "Сделай краткую выжимку этого текста."
             reply = ask_ai_with_history(
-                message.chat.id,
-                f"{task} Не используй Markdown. Вот текст страницы:\n\n{page_text}", store=False)
+                message.chat.id, f"{task} Не используй Markdown. Вот текст страницы:\n\n{page_text}", store=False)
             edit_or_send_long(message.chat.id, msg.message_id, reply)
         except Exception as e:
             edit_or_send_long(message.chat.id, msg.message_id, f"Ошибка чтения ссылки: {e}")
@@ -1875,8 +2494,6 @@ def handle_photo(message):
 def handle_doc(message):
     if not is_addressed_to_bot(message):
         return
-
-    # Изображение, отправленное как файл (без сжатия) — тоже анализируем.
     mime = (message.document.mime_type or "").lower()
     if mime.startswith("image/"):
         process_image_message(message, message.document.file_id, message.caption)
@@ -1897,10 +2514,10 @@ def handle_doc(message):
             raise ValueError("Документ пуст или текст не распознан.")
 
         caption = clean_bot_mentions((message.caption or "").strip())
+        code_exts = (".py", ".js", ".ts", ".java", ".cpp", ".cs", ".go", ".rs", ".php", ".html", ".css")
         if caption:
             task = f"{caption}\n\nСодержимое файла {message.document.file_name}:\n\n{text[:20000]}"
-            if looks_like_code_request(caption) or ext.lower() in (".py", ".js", ".ts", ".java", ".cpp", ".cs",
-                                                                  ".go", ".rs", ".php", ".html", ".css"):
+            if looks_like_code_request(caption) or ext.lower() in code_exts:
                 execute_code_request(message, task, edit_message_id=msg.message_id)
                 return
             reply = ask_ai_with_history(message.chat.id, task, store=False, max_tokens=4000)
